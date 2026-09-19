@@ -79,10 +79,17 @@ impl ImageView {
         // Taken by value: the buffer is width * height * 4 bytes, so a clone here
         // would mean a second 200 MB allocation on a large photo.
         let bytes = glib::Bytes::from_owned(image.rgba);
+        // Mismatching this against the decoder leaves dark halos around
+        // anti-aliased transparent edges.
+        let format = if image.premultiplied {
+            gdk::MemoryFormat::R8g8b8a8Premultiplied
+        } else {
+            gdk::MemoryFormat::R8g8b8a8
+        };
         let texture = gdk::MemoryTexture::new(
             image.width as i32,
             image.height as i32,
-            gdk::MemoryFormat::R8g8b8a8,
+            format,
             &bytes,
             image.width as usize * 4,
         );

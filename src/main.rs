@@ -1,3 +1,5 @@
+mod decoders;
+mod format;
 mod image_view;
 mod loader;
 mod window;

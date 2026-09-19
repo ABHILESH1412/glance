@@ -1,56 +1,44 @@
-//! Decoding happens here, off the main thread.
+//! Loading happens here, off the main thread.
 //!
 //! The result is a plain RGBA8 buffer rather than a GDK type on purpose: GDK
 //! objects are not `Send`, so decoding straight into one would pin this work to
 //! the main loop and freeze the window on large files.
 
+use std::fmt::Display;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use image::{DynamicImage, ImageDecoder, ImageReader};
+use crate::decoders;
+use crate::format::{self, Format};
 
 pub struct LoadedImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// tiny-skia (SVG) hands back premultiplied alpha; the others do not.
+    /// Getting this wrong shows up as dark fringes around transparent edges.
+    pub premultiplied: bool,
+    /// Shown in the header bar, e.g. "PNG" or "RAW (preview)".
+    pub label: String,
 }
 
 pub fn decode(path: &Path) -> Result<LoadedImage, String> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "this file".to_string());
-
-    let reader = ImageReader::open(path)
-        .map_err(|e| open_error(&name, &e))?
-        .with_guessed_format()
-        .map_err(|e| open_error(&name, &e))?;
-
-    let mut decoder = reader
-        .into_decoder()
-        .map_err(|e| decode_error(path, &name, &e))?;
-
-    // Read this before consuming the decoder; cameras write portrait shots as
-    // landscape plus a rotation tag, and ignoring it shows them sideways.
-    let orientation = decoder
-        .orientation()
-        .unwrap_or(image::metadata::Orientation::NoTransforms);
-
-    let mut image =
-        DynamicImage::from_decoder(decoder).map_err(|e| decode_error(path, &name, &e))?;
-    image.apply_orientation(orientation);
-
-    let rgba = image.into_rgba8();
-    let (width, height) = rgba.dimensions();
-
-    Ok(LoadedImage {
-        width,
-        height,
-        rgba: rgba.into_raw(),
-    })
+    match format::detect(path) {
+        Format::Raster => decoders::raster::decode(path),
+        Format::Heif { avif } => decoders::heif::decode(path, avif),
+        Format::Svg => decoders::svg::decode(path),
+        Format::Raw => decoders::raw::decode(path),
+    }
 }
 
-fn open_error(name: &str, error: &std::io::Error) -> String {
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "this file".to_string())
+}
+
+pub fn open_error(path: &Path, error: &std::io::Error) -> String {
+    let name = file_name(path);
     match error.kind() {
         ErrorKind::NotFound => format!("“{name}” no longer exists."),
         ErrorKind::PermissionDenied => format!("You do not have permission to read “{name}”."),
@@ -60,7 +48,10 @@ fn open_error(name: &str, error: &std::io::Error) -> String {
 
 /// The toast stays short and human. The technical detail goes to stderr, where
 /// it helps when debugging without being shoved in the user's face.
-fn decode_error(path: &Path, name: &str, error: &image::ImageError) -> String {
-    eprintln!("simple-viewer: {}: {error}", path.display());
-    format!("“{name}” is not a supported image, or the file is damaged.")
+pub fn unsupported(path: &Path, detail: impl Display) -> String {
+    eprintln!("simple-viewer: {}: {detail}", path.display());
+    format!(
+        "“{}” is not a supported image, or the file is damaged.",
+        file_name(path)
+    )
 }

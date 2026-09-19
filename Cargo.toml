@@ -8,6 +8,13 @@ gtk = { package = "gtk4", version = "0.11", features = ["gnome_50"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_9", "gtk_v4_22"] }
 async-channel = "2"
 
+# SVG: pure-Rust vector rendering.
+resvg = "0.48"
+# HEIC/HEIF + AVIF: wraps the system libheif.
+libheif-rs = "3"
+# Camera raw: pure-Rust parsers for ~all common raw formats.
+rawler = "0.8"
+
 [dependencies.image]
 version = "0.25"
 default-features = false
@@ -17,3 +24,12 @@ features = ["rayon", "png", "jpeg", "gif", "webp", "tiff", "bmp", "ico", "qoi", 
 lto = true
 codegen-units = 1
 strip = true
+
+# Optimised but quick to link: demosaicing a raw file in a debug build takes
+# minutes, while fat LTO makes every rebuild a coffee break. This profile is
+# for running and testing, not for shipping.
+[profile.quick]
+inherits = "release"
+lto = false
+codegen-units = 16
+strip = false

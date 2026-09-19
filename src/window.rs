@@ -152,8 +152,22 @@ impl Window {
             "image/x-portable-anymap",
             "image/x-tga",
             "image/qoi",
+            "image/heif",
+            "image/heic",
+            "image/avif",
+            "image/svg+xml",
         ] {
             filter.add_mime_type(mime);
+        }
+        // Raw formats are matched by suffix: the shared-mime database does not
+        // recognise every camera maker's container, and a raw file the picker
+        // greys out is a raw file the user cannot open.
+        for suffix in [
+            "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "kdc", "mef",
+            "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf",
+            "srw", "x3f", "heic", "heif", "avif", "svg", "svgz",
+        ] {
+            filter.add_suffix(suffix);
         }
 
         let filters = gio::ListStore::new::<gtk::FileFilter>();
@@ -222,7 +236,7 @@ impl Window {
                 }
                 match result {
                     Ok(image) => {
-                        let subtitle = format!("{} × {}", image.width, image.height);
+                        let subtitle = format!("{} · {} × {}", image.label, image.width, image.height);
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);
