@@ -136,6 +136,25 @@ impl Window {
         // A file manager may hand over either a list or a single file.
         target.set_types(&[gdk::FileList::static_type(), gio::File::static_type()]);
 
+        // Nautilus offers a plain file drag as MOVE, not COPY. GTK's default
+        // handling intersects the drag's actions with this target's, finds
+        // nothing in common, and silently refuses: `enter` fires, the highlight
+        // appears, and then nothing happens on release. Both of the handlers
+        // below are needed to get past that.
+        //
+        // Judge a drag on what it carries, not on the action it proposes: this
+        // viewer only ever reads the file, so MOVE and COPY are the same thing
+        // to it.
+        target.connect_accept(|target, drop| {
+            let offered = drop.formats();
+            target.types().iter().any(|t| offered.types().contains(t))
+        });
+
+        // Answer COPY for every motion. That permits the drop, and because the
+        // source is told the file was copied rather than moved, it does not go
+        // on to delete the thing it just handed over.
+        target.connect_motion(|_, _, _| gdk::DragAction::COPY);
+
         target.connect_enter(glib::clone!(
             #[weak(rename_to = window)]
             self,
