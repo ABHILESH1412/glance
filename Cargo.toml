@@ -1,0 +1,19 @@
+[package]
+name = "simple-viewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.11", features = ["gnome_50"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_9", "gtk_v4_22"] }
+async-channel = "2"
+
+[dependencies.image]
+version = "0.25"
+default-features = false
+features = ["rayon", "png", "jpeg", "gif", "webp", "tiff", "bmp", "ico", "qoi", "pnm", "tga"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
