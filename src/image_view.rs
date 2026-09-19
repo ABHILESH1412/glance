@@ -1,14 +1,15 @@
 //! The body of the window: a stack that swaps between the empty state, a
-//! spinner while decoding runs, and the picture itself.
+//! spinner while decoding runs, and the image itself.
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
 
+use crate::canvas::ImageCanvas;
 use crate::loader::LoadedImage;
 
 pub struct ImageView {
     stack: gtk::Stack,
-    picture: gtk::Picture,
+    canvas: ImageCanvas,
 }
 
 impl ImageView {
@@ -18,8 +19,8 @@ impl ImageView {
             .transition_duration(150)
             .build();
 
-        // Empty state. The button drives the same action as Ctrl+O, so there is
-        // only one open path to maintain.
+        // The button drives the same action as Ctrl+O, so there is only one
+        // open path to maintain.
         let open_button = gtk::Button::builder()
             .label("Open Image…")
             .halign(gtk::Align::Center)
@@ -31,7 +32,7 @@ impl ImageView {
         let empty = adw::StatusPage::builder()
             .icon_name("image-x-generic-symbolic")
             .title("No Image Open")
-            .description("Open an image to start viewing.")
+            .description("Drop an image here, or open one to start viewing.")
             .child(&open_button)
             .build();
 
@@ -42,23 +43,22 @@ impl ImageView {
             .valign(gtk::Align::Center)
             .build();
 
-        // ScaleDown rather than Contain: large images shrink to fit, but a small
-        // image stays at its natural size instead of being blown up and blurry.
-        let picture = gtk::Picture::builder()
-            .content_fit(gtk::ContentFit::ScaleDown)
-            .can_shrink(true)
-            .build();
+        let canvas = ImageCanvas::new();
 
         stack.add_named(&empty, Some("empty"));
         stack.add_named(&spinner, Some("loading"));
-        stack.add_named(&picture, Some("image"));
+        stack.add_named(&canvas, Some("image"));
         stack.set_visible_child_name("empty");
 
-        Self { stack, picture }
+        Self { stack, canvas }
     }
 
     pub fn widget(&self) -> &gtk::Stack {
         &self.stack
+    }
+
+    pub fn canvas(&self) -> &ImageCanvas {
+        &self.canvas
     }
 
     pub fn show_loading(&self) {
@@ -68,16 +68,16 @@ impl ImageView {
     /// Falls back to the empty state unless an image is already on screen, so a
     /// failed second open does not blank out the picture you were looking at.
     pub fn show_idle(&self) {
-        if self.picture.paintable().is_none() {
-            self.stack.set_visible_child_name("empty");
-        } else {
+        if self.canvas.has_image() {
             self.stack.set_visible_child_name("image");
+        } else {
+            self.stack.set_visible_child_name("empty");
         }
     }
 
     pub fn show_image(&self, image: LoadedImage) {
-        // Taken by value: the buffer is width * height * 4 bytes, so a clone here
-        // would mean a second 200 MB allocation on a large photo.
+        // Taken by value: the buffer is width * height * 4 bytes, so a clone
+        // here would mean a second 200 MB allocation on a large photo.
         let bytes = glib::Bytes::from_owned(image.rgba);
         // Mismatching this against the decoder leaves dark halos around
         // anti-aliased transparent edges.
@@ -94,7 +94,7 @@ impl ImageView {
             image.width as usize * 4,
         );
 
-        self.picture.set_paintable(Some(&texture));
+        self.canvas.set_texture(Some(texture.upcast()));
         self.stack.set_visible_child_name("image");
     }
 }
