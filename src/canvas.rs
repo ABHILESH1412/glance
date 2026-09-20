@@ -42,6 +42,10 @@ mod imp {
         pub target_scale: Cell<f64>,
         pub target_centre: Cell<(f64, f64)>,
         pub target_rotation: Cell<f64>,
+        /// Mirroring, applied in the image's own frame so a horizontal flip
+        /// always mirrors its left and right, whatever angle it is turned to.
+        pub flip_h: Cell<bool>,
+        pub flip_v: Cell<bool>,
         /// Once the user zooms, resizing the window must not silently re-fit
         /// and throw away where they were looking.
         pub user_zoomed: Cell<bool>,
@@ -63,6 +67,7 @@ mod imp {
         pub pinch_origin: Cell<f64>,
         pub on_zoom_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
         pub on_rotation_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
+        pub on_flip_changed: RefCell<Option<Box<dyn Fn(bool, bool)>>>,
     }
 
     #[glib::object_subclass]
@@ -137,6 +142,8 @@ impl ImageCanvas {
         imp.user_zoomed.set(false);
         imp.rotation.set(0.0);
         imp.target_rotation.set(0.0);
+        imp.flip_h.set(false);
+        imp.flip_v.set(false);
         // A half-finished animation belongs to the previous image.
         if let Some(tick) = imp.tick.take() {
             tick.remove();
@@ -144,6 +151,7 @@ impl ImageCanvas {
         imp.last_frame.set(0);
         self.reflow();
         self.notify_rotation();
+        self.notify_flip();
     }
 
     pub fn has_image(&self) -> bool {
@@ -158,6 +166,59 @@ impl ImageCanvas {
     /// Called with the rotation in degrees, folded into [-180, 180).
     pub fn connect_rotation_changed(&self, f: impl Fn(f64) + 'static) {
         self.imp().on_rotation_changed.replace(Some(Box::new(f)));
+    }
+
+    /// Called with (horizontal, vertical) whenever mirroring changes.
+    pub fn connect_flip_changed(&self, f: impl Fn(bool, bool) + 'static) {
+        self.imp().on_flip_changed.replace(Some(Box::new(f)));
+    }
+
+    pub fn flip_horizontal(&self) -> bool {
+        self.imp().flip_h.get()
+    }
+
+    pub fn flip_vertical(&self) -> bool {
+        self.imp().flip_v.get()
+    }
+
+    /// Mirror left-to-right. Instant rather than eased: a half-finished mirror
+    /// is a squashed image, which reads as a glitch rather than a transition.
+    pub fn toggle_flip_horizontal(&self) {
+        let imp = self.imp();
+        if imp.texture.borrow().is_none() {
+            return;
+        }
+        imp.flip_h.set(!imp.flip_h.get());
+        self.after_flip();
+    }
+
+    pub fn toggle_flip_vertical(&self) {
+        let imp = self.imp();
+        if imp.texture.borrow().is_none() {
+            return;
+        }
+        imp.flip_v.set(!imp.flip_v.get());
+        self.after_flip();
+    }
+
+    fn after_flip(&self) {
+        let imp = self.imp();
+        // Mirroring does not change how much room the image needs, so the
+        // scale and the centre both still hold; only the picture changes.
+        imp.target_centre
+            .set(self.clamp_centre(imp.ideal_centre.get(), imp.target_scale.get(), imp.target_rotation.get()));
+        imp.centre.set(imp.target_centre.get());
+        self.settle();
+        self.notify_flip();
+    }
+
+    /// -1.0 on a mirrored axis, 1.0 otherwise.
+    fn flips(&self) -> (f64, f64) {
+        let imp = self.imp();
+        (
+            if imp.flip_h.get() { -1.0 } else { 1.0 },
+            if imp.flip_v.get() { -1.0 } else { 1.0 },
+        )
     }
 
     // -- rotation ---------------------------------------------------------
@@ -308,7 +369,8 @@ impl ImageCanvas {
         let (sin, cos) = (-rotation).to_radians().sin_cos();
         let rx = dx * cos - dy * sin;
         let ry = dx * sin + dy * cos;
-        (rx / scale + tw / 2.0, ry / scale + th / 2.0)
+        let (fx, fy) = self.flips();
+        (rx / (scale * fx) + tw / 2.0, ry / (scale * fy) + th / 2.0)
     }
 
     /// Where the image centre must sit for `image` to land on `point`.
@@ -316,7 +378,11 @@ impl ImageCanvas {
         let Some((tw, th)) = self.texture_size() else {
             return point;
         };
-        let (ox, oy) = ((image.0 - tw / 2.0) * scale, (image.1 - th / 2.0) * scale);
+        let (fx, fy) = self.flips();
+        let (ox, oy) = (
+            (image.0 - tw / 2.0) * scale * fx,
+            (image.1 - th / 2.0) * scale * fy,
+        );
         let (sin, cos) = rotation.to_radians().sin_cos();
         let rx = ox * cos - oy * sin;
         let ry = ox * sin + oy * cos;
@@ -437,6 +503,12 @@ impl ImageCanvas {
         }
     }
 
+    fn notify_flip(&self) {
+        if let Some(callback) = self.imp().on_flip_changed.borrow().as_ref() {
+            callback(self.imp().flip_h.get(), self.imp().flip_v.get());
+        }
+    }
+
     // -- animation --------------------------------------------------------
 
     fn animate(&self) {
@@ -530,6 +602,13 @@ impl ImageCanvas {
         snapshot.translate(&graphene::Point::new(cx as f32, cy as f32));
         if rotation != 0.0 {
             snapshot.rotate(rotation as f32);
+        }
+        // Mirror inside the rotated frame, so the flip follows the picture
+        // rather than the screen. The drawn rect is centred on the origin, so a
+        // negative factor mirrors it in place.
+        let (fx, fy) = self.flips();
+        if fx < 0.0 || fy < 0.0 {
+            snapshot.scale(fx as f32, fy as f32);
         }
         snapshot.append_scaled_texture(
             &texture,

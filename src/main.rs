@@ -59,6 +59,10 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.rotate-left", &["bracketleft", "<Primary>bracketleft"]);
         app.set_accels_for_action("win.rotate-right", &["bracketright", "<Primary>bracketright", "<Primary>r"]);
         app.set_accels_for_action("win.rotate-reset", &["<Primary><Shift>r"]);
+        app.set_accels_for_action("win.transform-open", &["<Primary>t"]);
+        app.set_accels_for_action("win.transform-close", &["Escape"]);
+        app.set_accels_for_action("win.flip-horizontal", &["<Primary>h"]);
+        app.set_accels_for_action("win.flip-vertical", &["<Primary>j"]);
     });
 
     app.connect_activate(|app| {

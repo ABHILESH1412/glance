@@ -28,6 +28,10 @@ mod imp {
         pub title: adw::WindowTitle,
         pub toasts: adw::ToastOverlay,
         pub view: ImageView,
+        pub header_stack: gtk::Stack,
+        pub rotate_button: gtk::Button,
+        pub flip_h_button: gtk::ToggleButton,
+        pub flip_v_button: gtk::ToggleButton,
         pub rotation_bar: gtk::Box,
         pub rotation_scale: gtk::Scale,
         pub rotation_label: gtk::Label,
@@ -46,6 +50,10 @@ mod imp {
                 title: adw::WindowTitle::new("Simple Viewer", ""),
                 toasts: adw::ToastOverlay::new(),
                 view: ImageView::new(),
+                header_stack: gtk::Stack::new(),
+                rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
+                flip_h_button: gtk::ToggleButton::new(),
+                flip_v_button: gtk::ToggleButton::new(),
                 rotation_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 rotation_scale: gtk::Scale::with_range(
                     gtk::Orientation::Horizontal,
@@ -113,8 +121,11 @@ impl Window {
         zoom_section.append(Some("_Actual Size"), Some("win.zoom-actual"));
 
         let rotate_section = gio::Menu::new();
+        rotate_section.append(Some("Rotate and _Flip…"), Some("win.transform-open"));
         rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
         rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
+        rotate_section.append(Some("Flip _Horizontally"), Some("win.flip-horizontal"));
+        rotate_section.append(Some("Flip _Vertically"), Some("win.flip-vertical"));
         rotate_section.append(Some("Reset Rotation"), Some("win.rotate-reset"));
 
         let about_section = gio::Menu::new();
@@ -131,14 +142,42 @@ impl Window {
             .primary(true)
             .build();
 
+        // Opens the transform options. Nothing to transform until an image is
+        // loaded, so it starts switched off.
+        let rotate_button = &imp.rotate_button;
+        rotate_button.set_tooltip_text(Some("Rotate and Flip"));
+        rotate_button.set_action_name(Some("win.transform-open"));
+        rotate_button.set_sensitive(false);
+
         let header = adw::HeaderBar::builder()
             .title_widget(&imp.title)
             .build();
         header.pack_start(&open_button);
         header.pack_end(&menu_button);
+        header.pack_end(rotate_button);
+
+        // While the options are open the header carries nothing but the way
+        // out of them.
+        let close_button = gtk::Button::from_icon_name("window-close-symbolic");
+        close_button.set_tooltip_text(Some("Close Rotation Options (Esc)"));
+        close_button.set_action_name(Some("win.transform-close"));
+
+        let transform_header = adw::HeaderBar::builder()
+            .show_start_title_buttons(false)
+            .show_end_title_buttons(false)
+            .title_widget(&gtk::Label::new(None))
+            .build();
+        transform_header.pack_end(&close_button);
+
+        let header_stack = &imp.header_stack;
+        header_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
+        header_stack.set_transition_duration(150);
+        header_stack.add_named(&header, Some("normal"));
+        header_stack.add_named(&transform_header, Some("transform"));
+        header_stack.set_visible_child_name("normal");
 
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&header);
+        toolbar.add_top_bar(header_stack);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(self.build_rotation_bar());
         self.set_content(Some(&toolbar));
@@ -196,6 +235,18 @@ impl Window {
         label.add_css_class("numeric");
         label.add_css_class("dim-label");
 
+        let flip_h = &imp.flip_h_button;
+        flip_h.set_icon_name("object-flip-horizontal-symbolic");
+        flip_h.set_tooltip_text(Some("Flip Horizontally"));
+        flip_h.set_action_name(Some("win.flip-horizontal"));
+        flip_h.add_css_class("flat");
+
+        let flip_v = &imp.flip_v_button;
+        flip_v.set_icon_name("object-flip-vertical-symbolic");
+        flip_v.set_tooltip_text(Some("Flip Vertically"));
+        flip_v.set_action_name(Some("win.flip-vertical"));
+        flip_v.add_css_class("flat");
+
         let reset = gtk::Button::from_icon_name("edit-undo-symbolic");
         reset.set_tooltip_text(Some("Reset Rotation"));
         reset.set_action_name(Some("win.rotate-reset"));
@@ -205,6 +256,9 @@ impl Window {
         bar.append(slider);
         bar.append(label);
         bar.append(&right);
+        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        bar.append(flip_h);
+        bar.append(flip_v);
         bar.append(&reset);
 
         slider.connect_value_changed(glib::clone!(
@@ -218,6 +272,16 @@ impl Window {
             }
         ));
 
+        imp.view.canvas().connect_flip_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |h, v| {
+                // Reflect state without re-triggering the actions.
+                window.imp().flip_h_button.set_active(h);
+                window.imp().flip_v_button.set_active(v);
+            }
+        ));
+
         imp.view.canvas().connect_rotation_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -225,6 +289,21 @@ impl Window {
         ));
 
         bar
+    }
+
+    /// Show or hide the transform options. While they are open the header
+    /// carries only the close button, so the controls have the user's full
+    /// attention and there is one obvious way back.
+    fn set_transform_open(&self, open: bool) {
+        let imp = self.imp();
+        // Nothing to transform with no image, and Escape must stay harmless
+        // when the options are already closed.
+        if open && !imp.view.canvas().has_image() {
+            return;
+        }
+        imp.rotation_bar.set_visible(open);
+        imp.header_stack
+            .set_visible_child_name(if open { "transform" } else { "normal" });
     }
 
     /// Push the canvas's angle back into the slider and the readout.
@@ -362,6 +441,38 @@ impl Window {
         ));
         self.add_action(&rotate_reset);
 
+        let transform_open = gio::SimpleAction::new("transform-open", None);
+        transform_open.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.set_transform_open(true)
+        ));
+        self.add_action(&transform_open);
+
+        let transform_close = gio::SimpleAction::new("transform-close", None);
+        transform_close.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.set_transform_open(false)
+        ));
+        self.add_action(&transform_close);
+
+        let flip_h = gio::SimpleAction::new("flip-horizontal", None);
+        flip_h.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().toggle_flip_horizontal()
+        ));
+        self.add_action(&flip_h);
+
+        let flip_v = gio::SimpleAction::new("flip-vertical", None);
+        flip_v.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().toggle_flip_vertical()
+        ));
+        self.add_action(&flip_v);
+
         let zoom_fit = gio::SimpleAction::new("zoom-fit", None);
         zoom_fit.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -489,7 +600,7 @@ impl Window {
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);
-                        window.imp().rotation_bar.set_visible(true);
+                        window.imp().rotate_button.set_sensitive(true);
                     }
                     Err(message) => window.fail(&message),
                 }
