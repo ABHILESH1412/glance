@@ -19,6 +19,10 @@ use crate::loader;
 use crate::playlist::{self, Playlist};
 use crate::thumbs;
 
+/// How close to an edge the pointer must get before the hidden bars slide back
+/// while fullscreen.
+const EDGE_REVEAL: f64 = 64.0;
+
 /// What the header bar is currently advertising, so a failed load can restore
 /// it instead of leaving a stale "Loading…" behind.
 pub struct Shown {
@@ -33,6 +37,8 @@ mod imp {
         pub title: adw::WindowTitle,
         pub toasts: adw::ToastOverlay,
         pub view: ImageView,
+        pub toolbar: adw::ToolbarView,
+        pub fullscreen_button: gtk::Button,
         pub header_stack: gtk::Stack,
         pub rotate_button: gtk::Button,
         pub flip_h_button: gtk::ToggleButton,
@@ -62,6 +68,8 @@ mod imp {
                 title: adw::WindowTitle::new("Simple Viewer", ""),
                 toasts: adw::ToastOverlay::new(),
                 view: ImageView::new(),
+                toolbar: adw::ToolbarView::new(),
+                fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
                 header_stack: gtk::Stack::new(),
                 rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
                 flip_h_button: gtk::ToggleButton::new(),
@@ -130,6 +138,14 @@ impl Window {
         open_button.set_tooltip_text(Some("Open Image"));
         open_button.set_action_name(Some("win.open"));
 
+        let view_section = gio::Menu::new();
+        view_section.append(Some("_Fullscreen"), Some("win.fullscreen"));
+
+        let theme_section = gio::Menu::new();
+        theme_section.append(Some("Follow _System"), Some("app.theme::system"));
+        theme_section.append(Some("_Light"), Some("app.theme::light"));
+        theme_section.append(Some("_Dark"), Some("app.theme::dark"));
+
         let navigate_section = gio::Menu::new();
         navigate_section.append(Some("_Previous Image"), Some("win.previous-image"));
         navigate_section.append(Some("_Next Image"), Some("win.next-image"));
@@ -152,9 +168,11 @@ impl Window {
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
+        menu.append_section(None, &view_section);
         menu.append_section(None, &navigate_section);
         menu.append_section(None, &zoom_section);
         menu.append_section(None, &rotate_section);
+        menu.append_section(Some("Appearance"), &theme_section);
         menu.append_section(None, &about_section);
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -170,12 +188,17 @@ impl Window {
         rotate_button.set_action_name(Some("win.transform-open"));
         rotate_button.set_sensitive(false);
 
+        let fullscreen_button = &imp.fullscreen_button;
+        fullscreen_button.set_tooltip_text(Some("Fullscreen (F11)"));
+        fullscreen_button.set_action_name(Some("win.fullscreen"));
+
         let header = adw::HeaderBar::builder()
             .title_widget(&imp.title)
             .build();
         header.pack_start(&open_button);
         header.pack_end(&menu_button);
         header.pack_end(rotate_button);
+        header.pack_end(fullscreen_button);
 
         // While the options are open the header carries nothing but the way
         // out of them.
@@ -197,12 +220,34 @@ impl Window {
         header_stack.add_named(&transform_header, Some("transform"));
         header_stack.set_visible_child_name("normal");
 
-        let toolbar = adw::ToolbarView::new();
+        let toolbar = &imp.toolbar;
         toolbar.add_top_bar(header_stack);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(self.build_rotation_bar());
         toolbar.add_bottom_bar(&imp.strip);
-        self.set_content(Some(&toolbar));
+        self.set_content(Some(toolbar));
+
+        // Fullscreen means the picture and nothing else, so the bars fold away.
+        self.connect_fullscreened_notify(|window| window.sync_fullscreen());
+
+        // ...but they come back when the pointer reaches an edge, so there is
+        // always a visible way out rather than only a key to guess at.
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_motion(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _, y| {
+                if !window.is_fullscreen() {
+                    return;
+                }
+                let height = window.height() as f64;
+                let imp = window.imp();
+                imp.toolbar.set_reveal_top_bars(y < EDGE_REVEAL);
+                imp.toolbar
+                    .set_reveal_bottom_bars(y > height - EDGE_REVEAL * 2.0);
+            }
+        ));
+        self.add_controller(motion);
 
         imp.view.canvas().connect_zoom_changed(glib::clone!(
             #[weak(rename_to = window)]
@@ -270,6 +315,24 @@ impl Window {
                 window.imp().strip.set_thumbnail(&path, texture.upcast_ref());
             }
         ));
+    }
+
+    /// Match the chrome and the button to whether we are fullscreen.
+    fn sync_fullscreen(&self) {
+        let imp = self.imp();
+        let full = self.is_fullscreen();
+        imp.toolbar.set_reveal_top_bars(!full);
+        imp.toolbar.set_reveal_bottom_bars(!full);
+        imp.fullscreen_button.set_icon_name(if full {
+            "view-restore-symbolic"
+        } else {
+            "view-fullscreen-symbolic"
+        });
+        imp.fullscreen_button.set_tooltip_text(Some(if full {
+            "Leave Fullscreen (F11)"
+        } else {
+            "Fullscreen (F11)"
+        }));
     }
 
     /// The rotation bar: two quarter-turn buttons either side of a free-angle
@@ -541,6 +604,36 @@ impl Window {
             ));
             self.add_action(&action);
         }
+
+        let fullscreen = gio::SimpleAction::new("fullscreen", None);
+        fullscreen.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                if window.is_fullscreen() {
+                    window.unfullscreen();
+                } else {
+                    window.fullscreen();
+                }
+            }
+        ));
+        self.add_action(&fullscreen);
+
+        // Escape should undo whatever is currently "on top": leaving fullscreen
+        // first, then closing the transform options.
+        let dismiss = gio::SimpleAction::new("dismiss", None);
+        dismiss.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                if window.is_fullscreen() {
+                    window.unfullscreen();
+                } else {
+                    window.set_transform_open(false);
+                }
+            }
+        ));
+        self.add_action(&dismiss);
 
         let transform_open = gio::SimpleAction::new("transform-open", None);
         transform_open.connect_activate(glib::clone!(

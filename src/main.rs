@@ -13,6 +13,62 @@ use gtk::{gdk, gio, glib};
 
 const APP_ID: &str = "dev.local.SimpleViewer";
 
+/// Where the chosen theme is remembered. A plain file rather than GSettings:
+/// that would need a schema compiled and installed system-wide, which is a lot
+/// of machinery for one word.
+fn theme_file() -> std::path::PathBuf {
+    glib::user_config_dir().join("simple-viewer").join("theme")
+}
+
+fn load_theme() -> String {
+    let saved = std::fs::read_to_string(theme_file()).unwrap_or_default();
+    match saved.trim() {
+        "light" => "light".to_string(),
+        "dark" => "dark".to_string(),
+        _ => "system".to_string(),
+    }
+}
+
+fn save_theme(theme: &str) {
+    let path = theme_file();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Losing the preference is not worth bothering the user about.
+    let _ = std::fs::write(path, theme);
+}
+
+fn apply_theme(theme: &str) {
+    let scheme = match theme {
+        "light" => adw::ColorScheme::ForceLight,
+        "dark" => adw::ColorScheme::ForceDark,
+        // Whatever the desktop is set to, and it keeps following it.
+        _ => adw::ColorScheme::Default,
+    };
+    adw::StyleManager::default().set_color_scheme(scheme);
+}
+
+fn install_theme_action(app: &adw::Application) {
+    let initial = load_theme();
+    apply_theme(&initial);
+
+    let action = gio::SimpleAction::new_stateful(
+        "theme",
+        Some(glib::VariantTy::STRING),
+        &initial.to_variant(),
+    );
+    action.connect_change_state(|action, value| {
+        let Some(theme) = value.and_then(|v| v.str().map(str::to_owned)) else {
+            return;
+        };
+        apply_theme(&theme);
+        save_theme(&theme);
+        // Ticks the matching radio item in the menu.
+        action.set_state(&theme.to_variant());
+    });
+    app.add_action(&action);
+}
+
 /// Highlights the window while a file is hovering over it.
 fn load_css() {
     let provider = gtk::CssProvider::new();
@@ -52,6 +108,7 @@ fn main() -> glib::ExitCode {
             }
         });
         app.add_action(&quit);
+        install_theme_action(app);
 
         load_css();
 
@@ -73,7 +130,8 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.next-image", &["Right", "Page_Down", "space"]);
         app.set_accels_for_action("win.previous-image", &["Left", "Page_Up", "BackSpace"]);
         app.set_accels_for_action("win.transform-open", &["<Primary>t"]);
-        app.set_accels_for_action("win.transform-close", &["Escape"]);
+        app.set_accels_for_action("win.dismiss", &["Escape"]);
+        app.set_accels_for_action("win.fullscreen", &["F11"]);
         app.set_accels_for_action("win.flip-horizontal", &["<Primary>h"]);
         app.set_accels_for_action("win.flip-vertical", &["<Primary>j"]);
     });
