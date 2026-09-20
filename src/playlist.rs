@@ -128,6 +128,22 @@ impl Playlist {
         self.index
     }
 
+    /// What to show once `path` is gone: the next image, or the previous one
+    /// if it was the last. `None` when nothing would be left.
+    pub fn neighbour_of(&self, path: &Path) -> Option<PathBuf> {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let index = self.files.iter().position(|p| *p == canonical)?;
+        if self.files.len() < 2 {
+            return None;
+        }
+        let next = if index + 1 < self.files.len() {
+            index + 1
+        } else {
+            index - 1
+        };
+        Some(self.files[next].clone())
+    }
+
     /// Jump straight to a position, for a thumbnail click.
     pub fn jump_to(&mut self, index: usize) -> Option<PathBuf> {
         let path = self.files.get(index)?.clone();
@@ -164,6 +180,17 @@ mod tests {
     #[test]
     fn ordering_ignores_case() {
         assert_eq!(natural_cmp("apple.png", "Banana.png"), Ordering::Less);
+    }
+
+    #[test]
+    fn neighbour_prefers_the_next_image() {
+        let files = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
+        let list = Playlist { files, index: 1 };
+        // Canonicalising a path that does not exist falls back to the path
+        // itself, which is what makes this work off-disk.
+        assert_eq!(list.neighbour_of(Path::new("b")), Some(PathBuf::from("c")));
+        assert_eq!(list.neighbour_of(Path::new("c")), Some(PathBuf::from("b")));
+        assert_eq!(list.neighbour_of(Path::new("zzz")), None);
     }
 
     #[test]

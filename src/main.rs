@@ -132,6 +132,7 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.transform-open", &["<Primary>t"]);
         app.set_accels_for_action("win.dismiss", &["Escape"]);
         app.set_accels_for_action("win.fullscreen", &["F11"]);
+        app.set_accels_for_action("win.delete", &["Delete"]);
         app.set_accels_for_action("win.flip-horizontal", &["<Primary>h"]);
         app.set_accels_for_action("win.flip-vertical", &["<Primary>j"]);
     });

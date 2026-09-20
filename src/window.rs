@@ -7,7 +7,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -39,6 +40,13 @@ mod imp {
         pub view: ImageView,
         pub toolbar: adw::ToolbarView,
         pub fullscreen_button: gtk::Button,
+        pub delete_button: gtk::Button,
+        /// The file on screen, needed to delete it and to find it again after
+        /// the folder changes underneath us.
+        pub current: RefCell<Option<PathBuf>>,
+        /// Watches the folder so images added or removed elsewhere show up here.
+        pub monitor: RefCell<Option<gio::FileMonitor>>,
+        pub rescan_timer: RefCell<Option<glib::SourceId>>,
         pub header_stack: gtk::Stack,
         pub rotate_button: gtk::Button,
         pub flip_h_button: gtk::ToggleButton,
@@ -70,6 +78,10 @@ mod imp {
                 view: ImageView::new(),
                 toolbar: adw::ToolbarView::new(),
                 fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
+                delete_button: gtk::Button::from_icon_name("user-trash-symbolic"),
+                current: RefCell::new(None),
+                monitor: RefCell::new(None),
+                rescan_timer: RefCell::new(None),
                 header_stack: gtk::Stack::new(),
                 rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
                 flip_h_button: gtk::ToggleButton::new(),
@@ -138,6 +150,9 @@ impl Window {
         open_button.set_tooltip_text(Some("Open Image"));
         open_button.set_action_name(Some("win.open"));
 
+        let file_section = gio::Menu::new();
+        file_section.append(Some("_Delete Image…"), Some("win.delete"));
+
         let view_section = gio::Menu::new();
         view_section.append(Some("_Fullscreen"), Some("win.fullscreen"));
 
@@ -168,6 +183,7 @@ impl Window {
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
+        menu.append_section(None, &file_section);
         menu.append_section(None, &view_section);
         menu.append_section(None, &navigate_section);
         menu.append_section(None, &zoom_section);
@@ -188,6 +204,11 @@ impl Window {
         rotate_button.set_action_name(Some("win.transform-open"));
         rotate_button.set_sensitive(false);
 
+        let delete_button = &imp.delete_button;
+        delete_button.set_tooltip_text(Some("Delete Image"));
+        delete_button.set_action_name(Some("win.delete"));
+        delete_button.set_sensitive(false);
+
         let fullscreen_button = &imp.fullscreen_button;
         fullscreen_button.set_tooltip_text(Some("Fullscreen (F11)"));
         fullscreen_button.set_action_name(Some("win.fullscreen"));
@@ -199,6 +220,7 @@ impl Window {
         header.pack_end(&menu_button);
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
+        header.pack_end(delete_button);
 
         // While the options are open the header carries nothing but the way
         // out of them.
@@ -605,6 +627,14 @@ impl Window {
             self.add_action(&action);
         }
 
+        let delete = gio::SimpleAction::new("delete", None);
+        delete.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.confirm_delete()
+        ));
+        self.add_action(&delete);
+
         let fullscreen = gio::SimpleAction::new("fullscreen", None);
         fullscreen.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -770,6 +800,11 @@ impl Window {
         let generation = imp.generation.get() + 1;
         imp.generation.set(generation);
 
+        imp.current.replace(Some(path.clone()));
+        if rescan {
+            self.watch_folder(&path);
+        }
+
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -827,11 +862,225 @@ impl Window {
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);
                         window.imp().rotate_button.set_sensitive(true);
+                        window.imp().delete_button.set_sensitive(true);
                     }
                     Err(message) => window.fail(&message),
                 }
             }
         ));
+    }
+
+    /// Ask before removing anything, and keep the two kinds of removal clearly
+    /// apart: the bin is recoverable, deleting is not.
+    fn confirm_delete(&self) {
+        let Some(path) = self.imp().current.borrow().clone() else {
+            return;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this image".to_string());
+
+        let dialog = adw::AlertDialog::new(
+            Some("Delete Image?"),
+            Some(&format!("“{name}” will be removed from this folder.")),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("trash", "Move to Bin");
+        dialog.add_response("delete", "Delete Permanently");
+        dialog.set_response_appearance("trash", adw::ResponseAppearance::Suggested);
+        // Marked destructive because it cannot be undone.
+        dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
+        // Escape or clicking away cancels, and Cancel is what is focused.
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| match response {
+                    "trash" => window.remove_current(path.clone(), false),
+                    "delete" => window.remove_current(path.clone(), true),
+                    _ => {}
+                }
+            ),
+        );
+        dialog.present(Some(self));
+    }
+
+    fn remove_current(&self, path: PathBuf, permanent: bool) {
+        let imp = self.imp();
+        // Worked out before the file goes, while the listing still has it.
+        let replacement = imp
+            .playlist
+            .borrow()
+            .as_ref()
+            .and_then(|list| list.neighbour_of(&path));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this image".to_string());
+        let file = gio::File::for_path(&path);
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                // Off the main loop: trashing can mean a copy across devices.
+                let result = if permanent {
+                    file.delete_future(glib::Priority::DEFAULT).await
+                } else {
+                    file.trash_future(glib::Priority::DEFAULT).await
+                };
+
+                match result {
+                    Ok(()) => {
+                        match replacement {
+                            Some(next) => window.load(next, true),
+                            None => window.show_empty(),
+                        }
+                        window.toast(if permanent {
+                            "Image deleted."
+                        } else {
+                            "Image moved to the bin."
+                        });
+                    }
+                    Err(error) => {
+                        window.toast(&format!("Could not remove “{name}”: {error}"));
+                    }
+                }
+            }
+        ));
+    }
+
+    /// Watch the folder so images added or removed elsewhere are reflected here.
+    fn watch_folder(&self, path: &Path) {
+        let Some(directory) = path.parent() else {
+            return;
+        };
+        let Ok(monitor) = gio::File::for_path(directory)
+            .monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+        else {
+            return;
+        };
+        monitor.connect_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _, _, event| {
+                use gio::FileMonitorEvent as Event;
+                if matches!(
+                    event,
+                    Event::Created
+                        | Event::Deleted
+                        | Event::MovedIn
+                        | Event::MovedOut
+                        | Event::Renamed
+                        | Event::Moved
+                ) {
+                    window.schedule_rescan();
+                }
+            }
+        ));
+        // Replaces any previous watch; only one folder is ever open.
+        self.imp().monitor.replace(Some(monitor));
+    }
+
+    /// Copying a batch of files in fires an event per file, so wait for the
+    /// flurry to stop rather than re-reading the directory each time.
+    fn schedule_rescan(&self) {
+        let imp = self.imp();
+        if let Some(timer) = imp.rescan_timer.take() {
+            timer.remove();
+        }
+        let id = glib::timeout_add_local_once(
+            Duration::from_millis(400),
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move || {
+                    window.imp().rescan_timer.replace(None);
+                    window.rescan_folder();
+                }
+            ),
+        );
+        imp.rescan_timer.replace(Some(id));
+    }
+
+    fn rescan_folder(&self) {
+        let Some(current) = self.imp().current.borrow().clone() else {
+            return;
+        };
+        let (sender, receiver) = async_channel::bounded(1);
+        let scan_path = current.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(playlist::siblings(&scan_path));
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                let Ok(files) = receiver.recv().await else {
+                    return;
+                };
+                window.apply_listing(files, &current);
+            }
+        ));
+    }
+
+    /// Fold a fresh directory listing into the view.
+    fn apply_listing(&self, files: Vec<PathBuf>, current: &Path) {
+        let imp = self.imp();
+        // Ignore a listing for a file we have since navigated away from.
+        if imp.current.borrow().as_deref() != Some(current) {
+            return;
+        }
+
+        let canonical = current
+            .canonicalize()
+            .unwrap_or_else(|_| current.to_path_buf());
+        if !files.iter().any(|p| *p == canonical) {
+            // The image on screen has gone from the folder. Show whatever was
+            // next to it, or nothing if the folder is now empty.
+            let replacement = imp
+                .playlist
+                .borrow()
+                .as_ref()
+                .and_then(|list| list.neighbour_of(current))
+                .or_else(|| files.first().cloned());
+            match replacement {
+                Some(next) => self.load(next, true),
+                None => self.show_empty(),
+            }
+            return;
+        }
+
+        imp.playlist.replace(Playlist::new(files, current));
+        self.update_navigation();
+        match imp.playlist.borrow().as_ref() {
+            Some(list) => imp.strip.set_playlist(list.files(), list.index()),
+            None => imp.strip.clear(),
+        }
+    }
+
+    /// Back to the state before anything was opened.
+    fn show_empty(&self) {
+        let imp = self.imp();
+        imp.current.replace(None);
+        imp.playlist.replace(None);
+        imp.shown.replace(None);
+        imp.monitor.replace(None);
+        imp.strip.clear();
+        imp.view.canvas().set_texture(None);
+        imp.view.show_idle();
+        imp.title.set_title("Simple Viewer");
+        imp.title.set_subtitle("");
+        imp.rotate_button.set_sensitive(false);
+        imp.delete_button.set_sensitive(false);
+        self.set_transform_open(false);
+        self.update_navigation();
     }
 
     /// Navigation is pointless with one image, and while the transform options
