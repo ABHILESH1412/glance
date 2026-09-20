@@ -6,6 +6,7 @@
 //! on screen.
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -13,6 +14,7 @@ use gtk::{gdk, gio, glib};
 
 use crate::image_view::ImageView;
 use crate::loader;
+use crate::playlist::{self, Playlist};
 
 /// What the header bar is currently advertising, so a failed load can restore
 /// it instead of leaving a stale "Loading…" behind.
@@ -39,6 +41,9 @@ mod imp {
         /// slider's own value-changed does not bounce it straight back.
         pub syncing: Cell<bool>,
         pub shown: RefCell<Option<Shown>>,
+        /// The other images in the same folder, and where we are in them.
+        pub playlist: RefCell<Option<Playlist>>,
+        pub transform_open: Cell<bool>,
         /// Bumped on every open so a slow decode that finishes after a newer one
         /// was started can be recognised and discarded.
         pub generation: Cell<u64>,
@@ -64,6 +69,8 @@ mod imp {
                 rotation_label: gtk::Label::new(Some("0°")),
                 syncing: Cell::new(false),
                 shown: RefCell::new(None),
+                playlist: RefCell::new(None),
+                transform_open: Cell::new(false),
                 generation: Cell::new(0),
             }
         }
@@ -114,6 +121,10 @@ impl Window {
         open_button.set_tooltip_text(Some("Open Image"));
         open_button.set_action_name(Some("win.open"));
 
+        let navigate_section = gio::Menu::new();
+        navigate_section.append(Some("_Previous Image"), Some("win.previous-image"));
+        navigate_section.append(Some("_Next Image"), Some("win.next-image"));
+
         let zoom_section = gio::Menu::new();
         zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
         zoom_section.append(Some("Zoom _Out"), Some("win.zoom-out"));
@@ -132,6 +143,7 @@ impl Window {
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
+        menu.append_section(None, &navigate_section);
         menu.append_section(None, &zoom_section);
         menu.append_section(None, &rotate_section);
         menu.append_section(None, &about_section);
@@ -301,9 +313,11 @@ impl Window {
         if open && !imp.view.canvas().has_image() {
             return;
         }
+        imp.transform_open.set(open);
         imp.rotation_bar.set_visible(open);
         imp.header_stack
             .set_visible_child_name(if open { "transform" } else { "normal" });
+        self.update_navigation();
     }
 
     /// Push the canvas's angle back into the slider and the readout.
@@ -441,6 +455,23 @@ impl Window {
         ));
         self.add_action(&rotate_reset);
 
+        for (name, delta) in [("next-image", 1isize), ("previous-image", -1isize)] {
+            let action = gio::SimpleAction::new(name, None);
+            // Enabled once a folder with more than one image is known.
+            action.set_enabled(false);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| {
+                    let next = window.imp().playlist.borrow_mut().as_mut().map(|l| l.step(delta));
+                    if let Some(path) = next {
+                        window.load(path, false);
+                    }
+                }
+            ));
+            self.add_action(&action);
+        }
+
         let transform_open = gio::SimpleAction::new("transform-open", None);
         transform_open.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -560,43 +591,73 @@ impl Window {
     }
 
     pub fn open_file(&self, file: &gio::File) {
-        let imp = self.imp();
-
         let Some(path) = file.path() else {
             self.toast("That location is not a local file.");
             return;
         };
+        // Opened from outside, so the folder it lives in is new to us.
+        self.load(path, true);
+    }
+
+    /// `rescan` reads the folder listing again. Stepping through that listing
+    /// does not need it; arriving at a new folder does.
+    fn load(&self, path: PathBuf, rescan: bool) {
+        let imp = self.imp();
 
         let generation = imp.generation.get() + 1;
         imp.generation.set(generation);
 
-        let name = file
-            .basename()
-            .map(|p| p.display().to_string())
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Image".to_string());
         imp.title.set_title(&name);
         imp.title.set_subtitle("Loading…");
         imp.view.show_loading();
 
         let (sender, receiver) = async_channel::bounded(1);
+        let scan_path = path.clone();
         std::thread::spawn(move || {
-            let _ = sender.send_blocking(loader::decode(&path));
+            // Both the decode and the directory listing are filesystem work, so
+            // they belong on this side of the channel.
+            let decoded = loader::decode(&scan_path);
+            let siblings = rescan.then(|| playlist::siblings(&scan_path));
+            let _ = sender.send_blocking((decoded, siblings));
         });
 
         glib::spawn_future_local(glib::clone!(
             #[weak(rename_to = window)]
             self,
             async move {
-                let Ok(result) = receiver.recv().await else {
+                let Ok((result, siblings)) = receiver.recv().await else {
                     window.fail("The image loader stopped unexpectedly.");
                     return;
                 };
                 if window.imp().generation.get() != generation {
                     return; // Superseded by a newer open.
                 }
+
+                if let Some(files) = siblings {
+                    window
+                        .imp()
+                        .playlist
+                        .replace(Playlist::new(files, &path));
+                    window.update_navigation();
+                }
+
                 match result {
                     Ok(image) => {
-                        let subtitle = format!("{} · {} × {}", image.label, image.width, image.height);
+                        let position = window
+                            .imp()
+                            .playlist
+                            .borrow()
+                            .as_ref()
+                            .map(|list| format!("{}/{} · ", list.position(), list.len()))
+                            .unwrap_or_default();
+                        let subtitle = format!(
+                            "{position}{} · {} × {}",
+                            image.label, image.width, image.height
+                        );
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);
@@ -606,6 +667,18 @@ impl Window {
                 }
             }
         ));
+    }
+
+    /// Navigation is pointless with one image, and while the transform options
+    /// are open the arrow keys belong to the rotation slider.
+    fn update_navigation(&self) {
+        let imp = self.imp();
+        let enabled = imp.playlist.borrow().is_some() && !imp.transform_open.get();
+        for name in ["next-image", "previous-image"] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
+            }
+        }
     }
 
     fn fail(&self, message: &str) {
