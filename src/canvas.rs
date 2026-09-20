@@ -10,11 +10,15 @@
 //! keeps up, instead of queueing five animations.
 
 use std::cell::{Cell, RefCell};
+use std::sync::Arc;
 use std::time::Duration;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
+
+use crate::decoders::svg;
+use crate::loader::VectorSource;
 
 /// Past this, zooming stops being informative.
 const MAX_SCALE: f64 = 32.0;
@@ -36,6 +40,28 @@ mod imp {
         pub frames: RefCell<Vec<(gdk::Texture, Duration)>>,
         pub frame_index: Cell<usize>,
         pub frame_timer: RefCell<Option<glib::SourceId>>,
+        /// The image's size in its own units. For a photograph this is simply
+        /// the pixel size, but for a vector it is the natural size and the
+        /// texture behind it may be rendered at any resolution. Keeping the two
+        /// apart is what lets an SVG be re-rendered without disturbing the view.
+        pub logical: Cell<(f64, f64)>,
+        pub vector: RefCell<Option<Arc<VectorSource>>>,
+        /// Texture pixels per logical unit, i.e. how much detail is on hand.
+        pub rendered_scale: Cell<f64>,
+        pub resample: Cell<u64>,
+        /// A high-resolution render of just the visible part of a vector
+        /// image. Re-rendering the whole thing cannot keep up with deep zoom --
+        /// at 30x an 800x800 drawing would be gigapixels -- but the part on
+        /// screen is never larger than the window.
+        pub tile: RefCell<Option<Tile>>,
+        /// Largest scale the last render managed inside the time budget.
+        ///
+        /// A drawing with blur filters gets dramatically more expensive as it
+        /// is enlarged -- the filter region grows with the zoom -- so rendering
+        /// straight to the final scale can take seconds, during which the old
+        /// tile is stretched and looks exactly like pixelation. This adapts to
+        /// whatever the file and the machine can actually manage.
+        pub budget_scale: Cell<f64>,
         /// What is on screen this frame. The image is tracked by its centre
         /// rather than a corner, which is what makes rotation, fitting and
         /// zoom-anchoring all reduce to the same bit of maths.
@@ -123,6 +149,38 @@ glib::wrapper! {
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
+/// A patch of a vector image rendered at screen resolution, positioned in the
+/// image's own units.
+pub struct Tile {
+    pub texture: gdk::Texture,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// Pixels per image unit, so staleness can be judged after a zoom.
+    pub scale: f64,
+}
+
+/// Wrap a decoded buffer as a texture GTK can draw.
+pub fn texture_from(width: u32, height: u32, premultiplied: bool, rgba: Vec<u8>) -> gdk::Texture {
+    let bytes = glib::Bytes::from_owned(rgba);
+    // Mismatching this against the decoder leaves dark halos around
+    // anti-aliased transparent edges.
+    let format = if premultiplied {
+        gdk::MemoryFormat::R8g8b8a8Premultiplied
+    } else {
+        gdk::MemoryFormat::R8g8b8a8
+    };
+    gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        format,
+        &bytes,
+        width as usize * 4,
+    )
+    .upcast()
+}
+
 impl Default for ImageCanvas {
     fn default() -> Self {
         glib::Object::new()
@@ -207,9 +265,32 @@ impl ImageCanvas {
         self.schedule_frame();
     }
 
+    /// Show a vector image, keeping its source so the view can sharpen it.
+    pub fn set_vector(&self, source: Arc<VectorSource>, texture: gdk::Texture) {
+        let rendered = f64::from(texture.width()) / source.width.max(1.0);
+        let (logical_w, logical_h) = (source.width, source.height);
+        self.set_texture(Some(texture));
+        let imp = self.imp();
+        imp.logical.set((logical_w, logical_h));
+        imp.vector.replace(Some(source));
+        imp.rendered_scale.set(rendered);
+        // The window may already demand far more than the first pass gave.
+        self.reflow();
+    }
+
     pub fn set_texture(&self, texture: Option<gdk::Texture>) {
         self.stop_animation();
         let imp = self.imp();
+        imp.vector.replace(None);
+        imp.tile.replace(None);
+        imp.budget_scale.set(f64::INFINITY);
+        imp.rendered_scale.set(1.0);
+        imp.logical.set(
+            texture
+                .as_ref()
+                .map(|t| (f64::from(t.width()), f64::from(t.height())))
+                .unwrap_or((1.0, 1.0)),
+        );
         imp.texture.replace(texture);
         imp.user_zoomed.set(false);
         imp.rotation.set(0.0);
@@ -396,11 +477,10 @@ impl ImageCanvas {
     // -- geometry ---------------------------------------------------------
 
     fn texture_size(&self) -> Option<(f64, f64)> {
-        self.imp()
-            .texture
-            .borrow()
-            .as_ref()
-            .map(|t| (t.width() as f64, t.height() as f64))
+        if self.imp().texture.borrow().is_none() {
+            return None;
+        }
+        Some(self.imp().logical.get())
     }
 
     fn viewport_centre(&self) -> (f64, f64) {
@@ -429,7 +509,14 @@ impl ImageCanvas {
         if w <= 0.0 || h <= 0.0 || bw <= 0.0 || bh <= 0.0 {
             return 1.0;
         }
-        (w / bw).min(h / bh).min(1.0)
+        let fit = (w / bw).min(h / bh);
+        // A photograph is never enlarged past its own pixels, because that only
+        // produces mush. A vector has no such limit, so let it fill the window.
+        if self.imp().vector.borrow().is_some() {
+            fit
+        } else {
+            fit.min(1.0)
+        }
     }
 
     /// Widget point -> image pixel.
@@ -556,6 +643,145 @@ impl ImageCanvas {
         self.update_cursor();
         self.notify_zoom();
         self.queue_draw();
+        self.maybe_resample();
+    }
+
+    /// The part of the image on screen, in image units, with a margin so a
+    /// small pan does not immediately expose un-rendered area.
+    fn visible_region(&self) -> Option<(f64, f64, f64, f64)> {
+        let imp = self.imp();
+        let (logical_w, logical_h) = imp.logical.get();
+        let (w, h) = (self.width() as f64, self.height() as f64);
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let scale = imp.target_scale.get();
+        let rotation = imp.target_rotation.get();
+        let centre = imp.target_centre.get();
+
+        // Corners rather than edges: under rotation the viewport is a diamond
+        // in image space, and its bounding box is what has to be covered.
+        let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+        let points: Vec<(f64, f64)> = corners
+            .iter()
+            .map(|&p| self.to_image(p, scale, rotation, centre))
+            .collect();
+        let min_x = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let max_x = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let max_y = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+
+        let margin_x = (max_x - min_x) * 0.15;
+        let margin_y = (max_y - min_y) * 0.15;
+        let x = (min_x - margin_x).max(0.0);
+        let y = (min_y - margin_y).max(0.0);
+        let right = (max_x + margin_x).min(logical_w);
+        let bottom = (max_y + margin_y).min(logical_h);
+        if right <= x || bottom <= y {
+            return None;
+        }
+        Some((x, y, right - x, bottom - y))
+    }
+
+    /// Re-render the visible part of a vector image when the view wants more
+    /// detail than the current tile holds, or has moved off it.
+    fn maybe_resample(&self) {
+        let imp = self.imp();
+        if imp.vector.borrow().is_none() {
+            return;
+        }
+        // Mid-animation the scale is still moving, so wait: render once at the
+        // resting size rather than chasing every frame of a zoom.
+        if imp.tick.borrow().is_some() {
+            return;
+        }
+        let Some(region) = self.visible_region() else {
+            return;
+        };
+        let wanted = imp.target_scale.get();
+
+        // Skip when the existing tile already covers this view sharply enough.
+        if let Some(tile) = imp.tile.borrow().as_ref() {
+            let covers = tile.x <= region.0 + 0.5
+                && tile.y <= region.1 + 0.5
+                && tile.x + tile.width >= region.0 + region.2 - 0.5
+                && tile.y + tile.height >= region.1 + region.3 - 0.5;
+            if covers && wanted <= tile.scale * 1.2 {
+                return;
+            }
+        }
+
+        let generation = imp.resample.get() + 1;
+        imp.resample.set(generation);
+
+        // A first pass at whatever renders quickly, so the view sharpens right
+        // away rather than sitting on a stretched tile; the full-quality pass
+        // follows once that lands.
+        let first = wanted.min(imp.budget_scale.get()).max(0.01);
+        self.spawn_render(generation, region, first, wanted);
+    }
+
+    /// Time a render should take before the next one is scaled back.
+    const RENDER_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
+
+    fn spawn_render(&self, generation: u64, region: (f64, f64, f64, f64), scale: f64, wanted: f64) {
+        let imp = self.imp();
+        let Some(source) = imp.vector.borrow().clone() else {
+            return;
+        };
+
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = svg::rasterise_region(&source, region, scale);
+            let _ = sender.send_blocking((result, started.elapsed()));
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = canvas)]
+            self,
+            async move {
+                let Ok((result, elapsed)) = receiver.recv().await else {
+                    return;
+                };
+                let imp = canvas.imp();
+                // A newer zoom or pan has already asked for something else.
+                if imp.resample.get() != generation {
+                    return;
+                }
+                let Some((image, used)) = result else {
+                    return;
+                };
+
+                // Remember what this machine managed in the time allowed, so
+                // the next first pass is sized to stay responsive.
+                if elapsed > Self::RENDER_BUDGET {
+                    let ratio = Self::RENDER_BUDGET.as_secs_f64() / elapsed.as_secs_f64();
+                    // Cost grows with area, so scale back by the square root.
+                    imp.budget_scale.set((used * ratio.sqrt()).max(0.01));
+                } else if elapsed * 4 < Self::RENDER_BUDGET {
+                    // Comfortably quick: stop holding it back.
+                    imp.budget_scale.set(f64::INFINITY);
+                }
+
+                let texture =
+                    texture_from(image.width, image.height, image.premultiplied, image.rgba);
+                imp.tile.replace(Some(Tile {
+                    texture,
+                    x: region.0,
+                    y: region.1,
+                    width: region.2,
+                    height: region.3,
+                    scale: used,
+                }));
+                canvas.queue_draw();
+
+                // That was only the quick pass; follow it with the real thing.
+                if used < wanted * 0.99 {
+                    canvas.spawn_render(generation, region, wanted, wanted);
+                }
+            }
+        ));
     }
 
     fn update_cursor(&self) {
@@ -648,8 +874,11 @@ impl ImageCanvas {
         let scale = imp.scale.get();
         let rotation = imp.rotation.get();
         let (mut cx, mut cy) = imp.centre.get();
-        let width = texture.width() as f64 * scale;
-        let height = texture.height() as f64 * scale;
+        // Laid out against the logical size, so a re-rendered vector texture
+        // changes sharpness without moving anything.
+        let (logical_w, logical_h) = imp.logical.get();
+        let width = logical_w * scale;
+        let height = logical_h * scale;
 
         // At 1:1 and square-on, a half-pixel offset would blur a sharp image.
         let square_on = {
@@ -661,7 +890,11 @@ impl ImageCanvas {
             cy = (cy - height / 2.0).round() + height / 2.0;
         }
 
-        let filter = if scale >= NEAREST_ABOVE && square_on {
+        // Nearest is for inspecting a photograph's actual pixels. A vector has
+        // no pixels of its own, so blockiness there is just a stale texture
+        // waiting on a re-render -- smooth it instead.
+        let is_vector = imp.vector.borrow().is_some();
+        let filter = if scale >= NEAREST_ABOVE && square_on && !is_vector {
             gsk::ScalingFilter::Nearest
         } else if scale < 1.0 {
             // Mipmapped, so downscaled photos do not shimmer.
@@ -682,16 +915,49 @@ impl ImageCanvas {
         if fx < 0.0 || fy < 0.0 {
             snapshot.scale(fx as f32, fy as f32);
         }
-        snapshot.append_scaled_texture(
-            &texture,
-            filter,
-            &graphene::Rect::new(
-                (-width / 2.0) as f32,
-                (-height / 2.0) as f32,
-                width as f32,
-                height as f32,
-            ),
-        );
+        let to_local = |x: f64, y: f64, w: f64, h: f64| {
+            graphene::Rect::new(
+                ((x - logical_w / 2.0) * scale) as f32,
+                ((y - logical_h / 2.0) * scale) as f32,
+                (w * scale) as f32,
+                (h * scale) as f32,
+            )
+        };
+        let base_rect = to_local(0.0, 0.0, logical_w, logical_h);
+
+        match imp.tile.borrow().as_ref() {
+            Some(tile) => {
+                // The whole-image render must not be drawn *underneath* the
+                // sharp tile. Enlarged twelve-fold it spreads every edge
+                // outwards, and those smeared edges show around the crisp ones
+                // as a halo -- which reads as a glow the drawing never had.
+                // So it is only painted in the bands the tile does not cover.
+                let left = tile.x.max(0.0);
+                let top = tile.y.max(0.0);
+                let right = (tile.x + tile.width).min(logical_w);
+                let bottom = (tile.y + tile.height).min(logical_h);
+
+                for (x, y, w, h) in [
+                    (0.0, 0.0, logical_w, top),
+                    (0.0, bottom, logical_w, logical_h - bottom),
+                    (0.0, top, left, bottom - top),
+                    (right, top, logical_w - right, bottom - top),
+                ] {
+                    if w > 0.01 && h > 0.01 {
+                        snapshot.push_clip(&to_local(x, y, w, h));
+                        snapshot.append_scaled_texture(&texture, filter, &base_rect);
+                        snapshot.pop();
+                    }
+                }
+
+                snapshot.append_scaled_texture(
+                    &tile.texture,
+                    gsk::ScalingFilter::Linear,
+                    &to_local(tile.x, tile.y, tile.width, tile.height),
+                );
+            }
+            None => snapshot.append_scaled_texture(&texture, filter, &base_rect),
+        }
         snapshot.restore();
     }
 }
@@ -806,6 +1072,9 @@ impl ImageCanvas {
             move |_, _, _| {
                 canvas.imp().dragging.set(false);
                 canvas.update_cursor();
+                // Panning moves the visible region, so a vector may need a
+                // fresh tile even though the zoom has not changed.
+                canvas.maybe_resample();
             }
         ));
 

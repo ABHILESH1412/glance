@@ -59,6 +59,7 @@ pub fn decode(path: &Path) -> Result<LoadedImage, String> {
         premultiplied: false,
         label,
         animation: Vec::new(),
+        vector: None,
     })
 }
 
@@ -103,6 +104,7 @@ fn decode_animation(path: &Path, format: Option<ImageFormat>, label: &str) -> Op
         premultiplied: false,
         label: format!("{label} · {} frames", collected.len()),
         animation: collected,
+        vector: None,
     })
 }
 

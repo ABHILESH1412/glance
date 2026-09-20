@@ -71,6 +71,7 @@ fn letterbox(image: LoadedImage, width: u32, height: u32) -> LoadedImage {
         premultiplied: image.premultiplied,
         label: String::new(),
         animation: Vec::new(),
+        vector: None,
     }
 }
 
@@ -82,6 +83,7 @@ fn blank(width: u32, height: u32, premultiplied: bool) -> LoadedImage {
         premultiplied,
         label: String::new(),
         animation: Vec::new(),
+        vector: None,
     }
 }
 
@@ -135,6 +137,7 @@ fn shrink_dynamic(image: DynamicImage, max_edge: u32) -> LoadedImage {
         premultiplied: false,
         label: String::new(),
         animation: Vec::new(),
+        vector: None,
     }
 }
 
@@ -152,6 +155,7 @@ fn shrink(full: LoadedImage, max_edge: u32) -> LoadedImage {
             premultiplied: full.premultiplied,
             label: String::new(),
             animation: Vec::new(),
+            vector: None,
         };
     };
     let small = DynamicImage::ImageRgba8(buffer)
@@ -166,5 +170,6 @@ fn shrink(full: LoadedImage, max_edge: u32) -> LoadedImage {
         premultiplied: full.premultiplied,
         label: String::new(),
         animation: Vec::new(),
+        vector: None,
     }
 }

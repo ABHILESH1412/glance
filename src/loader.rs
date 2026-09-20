@@ -8,9 +8,12 @@ use std::cell::Cell;
 use std::fmt::Display;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::decoders;
 use crate::format::{self, Format};
+
+pub use crate::decoders::svg::VectorSource;
 
 /// One frame of an animation, already composed onto the full canvas.
 pub struct Frame {
@@ -30,6 +33,8 @@ pub struct LoadedImage {
     /// Every frame, for an animated file. Empty for a still image, in which
     /// case `rgba` is the whole picture.
     pub animation: Vec<Frame>,
+    /// Present for vector formats, letting the view re-render on zoom.
+    pub vector: Option<Arc<VectorSource>>,
 }
 
 pub fn decode(path: &Path) -> Result<LoadedImage, String> {

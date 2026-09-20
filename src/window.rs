@@ -721,9 +721,15 @@ impl Window {
 
                 match result {
                     Ok(image) => {
+                        // A vector's size is its natural size, not whatever
+                        // resolution it happened to be rasterised at first.
+                        let (shown_w, shown_h) = image
+                            .vector
+                            .as_ref()
+                            .map(|v| (v.width.round() as u32, v.height.round() as u32))
+                            .unwrap_or((image.width, image.height));
                         // The position lives in the filmstrip, not here.
-                        let subtitle =
-                            format!("{} · {} × {}", image.label, image.width, image.height);
+                        let subtitle = format!("{} · {shown_w} × {shown_h}", image.label);
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);

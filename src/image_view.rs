@@ -2,9 +2,8 @@
 //! spinner while decoding runs, and the image itself.
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
 
-use crate::canvas::ImageCanvas;
+use crate::canvas::{self, ImageCanvas};
 use crate::loader::LoadedImage;
 
 pub struct ImageView {
@@ -75,35 +74,22 @@ impl ImageView {
         }
     }
 
-    fn texture_for(width: u32, height: u32, premultiplied: bool, rgba: Vec<u8>) -> gdk::Texture {
-        let bytes = glib::Bytes::from_owned(rgba);
-        // Mismatching this against the decoder leaves dark halos around
-        // anti-aliased transparent edges.
-        let format = if premultiplied {
-            gdk::MemoryFormat::R8g8b8a8Premultiplied
-        } else {
-            gdk::MemoryFormat::R8g8b8a8
-        };
-        gdk::MemoryTexture::new(
-            width as i32,
-            height as i32,
-            format,
-            &bytes,
-            width as usize * 4,
-        )
-        .upcast()
-    }
-
-    pub fn show_image(&self, image: LoadedImage) {
+    pub fn show_image(&self, mut image: LoadedImage) {
         let (width, height, premultiplied) = (image.width, image.height, image.premultiplied);
+        let vector = image.vector.take();
 
-        if image.animation.len() > 1 {
+        if let Some(source) = vector {
+            // Kept in vector form so zooming re-renders instead of enlarging
+            // pixels.
+            let texture = canvas::texture_from(width, height, premultiplied, image.rgba);
+            self.canvas.set_vector(source, texture);
+        } else if image.animation.len() > 1 {
             let frames = image
                 .animation
                 .into_iter()
                 .map(|frame| {
                     (
-                        Self::texture_for(width, height, premultiplied, frame.rgba),
+                        canvas::texture_from(width, height, premultiplied, frame.rgba),
                         frame.delay,
                     )
                 })
@@ -112,7 +98,7 @@ impl ImageView {
         } else {
             // Taken by value: the buffer is width * height * 4 bytes, so a clone
             // here would mean a second 200 MB allocation on a large photo.
-            let texture = Self::texture_for(width, height, premultiplied, image.rgba);
+            let texture = canvas::texture_from(width, height, premultiplied, image.rgba);
             self.canvas.set_texture(Some(texture));
         }
         self.stack.set_visible_child_name("image");
