@@ -4,6 +4,7 @@
 //! objects are not `Send`, so decoding straight into one would pin this work to
 //! the main loop and freeze the window on large files.
 
+use std::cell::Cell;
 use std::fmt::Display;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -46,10 +47,28 @@ pub fn open_error(path: &Path, error: &std::io::Error) -> String {
     }
 }
 
+thread_local! {
+    /// Set while a thumbnail is being made. A neighbouring file that will not
+    /// decode is not something the user asked to see, so browsing a folder
+    /// should not fill the log with complaints about it. Opening that file
+    /// deliberately still reports as usual.
+    static QUIET: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Run `f` with decode failures kept out of the log.
+pub fn quietly<T>(f: impl FnOnce() -> T) -> T {
+    QUIET.with(|quiet| quiet.set(true));
+    let result = f();
+    QUIET.with(|quiet| quiet.set(false));
+    result
+}
+
 /// The toast stays short and human. The technical detail goes to stderr, where
 /// it helps when debugging without being shoved in the user's face.
 pub fn unsupported(path: &Path, detail: impl Display) -> String {
-    eprintln!("simple-viewer: {}: {detail}", path.display());
+    if !QUIET.with(|quiet| quiet.get()) {
+        eprintln!("simple-viewer: {}: {detail}", path.display());
+    }
     format!(
         "“{}” is not a supported image, or the file is damaged.",
         file_name(path)

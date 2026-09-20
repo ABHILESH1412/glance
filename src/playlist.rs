@@ -120,6 +120,21 @@ impl Playlist {
         self.files.len()
     }
 
+    pub fn files(&self) -> &[PathBuf] {
+        &self.files
+    }
+
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// Jump straight to a position, for a thumbnail click.
+    pub fn jump_to(&mut self, index: usize) -> Option<PathBuf> {
+        let path = self.files.get(index)?.clone();
+        self.index = index;
+        Some(path)
+    }
+
     /// 1-based, for showing to a person.
     pub fn position(&self) -> usize {
         self.index + 1

@@ -6,6 +6,7 @@
 //! on screen.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use adw::prelude::*;
@@ -13,8 +14,10 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::image_view::ImageView;
+use crate::filmstrip::{self, FilmStrip};
 use crate::loader;
 use crate::playlist::{self, Playlist};
+use crate::thumbs;
 
 /// What the header bar is currently advertising, so a failed load can restore
 /// it instead of leaving a stale "Loading…" behind.
@@ -34,6 +37,10 @@ mod imp {
         pub rotate_button: gtk::Button,
         pub flip_h_button: gtk::ToggleButton,
         pub flip_v_button: gtk::ToggleButton,
+        pub strip: FilmStrip,
+        /// Thumbnails already being generated, so a slot that reappears does
+        /// not queue the same decode twice.
+        pub pending_thumbs: RefCell<HashSet<PathBuf>>,
         pub rotation_bar: gtk::Box,
         pub rotation_scale: gtk::Scale,
         pub rotation_label: gtk::Label,
@@ -59,6 +66,8 @@ mod imp {
                 rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
                 flip_h_button: gtk::ToggleButton::new(),
                 flip_v_button: gtk::ToggleButton::new(),
+                strip: FilmStrip::new(),
+                pending_thumbs: RefCell::new(HashSet::new()),
                 rotation_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 rotation_scale: gtk::Scale::with_range(
                     gtk::Orientation::Horizontal,
@@ -192,6 +201,7 @@ impl Window {
         toolbar.add_top_bar(header_stack);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(self.build_rotation_bar());
+        toolbar.add_bottom_bar(&imp.strip);
         self.set_content(Some(&toolbar));
 
         imp.view.canvas().connect_zoom_changed(glib::clone!(
@@ -200,7 +210,66 @@ impl Window {
             move |percent| window.show_zoom(percent)
         ));
 
+        imp.strip.connect_selected(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |index| {
+                let target = window.imp().playlist.borrow_mut().as_mut().and_then(|l| l.jump_to(index));
+                if let Some(path) = target {
+                    window.load(path, false);
+                }
+            }
+        ));
+
+        imp.strip.connect_needs_thumbnail(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |path| window.request_thumbnail(path)
+        ));
+
         self.setup_drop_target();
+    }
+
+    /// Generate one thumbnail on a worker thread and hand it to the strip.
+    fn request_thumbnail(&self, path: PathBuf) {
+        let imp = self.imp();
+        if !imp.pending_thumbs.borrow_mut().insert(path.clone()) {
+            return; // Already being made.
+        }
+
+        let (sender, receiver) = async_channel::bounded(1);
+        let worker_path = path.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(thumbs::generate(&worker_path, filmstrip::THUMB_EDGE));
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                let result = receiver.recv().await;
+                window.imp().pending_thumbs.borrow_mut().remove(&path);
+                let Ok(Ok(image)) = result else {
+                    // A thumbnail that will not decode just stays blank; the
+                    // failure is reported properly if the file is opened.
+                    return;
+                };
+                let bytes = glib::Bytes::from_owned(image.rgba);
+                let format = if image.premultiplied {
+                    gdk::MemoryFormat::R8g8b8a8Premultiplied
+                } else {
+                    gdk::MemoryFormat::R8g8b8a8
+                };
+                let texture = gdk::MemoryTexture::new(
+                    image.width as i32,
+                    image.height as i32,
+                    format,
+                    &bytes,
+                    image.width as usize * 4,
+                );
+                window.imp().strip.set_thumbnail(&path, texture.upcast_ref());
+            }
+        ));
     }
 
     /// The rotation bar: two quarter-turn buttons either side of a free-angle
@@ -315,6 +384,7 @@ impl Window {
         }
         imp.transform_open.set(open);
         imp.rotation_bar.set_visible(open);
+        imp.strip.set_visible(!open && imp.playlist.borrow().is_some());
         imp.header_stack
             .set_visible_child_name(if open { "transform" } else { "normal" });
         self.update_navigation();
@@ -638,26 +708,22 @@ impl Window {
                 }
 
                 if let Some(files) = siblings {
-                    window
-                        .imp()
-                        .playlist
-                        .replace(Playlist::new(files, &path));
+                    window.imp().playlist.replace(Playlist::new(files, &path));
                     window.update_navigation();
+                    match window.imp().playlist.borrow().as_ref() {
+                        Some(list) => window.imp().strip.set_playlist(list.files(), list.index()),
+                        None => window.imp().strip.clear(),
+                    }
+                } else if let Some(list) = window.imp().playlist.borrow().as_ref() {
+                    // Same folder, new position: no need to re-clone the listing.
+                    window.imp().strip.set_index(list.index());
                 }
 
                 match result {
                     Ok(image) => {
-                        let position = window
-                            .imp()
-                            .playlist
-                            .borrow()
-                            .as_ref()
-                            .map(|list| format!("{}/{} · ", list.position(), list.len()))
-                            .unwrap_or_default();
-                        let subtitle = format!(
-                            "{position}{} · {} × {}",
-                            image.label, image.width, image.height
-                        );
+                        // The position lives in the filmstrip, not here.
+                        let subtitle =
+                            format!("{} · {} × {}", image.label, image.width, image.height);
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);

@@ -1,9 +1,11 @@
 mod canvas;
 mod decoders;
+mod filmstrip;
 mod format;
 mod image_view;
 mod loader;
 mod playlist;
+mod thumbs;
 mod window;
 
 use adw::prelude::*;
@@ -15,7 +17,15 @@ const APP_ID: &str = "dev.local.SimpleViewer";
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
-        ".drop-active { box-shadow: inset 0 0 0 4px @accent_bg_color; }",
+        "
+        .drop-active { box-shadow: inset 0 0 0 4px @accent_bg_color; }
+        .filmstrip-slot { padding: 2px; }
+        .filmstrip-current {
+            outline: 2px solid @accent_bg_color;
+            outline-offset: -2px;
+            background: alpha(@accent_bg_color, 0.18);
+        }
+        ",
     );
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
