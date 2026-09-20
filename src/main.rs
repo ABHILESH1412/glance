@@ -56,6 +56,9 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.zoom-out", &["<Primary>minus", "minus"]);
         app.set_accels_for_action("win.zoom-fit", &["<Primary>0", "0"]);
         app.set_accels_for_action("win.zoom-actual", &["<Primary>1", "1"]);
+        app.set_accels_for_action("win.rotate-left", &["bracketleft", "<Primary>bracketleft"]);
+        app.set_accels_for_action("win.rotate-right", &["bracketright", "<Primary>bracketright", "<Primary>r"]);
+        app.set_accels_for_action("win.rotate-reset", &["<Primary><Shift>r"]);
     });
 
     app.connect_activate(|app| {

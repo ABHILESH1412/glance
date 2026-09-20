@@ -28,6 +28,12 @@ mod imp {
         pub title: adw::WindowTitle,
         pub toasts: adw::ToastOverlay,
         pub view: ImageView,
+        pub rotation_bar: gtk::Box,
+        pub rotation_scale: gtk::Scale,
+        pub rotation_label: gtk::Label,
+        /// Set while pushing the canvas's angle into the slider, so the
+        /// slider's own value-changed does not bounce it straight back.
+        pub syncing: Cell<bool>,
         pub shown: RefCell<Option<Shown>>,
         /// Bumped on every open so a slow decode that finishes after a newer one
         /// was started can be recognised and discarded.
@@ -40,6 +46,15 @@ mod imp {
                 title: adw::WindowTitle::new("Simple Viewer", ""),
                 toasts: adw::ToastOverlay::new(),
                 view: ImageView::new(),
+                rotation_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+                rotation_scale: gtk::Scale::with_range(
+                    gtk::Orientation::Horizontal,
+                    -180.0,
+                    180.0,
+                    1.0,
+                ),
+                rotation_label: gtk::Label::new(Some("0°")),
+                syncing: Cell::new(false),
                 shown: RefCell::new(None),
                 generation: Cell::new(0),
             }
@@ -97,11 +112,17 @@ impl Window {
         zoom_section.append(Some("_Fit to Window"), Some("win.zoom-fit"));
         zoom_section.append(Some("_Actual Size"), Some("win.zoom-actual"));
 
+        let rotate_section = gio::Menu::new();
+        rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
+        rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
+        rotate_section.append(Some("Reset Rotation"), Some("win.rotate-reset"));
+
         let about_section = gio::Menu::new();
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
         menu.append_section(None, &zoom_section);
+        menu.append_section(None, &rotate_section);
         menu.append_section(None, &about_section);
         let menu_button = gtk::MenuButton::builder()
             .icon_name("open-menu-symbolic")
@@ -119,6 +140,7 @@ impl Window {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&imp.toasts));
+        toolbar.add_bottom_bar(self.build_rotation_bar());
         self.set_content(Some(&toolbar));
 
         imp.view.canvas().connect_zoom_changed(glib::clone!(
@@ -128,6 +150,92 @@ impl Window {
         ));
 
         self.setup_drop_target();
+    }
+
+    /// The rotation bar: two quarter-turn buttons either side of a free-angle
+    /// slider, with the current angle spelled out between them.
+    fn build_rotation_bar(&self) -> &gtk::Box {
+        let imp = self.imp();
+        let bar = &imp.rotation_bar;
+
+        bar.add_css_class("toolbar");
+        bar.set_margin_top(6);
+        bar.set_margin_bottom(6);
+        bar.set_margin_start(12);
+        bar.set_margin_end(12);
+        // Nothing to rotate until an image is open.
+        bar.set_visible(false);
+
+        let left = gtk::Button::from_icon_name("object-rotate-left-symbolic");
+        left.set_tooltip_text(Some("Rotate Left 90°"));
+        left.set_action_name(Some("win.rotate-left"));
+        left.add_css_class("flat");
+
+        let right = gtk::Button::from_icon_name("object-rotate-right-symbolic");
+        right.set_tooltip_text(Some("Rotate Right 90°"));
+        right.set_action_name(Some("win.rotate-right"));
+        right.add_css_class("flat");
+
+        let slider = &imp.rotation_scale;
+        slider.set_hexpand(true);
+        slider.set_draw_value(false);
+        // The angle runs either side of zero, so a bar filling from the far
+        // left would read as though 0 were most of the way along.
+        slider.set_has_origin(false);
+        slider.set_value(0.0);
+        // Detents at the quarter turns and at upright, so the useful angles are
+        // easy to find by eye.
+        for mark in [-180.0, -90.0, 0.0, 90.0, 180.0] {
+            slider.add_mark(mark, gtk::PositionType::Bottom, None);
+        }
+
+        let label = &imp.rotation_label;
+        // Fixed width, otherwise the slider shuffles sideways as digits appear.
+        label.set_width_chars(6);
+        label.set_xalign(1.0);
+        label.add_css_class("numeric");
+        label.add_css_class("dim-label");
+
+        let reset = gtk::Button::from_icon_name("edit-undo-symbolic");
+        reset.set_tooltip_text(Some("Reset Rotation"));
+        reset.set_action_name(Some("win.rotate-reset"));
+        reset.add_css_class("flat");
+
+        bar.append(&left);
+        bar.append(slider);
+        bar.append(label);
+        bar.append(&right);
+        bar.append(&reset);
+
+        slider.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |scale| {
+                if window.imp().syncing.get() {
+                    return;
+                }
+                window.imp().view.canvas().set_rotation(scale.value());
+            }
+        ));
+
+        imp.view.canvas().connect_rotation_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |degrees| window.show_rotation(degrees)
+        ));
+
+        bar
+    }
+
+    /// Push the canvas's angle back into the slider and the readout.
+    fn show_rotation(&self, degrees: f64) {
+        let imp = self.imp();
+        imp.rotation_label.set_text(&format!("{degrees:.0}°"));
+        if (imp.rotation_scale.value() - degrees).abs() > 0.01 {
+            imp.syncing.set(true);
+            imp.rotation_scale.set_value(degrees);
+            imp.syncing.set(false);
+        }
     }
 
     /// Accepts a file dropped anywhere on the window.
@@ -235,6 +343,24 @@ impl Window {
             ));
             self.add_action(&action);
         }
+
+        for (name, degrees) in [("rotate-left", -90.0), ("rotate-right", 90.0)] {
+            let action = gio::SimpleAction::new(name, None);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| window.imp().view.canvas().rotate_by(degrees)
+            ));
+            self.add_action(&action);
+        }
+
+        let rotate_reset = gio::SimpleAction::new("rotate-reset", None);
+        rotate_reset.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().set_rotation(0.0)
+        ));
+        self.add_action(&rotate_reset);
 
         let zoom_fit = gio::SimpleAction::new("zoom-fit", None);
         zoom_fit.connect_activate(glib::clone!(
@@ -363,6 +489,7 @@ impl Window {
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
                         window.imp().view.show_image(image);
+                        window.imp().rotation_bar.set_visible(true);
                     }
                     Err(message) => window.fail(&message),
                 }

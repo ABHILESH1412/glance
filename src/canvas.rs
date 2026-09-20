@@ -30,24 +30,28 @@ mod imp {
     #[derive(Default)]
     pub struct ImageCanvas {
         pub texture: RefCell<Option<gdk::Texture>>,
-        /// What is on screen this frame.
+        /// What is on screen this frame. The image is tracked by its centre
+        /// rather than a corner, which is what makes rotation, fitting and
+        /// zoom-anchoring all reduce to the same bit of maths.
         pub scale: Cell<f64>,
-        pub offset: Cell<(f64, f64)>,
+        pub centre: Cell<(f64, f64)>,
+        /// Degrees clockwise, deliberately left unwrapped: animating from 170
+        /// to 260 must turn 90 degrees forwards, not 270 backwards.
+        pub rotation: Cell<f64>,
         /// What it is easing towards.
         pub target_scale: Cell<f64>,
-        pub target_offset: Cell<(f64, f64)>,
-        /// Where the anchor says the image *wants* to sit, before clamping.
-        ///
-        /// While the image is smaller than the viewport on an axis it gets
-        /// centred, which is right to look at but destroys the anchor. Feeding
-        /// the clamped value back into the next zoom step would let that
-        /// centring accumulate, and the point under the cursor would crawl away
-        /// as you scrolled. So anchor maths reads this, and only the drawn
-        /// offset is clamped.
-        pub ideal_offset: Cell<(f64, f64)>,
+        pub target_centre: Cell<(f64, f64)>,
+        pub target_rotation: Cell<f64>,
         /// Once the user zooms, resizing the window must not silently re-fit
         /// and throw away where they were looking.
         pub user_zoomed: Cell<bool>,
+        /// Where the anchor says the image *wants* to sit, before clamping.
+        ///
+        /// While the image is smaller than the viewport it gets centred, which
+        /// is right to look at but destroys the anchor. Feeding the clamped
+        /// value back into the next zoom step would let that centring
+        /// accumulate and the point under the cursor would crawl away.
+        pub ideal_centre: Cell<(f64, f64)>,
         pub tick: RefCell<Option<gtk::TickCallbackId>>,
         pub last_frame: Cell<i64>,
         /// Scroll events carry no coordinates, so track the pointer separately.
@@ -58,6 +62,7 @@ mod imp {
         pub dragging: Cell<bool>,
         pub pinch_origin: Cell<f64>,
         pub on_zoom_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
+        pub on_rotation_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
     }
 
     #[glib::object_subclass]
@@ -110,6 +115,17 @@ impl Default for ImageCanvas {
     }
 }
 
+/// Fold an angle into [-180, 180), which is what the slider and the readout use.
+fn normalise(degrees: f64) -> f64 {
+    let wrapped = (degrees + 180.0).rem_euclid(360.0) - 180.0;
+    // rem_euclid can hand back exactly 180.0 for inputs just under it.
+    if wrapped >= 180.0 {
+        wrapped - 360.0
+    } else {
+        wrapped
+    }
+}
+
 impl ImageCanvas {
     pub fn new() -> Self {
         Self::default()
@@ -119,12 +135,15 @@ impl ImageCanvas {
         let imp = self.imp();
         imp.texture.replace(texture);
         imp.user_zoomed.set(false);
+        imp.rotation.set(0.0);
+        imp.target_rotation.set(0.0);
         // A half-finished animation belongs to the previous image.
         if let Some(tick) = imp.tick.take() {
             tick.remove();
         }
         imp.last_frame.set(0);
         self.reflow();
+        self.notify_rotation();
     }
 
     pub fn has_image(&self) -> bool {
@@ -136,8 +155,84 @@ impl ImageCanvas {
         self.imp().on_zoom_changed.replace(Some(Box::new(f)));
     }
 
+    /// Called with the rotation in degrees, folded into [-180, 180).
+    pub fn connect_rotation_changed(&self, f: impl Fn(f64) + 'static) {
+        self.imp().on_rotation_changed.replace(Some(Box::new(f)));
+    }
+
+    // -- rotation ---------------------------------------------------------
+
+    /// The current rotation, folded into [-180, 180) for display.
+    pub fn rotation(&self) -> f64 {
+        normalise(self.imp().target_rotation.get())
+    }
+
+    /// Turn by a relative amount, easing into place. Used by the 90 degree
+    /// buttons; the unwrapped target is what keeps the turn going the short way.
+    pub fn rotate_by(&self, degrees: f64) {
+        let imp = self.imp();
+        if imp.texture.borrow().is_none() {
+            return;
+        }
+        self.apply_rotation(imp.target_rotation.get() + degrees, true);
+    }
+
+    /// Set an absolute angle without easing. Used by the slider, which needs the
+    /// image to track the handle exactly.
+    pub fn set_rotation(&self, degrees: f64) {
+        let imp = self.imp();
+        if imp.texture.borrow().is_none() {
+            return;
+        }
+        let current = imp.target_rotation.get();
+        // Move to the nearest unwrapped equivalent so the slider never induces
+        // a long way round.
+        let delta = normalise(degrees - normalise(current));
+        if delta.abs() < 1e-9 {
+            return;
+        }
+        self.apply_rotation(current + delta, false);
+    }
+
+    fn apply_rotation(&self, rotation: f64, smooth: bool) {
+        let imp = self.imp();
+
+        let (scale, centre) = if imp.user_zoomed.get() {
+            // Keep whatever is in the middle of the viewport in the middle.
+            let middle = self.viewport_centre();
+            let pinned = self.to_image(middle, imp.target_scale.get(), imp.target_rotation.get(), imp.ideal_centre.get());
+            let scale = imp.target_scale.get();
+            let centre = self.centre_placing(pinned, middle, scale, rotation);
+            (scale, centre)
+        } else {
+            // A fitted image stays fitted: the rotated bounding box is what has
+            // to fit, so the scale changes as it turns.
+            (self.fit_scale_for(rotation), self.viewport_centre())
+        };
+
+        imp.target_rotation.set(rotation);
+        imp.target_scale.set(scale);
+        imp.ideal_centre.set(centre);
+        imp.target_centre.set(self.clamp_centre(centre, scale, rotation));
+
+        if smooth {
+            self.animate();
+        } else {
+            if let Some(tick) = imp.tick.take() {
+                tick.remove();
+            }
+            imp.rotation.set(rotation);
+            imp.scale.set(scale);
+            imp.centre.set(imp.target_centre.get());
+            self.settle();
+        }
+        self.notify_rotation();
+    }
+
+    // -- zoom -------------------------------------------------------------
+
     pub fn zoom_by(&self, factor: f64, anchor: Option<(f64, f64)>) {
-        let anchor = anchor.unwrap_or_else(|| self.viewport_center());
+        let anchor = anchor.unwrap_or_else(|| self.viewport_centre());
         self.set_scale_at(self.imp().target_scale.get() * factor, anchor, true);
     }
 
@@ -148,17 +243,17 @@ impl ImageCanvas {
             return;
         }
         let scale = self.fit_scale();
-        let offset = self.centered_offset(scale);
+        let centre = self.viewport_centre();
         imp.target_scale.set(scale);
-        imp.target_offset.set(offset);
-        imp.ideal_offset.set(offset);
+        imp.target_centre.set(centre);
+        imp.ideal_centre.set(centre);
         imp.user_zoomed.set(false);
         self.animate();
     }
 
     /// One image pixel per screen pixel.
     pub fn zoom_actual(&self) {
-        self.set_scale_at(1.0, self.viewport_center(), true);
+        self.set_scale_at(1.0, self.viewport_centre(), true);
     }
 
     pub fn is_fitted(&self) -> bool {
@@ -175,61 +270,87 @@ impl ImageCanvas {
             .map(|t| (t.width() as f64, t.height() as f64))
     }
 
-    /// The scale at which the image just fits. Capped at 1.0 so a small image
-    /// sits at its natural size instead of being blown up into mush.
-    fn fit_scale(&self) -> f64 {
-        let Some((tw, th)) = self.texture_size() else {
-            return 1.0;
-        };
-        let (w, h) = (self.width() as f64, self.height() as f64);
-        if w <= 0.0 || h <= 0.0 || tw <= 0.0 || th <= 0.0 {
-            return 1.0;
-        }
-        (w / tw).min(h / th).min(1.0)
-    }
-
-    fn viewport_center(&self) -> (f64, f64) {
+    fn viewport_centre(&self) -> (f64, f64) {
         (self.width() as f64 / 2.0, self.height() as f64 / 2.0)
     }
 
-    fn centered_offset(&self, scale: f64) -> (f64, f64) {
+    /// How much room a rotated image needs, per unit of scale.
+    fn unit_bounds(&self, rotation: f64) -> Option<(f64, f64)> {
+        let (tw, th) = self.texture_size()?;
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        let (sin, cos) = (sin.abs(), cos.abs());
+        Some((tw * cos + th * sin, tw * sin + th * cos))
+    }
+
+    fn fit_scale(&self) -> f64 {
+        self.fit_scale_for(self.imp().target_rotation.get())
+    }
+
+    /// The scale at which the image just fits once turned. Capped at 1.0 so a
+    /// small image sits at its natural size instead of being blown up to mush.
+    fn fit_scale_for(&self, rotation: f64) -> f64 {
+        let Some((bw, bh)) = self.unit_bounds(rotation) else {
+            return 1.0;
+        };
+        let (w, h) = (self.width() as f64, self.height() as f64);
+        if w <= 0.0 || h <= 0.0 || bw <= 0.0 || bh <= 0.0 {
+            return 1.0;
+        }
+        (w / bw).min(h / bh).min(1.0)
+    }
+
+    /// Widget point -> image pixel.
+    fn to_image(&self, point: (f64, f64), scale: f64, rotation: f64, centre: (f64, f64)) -> (f64, f64) {
         let Some((tw, th)) = self.texture_size() else {
             return (0.0, 0.0);
         };
-        (
-            (self.width() as f64 - tw * scale) / 2.0,
-            (self.height() as f64 - th * scale) / 2.0,
-        )
+        let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
+        let (sin, cos) = (-rotation).to_radians().sin_cos();
+        let rx = dx * cos - dy * sin;
+        let ry = dx * sin + dy * cos;
+        (rx / scale + tw / 2.0, ry / scale + th / 2.0)
+    }
+
+    /// Where the image centre must sit for `image` to land on `point`.
+    fn centre_placing(&self, image: (f64, f64), point: (f64, f64), scale: f64, rotation: f64) -> (f64, f64) {
+        let Some((tw, th)) = self.texture_size() else {
+            return point;
+        };
+        let (ox, oy) = ((image.0 - tw / 2.0) * scale, (image.1 - th / 2.0) * scale);
+        let (sin, cos) = rotation.to_radians().sin_cos();
+        let rx = ox * cos - oy * sin;
+        let ry = ox * sin + oy * cos;
+        (point.0 - rx, point.1 - ry)
     }
 
     /// Keep the image from being dragged off into empty space: an axis that
-    /// overflows the viewport stays glued to its edges, and one that fits is
-    /// centred.
-    fn clamp_offset(&self, offset: (f64, f64), scale: f64) -> (f64, f64) {
-        let Some((tw, th)) = self.texture_size() else {
-            return offset;
+    /// overflows the viewport stays glued to its edges, one that fits is centred.
+    fn clamp_centre(&self, centre: (f64, f64), scale: f64, rotation: f64) -> (f64, f64) {
+        let Some((ubw, ubh)) = self.unit_bounds(rotation) else {
+            return centre;
         };
         let (vw, vh) = (self.width() as f64, self.height() as f64);
-        let (iw, ih) = (tw * scale, th * scale);
-        let x = if iw <= vw {
-            (vw - iw) / 2.0
+        let (bw, bh) = (ubw * scale, ubh * scale);
+        let x = if bw <= vw {
+            vw / 2.0
         } else {
-            offset.0.clamp(vw - iw, 0.0)
+            centre.0.clamp(vw - bw / 2.0, bw / 2.0)
         };
-        let y = if ih <= vh {
-            (vh - ih) / 2.0
+        let y = if bh <= vh {
+            vh / 2.0
         } else {
-            offset.1.clamp(vh - ih, 0.0)
+            centre.1.clamp(vh - bh / 2.0, bh / 2.0)
         };
         (x, y)
     }
 
     fn is_pannable(&self) -> bool {
-        let Some((tw, th)) = self.texture_size() else {
+        let imp = self.imp();
+        let Some((ubw, ubh)) = self.unit_bounds(imp.target_rotation.get()) else {
             return false;
         };
-        let scale = self.imp().target_scale.get();
-        tw * scale > self.width() as f64 + 0.5 || th * scale > self.height() as f64 + 0.5
+        let scale = imp.target_scale.get();
+        ubw * scale > self.width() as f64 + 0.5 || ubh * scale > self.height() as f64 + 0.5
     }
 
     fn set_scale_at(&self, scale: f64, anchor: (f64, f64), smooth: bool) {
@@ -244,16 +365,13 @@ impl ImageCanvas {
         }
 
         // Pin the image point under the anchor so it does not slide away.
-        let (ax, ay) = anchor;
-        let (ox, oy) = imp.ideal_offset.get();
-        let image_x = (ax - ox) / previous;
-        let image_y = (ay - oy) / previous;
-        let ideal = (ax - image_x * scale, ay - image_y * scale);
-        let offset = self.clamp_offset(ideal, scale);
+        let rotation = imp.target_rotation.get();
+        let pinned = self.to_image(anchor, previous, rotation, imp.ideal_centre.get());
+        let ideal = self.centre_placing(pinned, anchor, scale, rotation);
 
         imp.target_scale.set(scale);
-        imp.ideal_offset.set(ideal);
-        imp.target_offset.set(offset);
+        imp.ideal_centre.set(ideal);
+        imp.target_centre.set(self.clamp_centre(ideal, scale, rotation));
         imp.user_zoomed.set(true);
 
         if smooth {
@@ -263,7 +381,7 @@ impl ImageCanvas {
                 tick.remove();
             }
             imp.scale.set(scale);
-            imp.offset.set(offset);
+            imp.centre.set(imp.target_centre.get());
             self.settle();
         }
     }
@@ -274,13 +392,13 @@ impl ImageCanvas {
         if imp.texture.borrow().is_none() {
             return;
         }
-        let (scale, offset) = if imp.user_zoomed.get() {
+        let rotation = imp.target_rotation.get();
+        let (scale, centre) = if imp.user_zoomed.get() {
             // A window that grew can leave the image smaller than a fit.
             let scale = imp.target_scale.get().max(self.fit_scale());
-            (scale, self.clamp_offset(imp.target_offset.get(), scale))
+            (scale, self.clamp_centre(imp.target_centre.get(), scale, rotation))
         } else {
-            let scale = self.fit_scale();
-            (scale, self.centered_offset(scale))
+            (self.fit_scale_for(rotation), self.viewport_centre())
         };
 
         // Resizing should not animate; the window is already moving.
@@ -288,10 +406,11 @@ impl ImageCanvas {
             tick.remove();
         }
         imp.target_scale.set(scale);
-        imp.target_offset.set(offset);
-        imp.ideal_offset.set(offset);
+        imp.target_centre.set(centre);
+        imp.ideal_centre.set(centre);
+        imp.rotation.set(rotation);
         imp.scale.set(scale);
-        imp.offset.set(offset);
+        imp.centre.set(centre);
         self.settle();
     }
 
@@ -309,6 +428,12 @@ impl ImageCanvas {
     fn notify_zoom(&self) {
         if let Some(callback) = self.imp().on_zoom_changed.borrow().as_ref() {
             callback(self.imp().scale.get() * 100.0);
+        }
+    }
+
+    fn notify_rotation(&self) {
+        if let Some(callback) = self.imp().on_rotation_changed.borrow().as_ref() {
+            callback(self.rotation());
         }
     }
 
@@ -338,27 +463,32 @@ impl ImageCanvas {
         let alpha = 1.0 - (-dt / EASE_TAU).exp();
 
         let (scale, target_scale) = (imp.scale.get(), imp.target_scale.get());
-        let (ox, oy) = imp.offset.get();
-        let (tx, ty) = imp.target_offset.get();
+        let (cx, cy) = imp.centre.get();
+        let (tx, ty) = imp.target_centre.get();
+        let (rotation, target_rotation) = (imp.rotation.get(), imp.target_rotation.get());
 
         // Interpolate scale geometrically: 1x to 2x should feel like 2x to 4x.
         let next_scale = (scale.ln() + (target_scale.ln() - scale.ln()) * alpha).exp();
-        let next = (ox + (tx - ox) * alpha, oy + (ty - oy) * alpha);
+        let next = (cx + (tx - cx) * alpha, cy + (ty - cy) * alpha);
+        let next_rotation = rotation + (target_rotation - rotation) * alpha;
 
         let settled = (next_scale / target_scale - 1.0).abs() < 0.001
             && (tx - next.0).abs() < 0.3
-            && (ty - next.1).abs() < 0.3;
+            && (ty - next.1).abs() < 0.3
+            && (target_rotation - next_rotation).abs() < 0.05;
 
         if settled {
             imp.scale.set(target_scale);
-            imp.offset.set((tx, ty));
+            imp.centre.set((tx, ty));
+            imp.rotation.set(target_rotation);
             imp.tick.replace(None);
             self.settle();
             return glib::ControlFlow::Break;
         }
 
         imp.scale.set(next_scale);
-        imp.offset.set(next);
+        imp.centre.set(next);
+        imp.rotation.set(next_rotation);
         self.notify_zoom();
         self.queue_draw();
         glib::ControlFlow::Continue
@@ -372,17 +502,22 @@ impl ImageCanvas {
             return;
         };
         let scale = imp.scale.get();
-        let (mut x, mut y) = imp.offset.get();
+        let rotation = imp.rotation.get();
+        let (mut cx, mut cy) = imp.centre.get();
         let width = texture.width() as f64 * scale;
         let height = texture.height() as f64 * scale;
 
-        // At 1:1 a half-pixel offset would blur a perfectly sharp image.
-        if (scale - 1.0).abs() < 0.001 {
-            x = x.round();
-            y = y.round();
+        // At 1:1 and square-on, a half-pixel offset would blur a sharp image.
+        let square_on = {
+            let off = rotation.rem_euclid(90.0);
+            off < 0.01 || off > 89.99
+        };
+        if (scale - 1.0).abs() < 0.001 && square_on {
+            cx = (cx - width / 2.0).round() + width / 2.0;
+            cy = (cy - height / 2.0).round() + height / 2.0;
         }
 
-        let filter = if scale >= NEAREST_ABOVE {
+        let filter = if scale >= NEAREST_ABOVE && square_on {
             gsk::ScalingFilter::Nearest
         } else if scale < 1.0 {
             // Mipmapped, so downscaled photos do not shimmer.
@@ -391,11 +526,22 @@ impl ImageCanvas {
             gsk::ScalingFilter::Linear
         };
 
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(cx as f32, cy as f32));
+        if rotation != 0.0 {
+            snapshot.rotate(rotation as f32);
+        }
         snapshot.append_scaled_texture(
             &texture,
             filter,
-            &graphene::Rect::new(x as f32, y as f32, width as f32, height as f32),
+            &graphene::Rect::new(
+                (-width / 2.0) as f32,
+                (-height / 2.0) as f32,
+                width as f32,
+                height as f32,
+            ),
         );
+        snapshot.restore();
     }
 }
 
@@ -454,7 +600,7 @@ impl ImageCanvas {
             move |_, _, _| {
                 let imp = canvas.imp();
                 imp.dragging.set(false);
-                imp.drag_origin.set(imp.offset.get());
+                imp.drag_origin.set(imp.centre.get());
             }
         ));
 
@@ -480,19 +626,24 @@ impl ImageCanvas {
                     // origin need rebasing, to avoid snapping backwards.
                     if let Some(tick) = imp.tick.take() {
                         tick.remove();
-                        let current = imp.offset.get();
+                        let current = imp.centre.get();
                         imp.drag_origin.set((current.0 - dx, current.1 - dy));
                     }
                     imp.target_scale.set(imp.scale.get());
+                    imp.target_rotation.set(imp.rotation.get());
                     canvas.set_cursor_from_name(Some("grabbing"));
                 }
 
                 let (ox, oy) = imp.drag_origin.get();
-                let offset = canvas.clamp_offset((ox + dx, oy + dy), imp.target_scale.get());
-                imp.offset.set(offset);
-                imp.target_offset.set(offset);
+                let centre = canvas.clamp_centre(
+                    (ox + dx, oy + dy),
+                    imp.target_scale.get(),
+                    imp.target_rotation.get(),
+                );
+                imp.centre.set(centre);
+                imp.target_centre.set(centre);
                 // Dragging re-establishes where the image actually is.
-                imp.ideal_offset.set(offset);
+                imp.ideal_centre.set(centre);
                 imp.user_zoomed.set(true);
                 canvas.queue_draw();
             }
