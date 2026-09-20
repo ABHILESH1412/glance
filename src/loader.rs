@@ -12,6 +12,12 @@ use std::path::Path;
 use crate::decoders;
 use crate::format::{self, Format};
 
+/// One frame of an animation, already composed onto the full canvas.
+pub struct Frame {
+    pub rgba: Vec<u8>,
+    pub delay: std::time::Duration,
+}
+
 pub struct LoadedImage {
     pub width: u32,
     pub height: u32,
@@ -21,6 +27,9 @@ pub struct LoadedImage {
     pub premultiplied: bool,
     /// Shown in the header bar, e.g. "PNG" or "RAW (preview)".
     pub label: String,
+    /// Every frame, for an animated file. Empty for a still image, in which
+    /// case `rgba` is the whole picture.
+    pub animation: Vec<Frame>,
 }
 
 pub fn decode(path: &Path) -> Result<LoadedImage, String> {

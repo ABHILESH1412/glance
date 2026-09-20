@@ -10,6 +10,7 @@
 //! keeps up, instead of queueing five animations.
 
 use std::cell::{Cell, RefCell};
+use std::time::Duration;
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -30,6 +31,11 @@ mod imp {
     #[derive(Default)]
     pub struct ImageCanvas {
         pub texture: RefCell<Option<gdk::Texture>>,
+        /// Frames of an animated file, with how long each is shown. Empty for a
+        /// still image.
+        pub frames: RefCell<Vec<(gdk::Texture, Duration)>>,
+        pub frame_index: Cell<usize>,
+        pub frame_timer: RefCell<Option<glib::SourceId>>,
         /// What is on screen this frame. The image is tracked by its centre
         /// rather than a corner, which is what makes rotation, fitting and
         /// zoom-anchoring all reduce to the same bit of maths.
@@ -93,6 +99,9 @@ mod imp {
             if let Some(tick) = self.tick.take() {
                 tick.remove();
             }
+            if let Some(timer) = self.frame_timer.take() {
+                timer.remove();
+            }
         }
     }
 
@@ -136,7 +145,70 @@ impl ImageCanvas {
         Self::default()
     }
 
+    /// Play an animated image. The view is reset as for any newly opened file.
+    pub fn set_animation(&self, frames: Vec<(gdk::Texture, Duration)>) {
+        let Some(first) = frames.first().map(|(texture, _)| texture.clone()) else {
+            return;
+        };
+        // Sets the view up and stops whatever was playing before.
+        self.set_texture(Some(first));
+        let imp = self.imp();
+        imp.frames.replace(frames);
+        imp.frame_index.set(0);
+        self.schedule_frame();
+    }
+
+    fn stop_animation(&self) {
+        let imp = self.imp();
+        if let Some(timer) = imp.frame_timer.take() {
+            timer.remove();
+        }
+        imp.frames.replace(Vec::new());
+        imp.frame_index.set(0);
+    }
+
+    fn schedule_frame(&self) {
+        let imp = self.imp();
+        let delay = {
+            let frames = imp.frames.borrow();
+            if frames.len() < 2 {
+                return;
+            }
+            frames[imp.frame_index.get()].1
+        };
+        let id = glib::timeout_add_local_once(
+            delay,
+            glib::clone!(
+                #[weak(rename_to = canvas)]
+                self,
+                move || {
+                    canvas.imp().frame_timer.replace(None);
+                    canvas.advance_frame();
+                }
+            ),
+        );
+        imp.frame_timer.replace(Some(id));
+    }
+
+    fn advance_frame(&self) {
+        let imp = self.imp();
+        let next = {
+            let frames = imp.frames.borrow();
+            if frames.is_empty() {
+                return;
+            }
+            (imp.frame_index.get() + 1) % frames.len()
+        };
+        imp.frame_index.set(next);
+        let texture = imp.frames.borrow()[next].0.clone();
+        // Swapped directly: zoom, rotation and flips must survive the frame.
+        imp.texture.replace(Some(texture));
+        self.queue_draw();
+        self.schedule_frame();
+    }
+
     pub fn set_texture(&self, texture: Option<gdk::Texture>) {
+        self.stop_animation();
         let imp = self.imp();
         imp.texture.replace(texture);
         imp.user_zoomed.set(false);

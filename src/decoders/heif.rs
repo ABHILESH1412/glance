@@ -60,5 +60,6 @@ pub fn decode(path: &Path, avif: bool) -> Result<LoadedImage, String> {
         rgba,
         premultiplied: handle.is_premultiplied_alpha(),
         label,
+        animation: Vec::new(),
     })
 }

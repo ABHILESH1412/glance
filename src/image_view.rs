@@ -75,26 +75,46 @@ impl ImageView {
         }
     }
 
-    pub fn show_image(&self, image: LoadedImage) {
-        // Taken by value: the buffer is width * height * 4 bytes, so a clone
-        // here would mean a second 200 MB allocation on a large photo.
-        let bytes = glib::Bytes::from_owned(image.rgba);
+    fn texture_for(width: u32, height: u32, premultiplied: bool, rgba: Vec<u8>) -> gdk::Texture {
+        let bytes = glib::Bytes::from_owned(rgba);
         // Mismatching this against the decoder leaves dark halos around
         // anti-aliased transparent edges.
-        let format = if image.premultiplied {
+        let format = if premultiplied {
             gdk::MemoryFormat::R8g8b8a8Premultiplied
         } else {
             gdk::MemoryFormat::R8g8b8a8
         };
-        let texture = gdk::MemoryTexture::new(
-            image.width as i32,
-            image.height as i32,
+        gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
             format,
             &bytes,
-            image.width as usize * 4,
-        );
+            width as usize * 4,
+        )
+        .upcast()
+    }
 
-        self.canvas.set_texture(Some(texture.upcast()));
+    pub fn show_image(&self, image: LoadedImage) {
+        let (width, height, premultiplied) = (image.width, image.height, image.premultiplied);
+
+        if image.animation.len() > 1 {
+            let frames = image
+                .animation
+                .into_iter()
+                .map(|frame| {
+                    (
+                        Self::texture_for(width, height, premultiplied, frame.rgba),
+                        frame.delay,
+                    )
+                })
+                .collect();
+            self.canvas.set_animation(frames);
+        } else {
+            // Taken by value: the buffer is width * height * 4 bytes, so a clone
+            // here would mean a second 200 MB allocation on a large photo.
+            let texture = Self::texture_for(width, height, premultiplied, image.rgba);
+            self.canvas.set_texture(Some(texture));
+        }
         self.stack.set_visible_child_name("image");
     }
 }

@@ -82,6 +82,7 @@ fn finish(mut image: DynamicImage, orientation: Option<Orientation>, label: &str
         rgba: rgba.into_raw(),
         premultiplied: false,
         label: label.to_string(),
+        animation: Vec::new(),
     }
 }
 

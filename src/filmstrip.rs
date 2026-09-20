@@ -21,9 +21,10 @@ const SPACING: i32 = 4;
 /// Past this the thumbnails stop helping and start costing decodes.
 const MAX_SLOTS: usize = 11;
 
-/// Longest edge a thumbnail is generated at, in pixels. Twice the slot size so
-/// it still looks sharp on a HiDPI screen.
-pub const THUMB_EDGE: u32 = 160;
+/// Thumbnails are generated at exactly the slot size, letterboxed, so every
+/// slot claims identical width no matter the shape of the picture.
+pub const SLOT_W: u32 = THUMB_W as u32;
+pub const SLOT_H: u32 = THUMB_H as u32;
 
 mod imp {
     use super::*;
@@ -35,6 +36,8 @@ mod imp {
         /// layout manager instead -- and the slot count has to come from the
         /// width actually granted.
         pub root: gtk::Box,
+        /// The arrows and thumbnails, sitting under the counter.
+        pub bar: gtk::Box,
         /// Fills the space between the arrows, and is what gets measured.
         ///
         /// A scroller rather than a plain box: a box's minimum width is the sum
@@ -125,9 +128,11 @@ impl FilmStrip {
 
     fn build(&self) {
         let imp = self.imp();
+        // Stacked: the count reads as a caption under the picture, with the
+        // thumbnails beneath it.
         let root = &imp.root;
-        root.set_orientation(gtk::Orientation::Horizontal);
-        root.set_spacing(6);
+        root.set_orientation(gtk::Orientation::Vertical);
+        root.set_spacing(2);
         root.add_css_class("toolbar");
         root.set_margin_start(12);
         root.set_margin_end(12);
@@ -166,15 +171,19 @@ impl FilmStrip {
 
         imp.counter.add_css_class("numeric");
         imp.counter.add_css_class("dim-label");
-        imp.counter.set_valign(gtk::Align::Center);
-        // Fixed width, or the strip shuffles sideways as the digits change.
+        imp.counter.set_halign(gtk::Align::Center);
+        // Fixed width, so the caption does not jitter as the digits change.
         imp.counter.set_width_chars(7);
-        imp.counter.set_xalign(1.0);
 
-        root.append(&previous);
-        root.append(&imp.inner);
-        root.append(&next);
+        let bar = &imp.bar;
+        bar.set_orientation(gtk::Orientation::Horizontal);
+        bar.set_spacing(6);
+        bar.append(&previous);
+        bar.append(&imp.inner);
+        bar.append(&next);
+
         root.append(&imp.counter);
+        root.append(bar);
     }
 
     /// Point the strip at a folder listing and a position within it.

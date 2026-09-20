@@ -64,5 +64,6 @@ pub fn decode(path: &Path) -> Result<LoadedImage, String> {
         rgba: pixmap.take(),
         premultiplied: true,
         label: "SVG".to_string(),
+        animation: Vec::new(),
     })
 }

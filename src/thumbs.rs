@@ -12,26 +12,77 @@
 use std::path::Path;
 
 use image::metadata::Orientation;
-use image::{DynamicImage, RgbaImage};
+use image::{DynamicImage, GenericImage, Rgba, RgbaImage};
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
 use crate::format::{self, Format};
 use crate::loader::{self, LoadedImage};
 
-pub fn generate(path: &Path, max_edge: u32) -> Result<LoadedImage, String> {
-    loader::quietly(|| generate_inner(path, max_edge))
+/// Every thumbnail comes back at exactly `width` x `height`, letterboxed on a
+/// transparent background.
+///
+/// Uniform size is the point: `GtkPicture` takes its natural width from the
+/// image, so thumbnails of different shapes would claim different amounts of
+/// room and the strip would come out ragged.
+pub fn generate(path: &Path, width: u32, height: u32) -> Result<LoadedImage, String> {
+    loader::quietly(|| generate_inner(path, width, height))
 }
 
-fn generate_inner(path: &Path, max_edge: u32) -> Result<LoadedImage, String> {
-    if matches!(format::detect(path), Format::Raw) {
-        if let Some(embedded) = raw_embedded(path) {
-            return Ok(shrink_dynamic(embedded, max_edge));
+fn generate_inner(path: &Path, width: u32, height: u32) -> Result<LoadedImage, String> {
+    let shrunk = if matches!(format::detect(path), Format::Raw) {
+        match raw_embedded(path) {
+            Some(embedded) => shrink_dynamic(embedded, width.max(height)),
+            // No embedded image at all: pay for a develop. Rare, and cached.
+            None => shrink(loader::decode(path)?, width.max(height)),
         }
-        // No embedded image at all: fall through and pay for a develop. Rare,
-        // and the result is cached, so it happens at most once per file.
+    } else {
+        shrink(loader::decode(path)?, width.max(height))
+    };
+    Ok(letterbox(shrunk, width, height))
+}
+
+/// Centre the shrunk image on a fixed transparent canvas.
+fn letterbox(image: LoadedImage, width: u32, height: u32) -> LoadedImage {
+    let scale = (f64::from(width) / f64::from(image.width.max(1)))
+        .min(f64::from(height) / f64::from(image.height.max(1)))
+        .min(1.0);
+    let target_w = ((f64::from(image.width) * scale).round() as u32).clamp(1, width);
+    let target_h = ((f64::from(image.height) * scale).round() as u32).clamp(1, height);
+
+    let Some(source) = RgbaImage::from_raw(image.width, image.height, image.rgba) else {
+        return blank(width, height, image.premultiplied);
+    };
+    let scaled = DynamicImage::ImageRgba8(source)
+        .thumbnail(target_w, target_h)
+        .into_rgba8();
+
+    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
+    let x = (width - scaled.width()) / 2;
+    let y = (height - scaled.height()) / 2;
+    if canvas.copy_from(&scaled, x, y).is_err() {
+        return blank(width, height, image.premultiplied);
     }
-    Ok(shrink(loader::decode(path)?, max_edge))
+
+    LoadedImage {
+        width,
+        height,
+        rgba: canvas.into_raw(),
+        premultiplied: image.premultiplied,
+        label: String::new(),
+        animation: Vec::new(),
+    }
+}
+
+fn blank(width: u32, height: u32, premultiplied: bool) -> LoadedImage {
+    LoadedImage {
+        width,
+        height,
+        rgba: vec![0; (width as usize) * (height as usize) * 4],
+        premultiplied,
+        label: String::new(),
+        animation: Vec::new(),
+    }
 }
 
 /// The smallest image the camera embedded, preferring the thumbnail over the
@@ -83,6 +134,7 @@ fn shrink_dynamic(image: DynamicImage, max_edge: u32) -> LoadedImage {
         rgba: rgba.into_raw(),
         premultiplied: false,
         label: String::new(),
+        animation: Vec::new(),
     }
 }
 
@@ -99,6 +151,7 @@ fn shrink(full: LoadedImage, max_edge: u32) -> LoadedImage {
             rgba: vec![0, 0, 0, 0],
             premultiplied: full.premultiplied,
             label: String::new(),
+            animation: Vec::new(),
         };
     };
     let small = DynamicImage::ImageRgba8(buffer)
@@ -112,5 +165,6 @@ fn shrink(full: LoadedImage, max_edge: u32) -> LoadedImage {
         // Shrinking preserves whichever alpha convention came in.
         premultiplied: full.premultiplied,
         label: String::new(),
+        animation: Vec::new(),
     }
 }

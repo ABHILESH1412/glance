@@ -240,7 +240,7 @@ impl Window {
         let (sender, receiver) = async_channel::bounded(1);
         let worker_path = path.clone();
         std::thread::spawn(move || {
-            let _ = sender.send_blocking(thumbs::generate(&worker_path, filmstrip::THUMB_EDGE));
+            let _ = sender.send_blocking(thumbs::generate(&worker_path, filmstrip::SLOT_W, filmstrip::SLOT_H));
         });
 
         glib::spawn_future_local(glib::clone!(
