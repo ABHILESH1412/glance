@@ -6,6 +6,7 @@ mod format;
 mod image_view;
 mod loader;
 mod playlist;
+mod scene;
 mod thumbs;
 mod window;
 

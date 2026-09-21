@@ -28,6 +28,16 @@ deliberately: **decoding never runs on the main thread**, so a huge file cannot 
 the window, and **SVGs are kept as vectors** rather than rasterised once at load, so
 zooming into one stays sharp instead of turning into a grid of squares.
 
+Most SVGs go further than that: where the drawing maps onto GTK's own render nodes it is
+**translated into them once at load and then handed to the GPU**, so a zoom is a matter
+of changing a transform. Nothing is re-rasterised and memory does not move. It matters
+most for drawings with shadows or blurs, where rasterising means rebuilding the filter at
+every zoom level: on one logo with three nested drop shadows, zooming to 23× cost 571 MB
+and 11.6s of CPU through the rasteriser and 0 MB and 1.0s through the render nodes.
+Anything the translation cannot express exactly — patterns, embedded rasters, filter
+chains with no GTK equivalent — falls back to the rasteriser rather than being
+approximated.
+
 ## Features
 
 ### Viewing
@@ -88,8 +98,9 @@ zooming into one stays sharp instead of turning into a grid of squares.
 
 - **Animated GIF and WebP play**, and keep playing while you zoom, rotate or flip
 - **EXIF orientation is honoured**, so phone photos are upright instead of sideways
-- **SVGs render as vectors at every zoom level**, re-rasterising the visible region as
-  you go rather than enlarging pixels
+- **SVGs render as vectors at every zoom level**, drawn by the GPU as paths where that
+  is possible and otherwise re-rasterised a visible region at a time — never by enlarging
+  pixels
 - Camera raw uses the full-size JPEG the camera embedded where there is one, and
   demosaics the sensor data when there is not
 
@@ -183,13 +194,9 @@ cargo test
 
 Wanted, but not built:
 
-- Opening a folder directly (today you open a file and browse its folder)
-- Slideshow mode with a configurable delay
-- Per-image background colour toggle, for judging transparent PNGs
 - Basic adjustments: brightness, contrast, saturation
 - Resize and export with a quality slider
 - Convert between formats
-- Lossless JPEG rotation
 - Drawing and annotation
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
@@ -197,9 +204,13 @@ Wanted, but not built:
 
 ## Known limitations
 
-- A heavily filtered SVG — large Gaussian blurs, say — takes a moment to reach full
-  sharpness at deep zoom. A quick approximation appears immediately and is replaced once
-  the full-quality render finishes.
+- An SVG that falls back to the rasteriser — one using patterns, embedded images, or a
+  filter chain beyond a blur or a drop shadow — still takes a moment to reach full
+  sharpness at deep zoom, and a heavily filtered one is expensive while it does. A quick
+  approximation appears immediately and is replaced once the full render finishes.
+- A drawing with more than about fifty thousand shapes is rasterised rather than
+  translated, because redrawing that many paths every frame costs more than reusing a
+  rendered tile.
 - "Move to Bin" needs a filesystem that has one. Deleting from `/tmp` or some removable
   media reports that it is unsupported rather than binning the file; **Delete
   Permanently** still works there.

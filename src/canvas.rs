@@ -46,6 +46,12 @@ mod imp {
         /// apart is what lets an SVG be re-rendered without disturbing the view.
         pub logical: Cell<(f64, f64)>,
         pub vector: RefCell<Option<Arc<VectorSource>>>,
+        /// The drawing as GTK render nodes, when it could be translated.
+        ///
+        /// This is the fast path and it makes the whole tile machinery below
+        /// unnecessary: zooming becomes a transform on a scene the GPU
+        /// rasterises, so nothing is re-rendered and memory does not move.
+        pub scene: RefCell<Option<gsk::RenderNode>>,
         /// Texture pixels per logical unit, i.e. how much detail is on hand.
         pub rendered_scale: Cell<f64>,
         pub resample: Cell<u64>,
@@ -54,6 +60,18 @@ mod imp {
         /// at 30x an 800x800 drawing would be gigapixels -- but the part on
         /// screen is never larger than the window.
         pub tile: RefCell<Option<Tile>>,
+        /// True while a render is on a worker thread. Exactly one runs at a
+        /// time: a filtered SVG can cost seconds and hundreds of megabytes per
+        /// render, and resvg has no way to be cancelled, so letting a flurry of
+        /// zooming start one thread per step multiplies both by however many
+        /// the user managed before the first finished.
+        pub rendering: Cell<bool>,
+        /// The one job waiting behind it. A newer request replaces whatever is
+        /// here rather than queueing, because only the newest view matters.
+        pub queued: RefCell<Option<RenderJob>>,
+        /// Collapses a burst of view changes -- a window being dragged, a
+        /// flurry of wheel notches -- into a single render once it stops.
+        pub resample_timer: RefCell<Option<glib::SourceId>>,
         /// Largest scale the last render managed inside the time budget.
         ///
         /// A drawing with blur filters gets dramatically more expensive as it
@@ -204,6 +222,19 @@ pub struct Tile {
     pub scale: f64,
 }
 
+/// One unit of work for the vector renderer.
+#[derive(Clone, Copy)]
+pub struct RenderJob {
+    /// Which round of resampling asked for this, so a result that a newer
+    /// zoom or pan has already made irrelevant can be dropped.
+    pub generation: u64,
+    pub region: (f64, f64, f64, f64),
+    pub scale: f64,
+    /// The scale this round is ultimately after. A first pass may settle for
+    /// less to get something on screen quickly.
+    pub wanted: f64,
+}
+
 /// Wrap a decoded buffer as a texture GTK can draw.
 pub fn texture_from(width: u32, height: u32, premultiplied: bool, rgba: Vec<u8>) -> gdk::Texture {
     let bytes = glib::Bytes::from_owned(rgba);
@@ -315,6 +346,10 @@ impl ImageCanvas {
         self.set_texture(Some(texture));
         let imp = self.imp();
         imp.logical.set((logical_w, logical_h));
+        // Built here rather than on the decoder thread: render nodes may
+        // only be created on the main loop.
+        imp.scene
+            .replace(source.tree().and_then(crate::scene::build));
         imp.vector.replace(Some(source));
         imp.rendered_scale.set(rendered);
         // The window may already demand far more than the first pass gave.
@@ -325,9 +360,18 @@ impl ImageCanvas {
         self.stop_animation();
         let imp = self.imp();
         imp.vector.replace(None);
+        imp.scene.replace(None);
         imp.tile.replace(None);
         imp.budget_scale.set(f64::INFINITY);
         imp.rendered_scale.set(1.0);
+        // A render still running belongs to the image being replaced, so
+        // retire its generation and drop anything queued behind it. Without
+        // this its tile would land on top of the new picture.
+        imp.resample.set(imp.resample.get() + 1);
+        imp.queued.replace(None);
+        if let Some(timer) = imp.resample_timer.take() {
+            timer.remove();
+        }
         imp.logical.set(
             texture
                 .as_ref()
@@ -1005,9 +1049,39 @@ impl ImageCanvas {
         Some((x, y, right - x, bottom - y))
     }
 
+    /// How long the view must hold still before a vector is re-rendered.
+    ///
+    /// Dragging a window edge settles the view on every frame, and each settle
+    /// used to start a render. One render per gesture is enough.
+    const RESAMPLE_DELAY: std::time::Duration = std::time::Duration::from_millis(120);
+
+    /// Ask for a fresh tile once the view stops moving.
+    fn maybe_resample(&self) {
+        let imp = self.imp();
+        // A translated drawing needs no tiles at all.
+        if imp.vector.borrow().is_none() || imp.scene.borrow().is_some() {
+            return;
+        }
+        if let Some(timer) = imp.resample_timer.take() {
+            timer.remove();
+        }
+        let id = glib::timeout_add_local_once(
+            Self::RESAMPLE_DELAY,
+            glib::clone!(
+                #[weak(rename_to = canvas)]
+                self,
+                move || {
+                    canvas.imp().resample_timer.replace(None);
+                    canvas.resample_now();
+                }
+            ),
+        );
+        imp.resample_timer.replace(Some(id));
+    }
+
     /// Re-render the visible part of a vector image when the view wants more
     /// detail than the current tile holds, or has moved off it.
-    fn maybe_resample(&self) {
+    fn resample_now(&self) {
         let imp = self.imp();
         if imp.vector.borrow().is_none() {
             return;
@@ -1020,7 +1094,11 @@ impl ImageCanvas {
         let Some(region) = self.visible_region() else {
             return;
         };
-        let wanted = imp.target_scale.get();
+        // A tile is only ever meant to cover the window, so refuse to ask for
+        // one much larger than that however odd the region turns out to be.
+        let budget = (self.width() as f64 * self.height() as f64 * 4.0).max(1.0);
+        let area = (region.2 * region.3).max(1e-6);
+        let wanted = imp.target_scale.get().min((budget / area).sqrt());
 
         // Skip when the existing tile already covers this view sharply enough.
         if let Some(tile) = imp.tile.borrow().as_ref() {
@@ -1040,19 +1118,40 @@ impl ImageCanvas {
         // away rather than sitting on a stretched tile; the full-quality pass
         // follows once that lands.
         let first = wanted.min(imp.budget_scale.get()).max(0.01);
-        self.spawn_render(generation, region, first, wanted);
+        self.submit(RenderJob {
+            generation,
+            region,
+            scale: first,
+            wanted,
+        });
+    }
+
+    /// Hand a job to the renderer, or park it if one is already running.
+    fn submit(&self, job: RenderJob) {
+        let imp = self.imp();
+        if imp.rendering.get() {
+            // Whatever was waiting described an older view, so drop it.
+            imp.queued.replace(Some(job));
+            return;
+        }
+        imp.rendering.set(true);
+        self.spawn_render(job);
     }
 
     /// Time a render should take before the next one is scaled back.
     const RENDER_BUDGET: std::time::Duration = std::time::Duration::from_millis(400);
 
-    fn spawn_render(&self, generation: u64, region: (f64, f64, f64, f64), scale: f64, wanted: f64) {
+    /// Run one job on a worker thread. Only ever called with the render slot
+    /// already claimed, so at most one of these exists at a time.
+    fn spawn_render(&self, job: RenderJob) {
         let imp = self.imp();
         let Some(source) = imp.vector.borrow().clone() else {
+            imp.rendering.set(false);
             return;
         };
 
         let (sender, receiver) = async_channel::bounded(1);
+        let (region, scale) = (job.region, job.scale);
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
             let result = svg::rasterise_region(&source, region, scale);
@@ -1063,44 +1162,58 @@ impl ImageCanvas {
             #[weak(rename_to = canvas)]
             self,
             async move {
-                let Ok((result, elapsed)) = receiver.recv().await else {
-                    return;
-                };
+                let received = receiver.recv().await.ok();
                 let imp = canvas.imp();
+                // However this turned out, the renderer is free again. Missing
+                // this would wedge the pipeline for the rest of the session.
+                imp.rendering.set(false);
+
+                let mut refine = None;
                 // A newer zoom or pan has already asked for something else.
-                if imp.resample.get() != generation {
-                    return;
+                if imp.resample.get() == job.generation {
+                    if let Some((Some((image, used)), elapsed)) = received {
+                        // Remember what this machine managed in the time
+                        // allowed, so the next first pass is sized to stay
+                        // responsive.
+                        if elapsed > Self::RENDER_BUDGET {
+                            let ratio =
+                                Self::RENDER_BUDGET.as_secs_f64() / elapsed.as_secs_f64();
+                            // Cost grows with area, so scale back by the square root.
+                            imp.budget_scale.set((used * ratio.sqrt()).max(0.01));
+                        } else if elapsed * 4 < Self::RENDER_BUDGET {
+                            // Comfortably quick: stop holding it back.
+                            imp.budget_scale.set(f64::INFINITY);
+                        }
+
+                        let texture = texture_from(
+                            image.width,
+                            image.height,
+                            image.premultiplied,
+                            image.rgba,
+                        );
+                        imp.tile.replace(Some(Tile {
+                            texture,
+                            x: job.region.0,
+                            y: job.region.1,
+                            width: job.region.2,
+                            height: job.region.3,
+                            scale: used,
+                        }));
+                        canvas.queue_draw();
+
+                        // That was only the quick pass; the real thing follows.
+                        if used < job.wanted * 0.99 {
+                            refine = Some(RenderJob {
+                                scale: job.wanted,
+                                ..job
+                            });
+                        }
+                    }
                 }
-                let Some((image, used)) = result else {
-                    return;
-                };
 
-                // Remember what this machine managed in the time allowed, so
-                // the next first pass is sized to stay responsive.
-                if elapsed > Self::RENDER_BUDGET {
-                    let ratio = Self::RENDER_BUDGET.as_secs_f64() / elapsed.as_secs_f64();
-                    // Cost grows with area, so scale back by the square root.
-                    imp.budget_scale.set((used * ratio.sqrt()).max(0.01));
-                } else if elapsed * 4 < Self::RENDER_BUDGET {
-                    // Comfortably quick: stop holding it back.
-                    imp.budget_scale.set(f64::INFINITY);
-                }
-
-                let texture =
-                    texture_from(image.width, image.height, image.premultiplied, image.rgba);
-                imp.tile.replace(Some(Tile {
-                    texture,
-                    x: region.0,
-                    y: region.1,
-                    width: region.2,
-                    height: region.3,
-                    scale: used,
-                }));
-                canvas.queue_draw();
-
-                // That was only the quick pass; follow it with the real thing.
-                if used < wanted * 0.99 {
-                    canvas.spawn_render(generation, region, wanted, wanted);
+                // A view that has moved on beats sharpening one that has not.
+                if let Some(next) = imp.queued.take().or(refine) {
+                    canvas.submit(next);
                 }
             }
         ));
@@ -1264,6 +1377,20 @@ impl ImageCanvas {
             )
         };
         let base_rect = to_local(0.0, 0.0, logical_w, logical_h);
+
+        // The fast path: a drawing GTK can rasterise itself. Scaling the scene
+        // is all a zoom is, so there are no tiles to keep up to date and no
+        // resolution to run out of.
+        if let Some(scene) = imp.scene.borrow().as_ref() {
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(base_rect.x(), base_rect.y()));
+            snapshot.scale(scale as f32, scale as f32);
+            snapshot.append_node(scene);
+            snapshot.restore();
+            snapshot.restore();
+            self.draw_crop(snapshot);
+            return;
+        }
 
         match imp.tile.borrow().as_ref() {
             Some(tile) => {

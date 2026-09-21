@@ -50,7 +50,9 @@ pub struct VectorSource {
 }
 
 impl VectorSource {
-    fn tree(&self) -> Option<&usvg::Tree> {
+    /// The parsed drawing. The view uses it to try building GTK render nodes
+    /// before falling back to rasterising here.
+    pub fn tree(&self) -> Option<&usvg::Tree> {
         self.tree
             .get_or_init(|| parse(&self.data, self.base_dir.as_deref()))
             .as_ref()
