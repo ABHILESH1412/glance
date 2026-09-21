@@ -1,5 +1,6 @@
 mod canvas;
 mod decoders;
+mod export;
 mod filmstrip;
 mod format;
 mod image_view;
@@ -133,6 +134,12 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.dismiss", &["Escape"]);
         app.set_accels_for_action("win.fullscreen", &["F11", "<Primary>f"]);
         app.set_accels_for_action("win.delete", &["Delete"]);
+        app.set_accels_for_action("win.edit", &["<Primary>e"]);
+        app.set_accels_for_action("win.undo", &["<Primary>z"]);
+        app.set_accels_for_action("win.redo", &["<Primary><Shift>z", "<Primary>y"]);
+        app.set_accels_for_action("win.crop-apply", &["Return", "KP_Enter"]);
+        app.set_accels_for_action("win.save", &["<Primary>s"]);
+        app.set_accels_for_action("win.save-as", &["<Primary><Shift>s"]);
         app.set_accels_for_action("win.flip-horizontal", &["<Primary>h"]);
         app.set_accels_for_action("win.flip-vertical", &["<Primary>j"]);
     });

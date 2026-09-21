@@ -100,6 +100,16 @@ mod imp {
         pub on_zoom_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
         pub on_rotation_changed: RefCell<Option<Box<dyn Fn(f64)>>>,
         pub on_flip_changed: RefCell<Option<Box<dyn Fn(bool, bool)>>>,
+        /// True while the crop rectangle is being drawn or adjusted, during
+        /// which dragging resizes the selection instead of panning.
+        pub cropping: Cell<bool>,
+        pub freehand: Cell<bool>,
+        /// Width divided by height, or 0 for an unconstrained crop.
+        pub aspect: Cell<f64>,
+        pub crop: RefCell<Option<CropSelection>>,
+        pub crop_handle: Cell<Option<Handle>>,
+        pub crop_origin: Cell<(f64, f64, f64, f64)>,
+        pub on_crop_changed: RefCell<Option<Box<dyn Fn(Option<(u32, u32)>)>>>,
     }
 
     #[glib::object_subclass]
@@ -148,6 +158,39 @@ glib::wrapper! {
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
+
+/// A crop the user has drawn, in *display space*: the image as it appears after
+/// flipping and rotation, measured in the image's own units with the origin at
+/// the top left. Keeping it there rather than in the original's coordinates is
+/// what makes the selection a plain axis-aligned rectangle on screen however
+/// the picture is turned, and makes exporting a matter of applying the same
+/// transforms and then cutting.
+#[derive(Clone, Default)]
+pub struct CropSelection {
+    pub rect: (f64, f64, f64, f64),
+    /// Points of a freehand outline; empty for a plain rectangle.
+    pub path: Vec<(f64, f64)>,
+}
+
+/// Which part of the crop rectangle a drag is moving.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Handle {
+    NorthWest,
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    Inside,
+}
+
+/// Reach of a handle in screen pixels.
+const HANDLE_GRAB: f64 = 16.0;
+const HANDLE_DRAW: f64 = 12.0;
+/// Smallest crop, in display units, so it cannot be collapsed to nothing.
+const MIN_CROP: f64 = 8.0;
 
 /// A patch of a vector image rendered at screen resolution, positioned in the
 /// image's own units.
@@ -297,6 +340,12 @@ impl ImageCanvas {
         imp.target_rotation.set(0.0);
         imp.flip_h.set(false);
         imp.flip_v.set(false);
+        // A selection belongs to the picture it was drawn on; its coordinates
+        // would be meaningless against the next one.
+        imp.crop.replace(None);
+        imp.cropping.set(false);
+        imp.freehand.set(false);
+        imp.aspect.set(0.0);
         // A half-finished animation belongs to the previous image.
         if let Some(tick) = imp.tick.take() {
             tick.remove();
@@ -472,6 +521,279 @@ impl ImageCanvas {
 
     pub fn is_fitted(&self) -> bool {
         (self.imp().target_scale.get() - self.fit_scale()).abs() < 0.001
+    }
+
+    // -- cropping ---------------------------------------------------------
+
+    /// Size of the image as displayed, in its own units, after rotation.
+    pub fn display_size(&self) -> Option<(f64, f64)> {
+        self.unit_bounds(self.imp().target_rotation.get())
+    }
+
+    /// Widget point -> display space.
+    fn to_display(&self, point: (f64, f64)) -> (f64, f64) {
+        let Some((bw, bh)) = self.display_size() else {
+            return (0.0, 0.0);
+        };
+        let imp = self.imp();
+        let scale = imp.target_scale.get().max(1e-9);
+        let (cx, cy) = imp.target_centre.get();
+        (
+            (point.0 - cx) / scale + bw / 2.0,
+            (point.1 - cy) / scale + bh / 2.0,
+        )
+    }
+
+    /// Display space -> widget point.
+    fn from_display(&self, point: (f64, f64)) -> (f64, f64) {
+        let Some((bw, bh)) = self.display_size() else {
+            return (0.0, 0.0);
+        };
+        let imp = self.imp();
+        let scale = imp.target_scale.get();
+        let (cx, cy) = imp.target_centre.get();
+        (
+            cx + (point.0 - bw / 2.0) * scale,
+            cy + (point.1 - bh / 2.0) * scale,
+        )
+    }
+
+    pub fn is_cropping(&self) -> bool {
+        self.imp().cropping.get()
+    }
+
+    pub fn crop(&self) -> Option<CropSelection> {
+        self.imp().crop.borrow().clone()
+    }
+
+    /// Called with the selection size in pixels, or `None` when it is cleared.
+    pub fn connect_crop_changed(&self, f: impl Fn(Option<(u32, u32)>) + 'static) {
+        self.imp().on_crop_changed.replace(Some(Box::new(f)));
+    }
+
+    pub fn set_cropping(&self, active: bool) {
+        let imp = self.imp();
+        imp.cropping.set(active);
+        if active && imp.crop.borrow().is_none() {
+            self.reset_crop();
+        }
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    pub fn set_freehand(&self, freehand: bool) {
+        self.imp().freehand.set(freehand);
+        if freehand {
+            // A freehand outline replaces any rectangle rather than mixing.
+            self.imp().crop.replace(None);
+        } else {
+            self.reset_crop();
+        }
+        self.queue_draw();
+        self.notify_crop();
+    }
+
+    /// `0.0` leaves the crop unconstrained.
+    pub fn set_aspect(&self, aspect: f64) {
+        let imp = self.imp();
+        imp.aspect.set(aspect);
+        if aspect > 0.0 {
+            imp.freehand.set(false);
+            let Some((bw, bh)) = self.display_size() else {
+                return;
+            };
+            // Largest rectangle of this shape that fits, centred.
+            let (mut w, mut h) = (bw, bw / aspect);
+            if h > bh {
+                h = bh;
+                w = bh * aspect;
+            }
+            imp.crop.replace(Some(CropSelection {
+                rect: ((bw - w) / 2.0, (bh - h) / 2.0, w, h),
+                path: Vec::new(),
+            }));
+        }
+        self.queue_draw();
+        self.notify_crop();
+    }
+
+    /// Back to the whole image.
+    pub fn reset_crop(&self) {
+        let Some((bw, bh)) = self.display_size() else {
+            return;
+        };
+        self.imp().crop.replace(Some(CropSelection {
+            rect: (0.0, 0.0, bw, bh),
+            path: Vec::new(),
+        }));
+        self.queue_draw();
+        self.notify_crop();
+    }
+
+    pub fn clear_crop(&self) {
+        self.imp().crop.replace(None);
+        self.imp().cropping.set(false);
+        self.queue_draw();
+        self.notify_crop();
+    }
+
+    fn notify_crop(&self) {
+        let imp = self.imp();
+        let size = imp.crop.borrow().as_ref().map(|crop| {
+            // Display units equal pixels for a raster; a vector is rasterised
+            // at its natural size on export, so the same holds there.
+            (
+                crop.rect.2.round().max(1.0) as u32,
+                crop.rect.3.round().max(1.0) as u32,
+            )
+        });
+        if let Some(callback) = imp.on_crop_changed.borrow().as_ref() {
+            callback(size);
+        }
+    }
+
+    /// Add a point to a freehand outline, tracking its bounding box as it goes.
+    fn extend_freehand(&self, dx: f64, dy: f64) {
+        let Some((bw, bh)) = self.display_size() else {
+            return;
+        };
+        let imp = self.imp();
+        let mut borrowed = imp.crop.borrow_mut();
+        let Some(crop) = borrowed.as_mut() else {
+            return;
+        };
+        let Some(start) = crop.path.first().copied() else {
+            return;
+        };
+        let scale = imp.target_scale.get().max(1e-9);
+        let point = (
+            (start.0 + dx / scale).clamp(0.0, bw),
+            (start.1 + dy / scale).clamp(0.0, bh),
+        );
+        // Thin out the trail: a point per pixel of travel is plenty, and keeps
+        // the path cheap to draw and to turn into a mask.
+        if crop
+            .path
+            .last()
+            .is_none_or(|last| (last.0 - point.0).hypot(last.1 - point.1) > 1.0)
+        {
+            crop.path.push(point);
+        }
+
+        let xs = crop.path.iter().map(|p| p.0);
+        let ys = crop.path.iter().map(|p| p.1);
+        let min_x = xs.clone().fold(f64::INFINITY, f64::min);
+        let max_x = xs.fold(f64::NEG_INFINITY, f64::max);
+        let min_y = ys.clone().fold(f64::INFINITY, f64::min);
+        let max_y = ys.fold(f64::NEG_INFINITY, f64::max);
+        crop.rect = (min_x, min_y, (max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+        drop(borrowed);
+
+        self.queue_draw();
+        self.notify_crop();
+    }
+
+    /// Which part of the selection is under the pointer, if any.
+    fn handle_at(&self, point: (f64, f64)) -> Option<Handle> {
+        let crop = self.imp().crop.borrow().clone()?;
+        let (x, y, w, h) = crop.rect;
+        let top_left = self.from_display((x, y));
+        let bottom_right = self.from_display((x + w, y + h));
+        let (left, top) = top_left;
+        let (right, bottom) = bottom_right;
+        let (mid_x, mid_y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+
+        let near = |a: (f64, f64)| {
+            (point.0 - a.0).abs() <= HANDLE_GRAB && (point.1 - a.1).abs() <= HANDLE_GRAB
+        };
+        for (corner, handle) in [
+            ((left, top), Handle::NorthWest),
+            ((mid_x, top), Handle::North),
+            ((right, top), Handle::NorthEast),
+            ((right, mid_y), Handle::East),
+            ((right, bottom), Handle::SouthEast),
+            ((mid_x, bottom), Handle::South),
+            ((left, bottom), Handle::SouthWest),
+            ((left, mid_y), Handle::West),
+        ] {
+            if near(corner) {
+                return Some(handle);
+            }
+        }
+        if point.0 >= left && point.0 <= right && point.1 >= top && point.1 <= bottom {
+            return Some(Handle::Inside);
+        }
+        None
+    }
+
+    /// Apply a drag to the selection. `delta` is in widget pixels.
+    fn drag_crop(&self, handle: Handle, delta: (f64, f64)) {
+        let Some((bw, bh)) = self.display_size() else {
+            return;
+        };
+        let imp = self.imp();
+        let scale = imp.target_scale.get().max(1e-9);
+        let (dx, dy) = (delta.0 / scale, delta.1 / scale);
+        let (ox, oy, ow, oh) = imp.crop_origin.get();
+
+        let (x, y, w, h);
+        match handle {
+            Handle::Inside => {
+                x = (ox + dx).clamp(0.0, (bw - ow).max(0.0));
+                y = (oy + dy).clamp(0.0, (bh - oh).max(0.0));
+                w = ow;
+                h = oh;
+            }
+            _ => {
+                let (mut left, mut top) = (ox, oy);
+                let (mut right, mut bottom) = (ox + ow, oy + oh);
+                if matches!(handle, Handle::NorthWest | Handle::West | Handle::SouthWest) {
+                    left = (ox + dx).min(right - MIN_CROP).max(0.0);
+                }
+                if matches!(handle, Handle::NorthEast | Handle::East | Handle::SouthEast) {
+                    right = (ox + ow + dx).max(left + MIN_CROP).min(bw);
+                }
+                if matches!(handle, Handle::NorthWest | Handle::North | Handle::NorthEast) {
+                    top = (oy + dy).min(bottom - MIN_CROP).max(0.0);
+                }
+                if matches!(handle, Handle::SouthWest | Handle::South | Handle::SouthEast) {
+                    bottom = (oy + oh + dy).max(top + MIN_CROP).min(bh);
+                }
+                let (mut nx, mut ny) = (left, top);
+                let (mut nw, mut nh) = (right - left, bottom - top);
+
+                let aspect = imp.aspect.get();
+                if aspect > 0.0 {
+                    // Keep the shape by adjusting the free dimension, anchored
+                    // on whichever corner is not being dragged.
+                    let wanted_h = nw / aspect;
+                    if wanted_h <= bh {
+                        nh = wanted_h;
+                    } else {
+                        nw = nh * aspect;
+                    }
+                    if matches!(handle, Handle::NorthWest | Handle::North | Handle::NorthEast) {
+                        ny = bottom - nh;
+                    }
+                    if matches!(handle, Handle::NorthWest | Handle::West | Handle::SouthWest) {
+                        nx = right - nw;
+                    }
+                    nx = nx.clamp(0.0, (bw - nw).max(0.0));
+                    ny = ny.clamp(0.0, (bh - nh).max(0.0));
+                }
+                x = nx;
+                y = ny;
+                w = nw;
+                h = nh;
+            }
+        }
+
+        imp.crop.replace(Some(CropSelection {
+            rect: (x, y, w.max(MIN_CROP), h.max(MIN_CROP)),
+            path: Vec::new(),
+        }));
+        self.queue_draw();
+        self.notify_crop();
     }
 
     // -- geometry ---------------------------------------------------------
@@ -785,6 +1107,24 @@ impl ImageCanvas {
     }
 
     fn update_cursor(&self) {
+        if self.imp().cropping.get() {
+            if self.imp().freehand.get() {
+                self.set_cursor_from_name(Some("crosshair"));
+                return;
+            }
+            // Name the gesture rather than leaving one cursor for everything:
+            // a corner pulls diagonally, an edge one way, the middle moves.
+            let name = match self.handle_at(self.imp().pointer.get()) {
+                Some(Handle::NorthWest | Handle::SouthEast) => "nwse-resize",
+                Some(Handle::NorthEast | Handle::SouthWest) => "nesw-resize",
+                Some(Handle::North | Handle::South) => "ns-resize",
+                Some(Handle::East | Handle::West) => "ew-resize",
+                Some(Handle::Inside) => "move",
+                None => "crosshair",
+            };
+            self.set_cursor_from_name(Some(name));
+            return;
+        }
         let name = if self.is_pannable() { Some("grab") } else { None };
         self.set_cursor_from_name(name);
     }
@@ -959,6 +1299,105 @@ impl ImageCanvas {
             None => snapshot.append_scaled_texture(&texture, filter, &base_rect),
         }
         snapshot.restore();
+        self.draw_crop(snapshot);
+    }
+
+    /// The crop overlay, drawn in widget space so the handles stay a constant
+    /// size on screen however far the image is zoomed.
+    fn draw_crop(&self, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        if !imp.cropping.get() {
+            return;
+        }
+        let Some(crop) = imp.crop.borrow().clone() else {
+            return;
+        };
+        let (width, height) = (self.width() as f32, self.height() as f32);
+        let dim = gdk::RGBA::new(0.0, 0.0, 0.0, 0.55);
+        let line = gdk::RGBA::new(1.0, 1.0, 1.0, 0.9);
+        let faint = gdk::RGBA::new(1.0, 1.0, 1.0, 0.35);
+
+        if crop.path.len() > 1 {
+            let outline = gsk::PathBuilder::new();
+            let first = self.from_display(crop.path[0]);
+            outline.move_to(first.0 as f32, first.1 as f32);
+            for point in crop.path.iter().skip(1) {
+                let p = self.from_display(*point);
+                outline.line_to(p.0 as f32, p.1 as f32);
+            }
+            outline.close();
+
+            // The whole viewport plus the outline, filled even-odd: the two
+            // loops cancel where they overlap, which leaves a hole exactly the
+            // shape that was drawn.
+            let mask = gsk::PathBuilder::new();
+            mask.move_to(0.0, 0.0);
+            mask.line_to(width, 0.0);
+            mask.line_to(width, height);
+            mask.line_to(0.0, height);
+            mask.close();
+            mask.move_to(first.0 as f32, first.1 as f32);
+            for point in crop.path.iter().skip(1) {
+                let p = self.from_display(*point);
+                mask.line_to(p.0 as f32, p.1 as f32);
+            }
+            mask.close();
+
+            snapshot.append_fill(&mask.to_path(), gsk::FillRule::EvenOdd, &dim);
+            snapshot.append_stroke(&outline.to_path(), &gsk::Stroke::new(2.0), &line);
+            return;
+        }
+
+        let (x, y, crop_w, crop_h) = crop.rect;
+        let (left, top) = self.from_display((x, y));
+        let (right, bottom) = self.from_display((x + crop_w, y + crop_h));
+        let (l, t, r, b) = (left as f32, top as f32, right as f32, bottom as f32);
+
+        for band in [
+            graphene::Rect::new(0.0, 0.0, width, t),
+            graphene::Rect::new(0.0, b, width, height - b),
+            graphene::Rect::new(0.0, t, l, b - t),
+            graphene::Rect::new(r, t, width - r, b - t),
+        ] {
+            if band.width() > 0.0 && band.height() > 0.0 {
+                snapshot.append_color(&dim, &band);
+            }
+        }
+
+        // Rule-of-thirds guides.
+        for step in 1..3 {
+            let fx = l + (r - l) * step as f32 / 3.0;
+            let fy = t + (b - t) * step as f32 / 3.0;
+            snapshot.append_color(&faint, &graphene::Rect::new(fx, t, 1.0, b - t));
+            snapshot.append_color(&faint, &graphene::Rect::new(l, fy, r - l, 1.0));
+        }
+
+        for edge in [
+            graphene::Rect::new(l, t, r - l, 1.0),
+            graphene::Rect::new(l, b - 1.0, r - l, 1.0),
+            graphene::Rect::new(l, t, 1.0, b - t),
+            graphene::Rect::new(r - 1.0, t, 1.0, b - t),
+        ] {
+            snapshot.append_color(&line, &edge);
+        }
+
+        let half = HANDLE_DRAW as f32 / 2.0;
+        let (mid_x, mid_y) = ((l + r) / 2.0, (t + b) / 2.0);
+        for (hx, hy) in [
+            (l, t),
+            (mid_x, t),
+            (r, t),
+            (r, mid_y),
+            (r, b),
+            (mid_x, b),
+            (l, b),
+            (l, mid_y),
+        ] {
+            snapshot.append_color(
+                &line,
+                &graphene::Rect::new(hx - half, hy - half, HANDLE_DRAW as f32, HANDLE_DRAW as f32),
+            );
+        }
     }
 }
 
@@ -980,7 +1419,13 @@ impl ImageCanvas {
         motion.connect_motion(glib::clone!(
             #[weak(rename_to = canvas)]
             self,
-            move |_, x, y| canvas.imp().pointer.set((x, y))
+            move |_, x, y| {
+                canvas.imp().pointer.set((x, y));
+                // While cropping, the pointer should say what a drag would do.
+                if canvas.imp().cropping.get() {
+                    canvas.update_cursor();
+                }
+            }
         ));
         motion
     }
@@ -1014,10 +1459,30 @@ impl ImageCanvas {
         drag.connect_drag_begin(glib::clone!(
             #[weak(rename_to = canvas)]
             self,
-            move |_, _, _| {
+            move |gesture, start_x, start_y| {
                 let imp = canvas.imp();
                 imp.dragging.set(false);
                 imp.drag_origin.set(imp.centre.get());
+
+                if !imp.cropping.get() {
+                    return;
+                }
+                if imp.freehand.get() {
+                    // Start a fresh outline at the pen-down point.
+                    let point = canvas.to_display((start_x, start_y));
+                    imp.crop.replace(Some(CropSelection {
+                        rect: (point.0, point.1, 0.0, 0.0),
+                        path: vec![point],
+                    }));
+                    imp.crop_handle.set(None);
+                    return;
+                }
+                let handle = canvas.handle_at((start_x, start_y));
+                imp.crop_handle.set(handle);
+                if let Some(crop) = imp.crop.borrow().as_ref() {
+                    imp.crop_origin.set(crop.rect);
+                }
+                let _ = gesture;
             }
         ));
 
@@ -1026,6 +1491,16 @@ impl ImageCanvas {
             self,
             move |_, dx, dy| {
                 let imp = canvas.imp();
+
+                if imp.cropping.get() {
+                    if imp.freehand.get() {
+                        canvas.extend_freehand(dx, dy);
+                    } else if let Some(handle) = imp.crop_handle.get() {
+                        canvas.drag_crop(handle, (dx, dy));
+                    }
+                    return;
+                }
+
                 if !canvas.is_pannable() {
                     return;
                 }

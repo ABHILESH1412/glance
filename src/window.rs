@@ -17,6 +17,8 @@ use gtk::{gdk, gio, glib};
 use crate::image_view::ImageView;
 use crate::filmstrip::{self, FilmStrip};
 use crate::loader;
+use crate::canvas;
+use crate::export;
 use crate::playlist::{self, Playlist};
 use crate::thumbs;
 
@@ -41,6 +43,27 @@ mod imp {
         pub toolbar: adw::ToolbarView,
         pub fullscreen_button: gtk::Button,
         pub delete_button: gtk::Button,
+        pub edit_button: gtk::ToggleButton,
+        pub edit_panel: gtk::Box,
+        pub crop_toggle: gtk::ToggleButton,
+        pub crop_options: gtk::Box,
+        pub freehand_toggle: gtk::ToggleButton,
+        pub crop_size: gtk::Label,
+        pub pending_crop: gtk::Label,
+        /// Set while pushing state into the panel, so the toggles do not echo
+        /// back and undo what was just applied.
+        pub syncing_panel: Cell<bool>,
+        /// The pixels being edited, decoded once when the panel opens. Edits
+        /// are applied to this, not to the file, so the original is untouched
+        /// until it is saved over.
+        pub working: RefCell<Option<image::DynamicImage>>,
+        /// Previous states, newest last. Real editors keep history in memory
+        /// with a limit rather than writing a copy per step, so this does too.
+        pub history: RefCell<Vec<image::DynamicImage>>,
+        pub redo: RefCell<Vec<image::DynamicImage>>,
+        pub dirty: Cell<bool>,
+        pub undo_button: gtk::Button,
+        pub redo_button: gtk::Button,
         /// The file on screen, needed to delete it and to find it again after
         /// the folder changes underneath us.
         pub current: RefCell<Option<PathBuf>>,
@@ -79,6 +102,20 @@ mod imp {
                 toolbar: adw::ToolbarView::new(),
                 fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
                 delete_button: gtk::Button::from_icon_name("user-trash-symbolic"),
+                edit_button: gtk::ToggleButton::new(),
+                edit_panel: gtk::Box::new(gtk::Orientation::Vertical, 12),
+                crop_toggle: gtk::ToggleButton::with_label("Crop"),
+                crop_options: gtk::Box::new(gtk::Orientation::Vertical, 8),
+                freehand_toggle: gtk::ToggleButton::with_label("Freehand"),
+                crop_size: gtk::Label::new(None),
+                pending_crop: gtk::Label::new(None),
+                syncing_panel: Cell::new(false),
+                working: RefCell::new(None),
+                history: RefCell::new(Vec::new()),
+                redo: RefCell::new(Vec::new()),
+                dirty: Cell::new(false),
+                undo_button: gtk::Button::from_icon_name("edit-undo-symbolic"),
+                redo_button: gtk::Button::from_icon_name("edit-redo-symbolic"),
                 current: RefCell::new(None),
                 monitor: RefCell::new(None),
                 rescan_timer: RefCell::new(None),
@@ -144,11 +181,22 @@ impl Window {
         self.set_default_size(900, 620);
         self.set_title(Some("Simple Viewer"));
 
-        imp.toasts.set_child(Some(imp.view.widget()));
+        // The edit panel lives beside the picture rather than over it, so the
+        // image never sits behind the controls being used on it.
+        let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        body.append(imp.view.widget());
+        body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        body.append(self.build_edit_panel());
+        imp.toasts.set_child(Some(&body));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
         open_button.set_tooltip_text(Some("Open Image"));
         open_button.set_action_name(Some("win.open"));
+
+        let edit_section = gio::Menu::new();
+        edit_section.append(Some("_Edit…"), Some("win.edit"));
+        edit_section.append(Some("_Save a Copy"), Some("win.save"));
+        edit_section.append(Some("Save _As…"), Some("win.save-as"));
 
         let file_section = gio::Menu::new();
         file_section.append(Some("_Delete Image…"), Some("win.delete"));
@@ -183,6 +231,7 @@ impl Window {
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
+        menu.append_section(None, &edit_section);
         menu.append_section(None, &file_section);
         menu.append_section(None, &view_section);
         menu.append_section(None, &navigate_section);
@@ -204,6 +253,11 @@ impl Window {
         rotate_button.set_action_name(Some("win.transform-open"));
         rotate_button.set_sensitive(false);
 
+        let edit_button = &imp.edit_button;
+        edit_button.set_icon_name("document-edit-symbolic");
+        edit_button.set_tooltip_text(Some("Edit"));
+        edit_button.set_sensitive(false);
+
         let delete_button = &imp.delete_button;
         delete_button.set_tooltip_text(Some("Delete Image"));
         delete_button.set_action_name(Some("win.delete"));
@@ -221,6 +275,7 @@ impl Window {
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
         header.pack_end(delete_button);
+        header.pack_end(edit_button);
 
         // While the options are open the header carries nothing but the way
         // out of them.
@@ -283,7 +338,7 @@ impl Window {
             move |index| {
                 let target = window.imp().playlist.borrow_mut().as_mut().and_then(|l| l.jump_to(index));
                 if let Some(path) = target {
-                    window.load(path, false);
+                    window.navigate_to(path, false);
                 }
             }
         ));
@@ -337,6 +392,489 @@ impl Window {
                 window.imp().strip.set_thumbnail(&path, texture.upcast_ref());
             }
         ));
+    }
+
+    /// Accept the selection and apply it to the working pixels, so the crop is
+    /// what you see and further edits build on it. Nothing reaches the file
+    /// until it is saved.
+    fn commit_crop(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let (Some(crop), Some(display)) = (canvas.crop(), canvas.display_size()) else {
+            return;
+        };
+        let Some(working) = imp.working.borrow().clone() else {
+            self.toast("Still preparing this image for editing.");
+            return;
+        };
+        let (rotation, flip_h, flip_v) = (
+            canvas.rotation(),
+            canvas.flip_horizontal(),
+            canvas.flip_vertical(),
+        );
+
+        // Put the crop tool away immediately; the pixels follow.
+        imp.syncing_panel.set(true);
+        imp.crop_toggle.set_active(false);
+        imp.freehand_toggle.set_active(false);
+        imp.syncing_panel.set(false);
+        self.set_cropping(false);
+
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            // The copy kept for undo is made here rather than on the main loop.
+            let previous = working.clone();
+            let result = export::apply(working, rotation, flip_h, flip_v, Some(&crop), display)
+                .map(|cropped| (previous, cropped));
+            let _ = sender.send_blocking(result);
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok((previous, cropped))) => {
+                        window.push_history(previous);
+                        window.imp().working.replace(Some(cropped));
+                        window.show_working();
+                        window.update_edit_state();
+                    }
+                    Ok(Err(message)) => window.toast(&message),
+                    Err(_) => window.toast("The editor stopped unexpectedly."),
+                }
+            }
+        ));
+    }
+
+    /// How many states of history to keep. Each is a full copy of the image,
+    /// so this trades memory for depth the way every editor has to.
+    const HISTORY_LIMIT: usize = 8;
+
+    /// Decode the file into the editing buffer, once, when editing starts.
+    fn load_working(&self) {
+        let imp = self.imp();
+        if imp.working.borrow().is_some() {
+            return;
+        }
+        let Some(source) = imp.current.borrow().clone() else {
+            return;
+        };
+        imp.crop_toggle.set_sensitive(false);
+
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(export::open(&source));
+        });
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok(image)) => {
+                        window.imp().working.replace(Some(image));
+                        window.imp().crop_toggle.set_sensitive(true);
+                    }
+                    _ => window.toast("This image cannot be edited."),
+                }
+            }
+        ));
+    }
+
+    /// Throw away the edit session, which belongs to one image.
+    fn reset_editing(&self) {
+        let imp = self.imp();
+        imp.working.replace(None);
+        imp.history.borrow_mut().clear();
+        imp.redo.borrow_mut().clear();
+        imp.dirty.set(false);
+        self.update_edit_state();
+    }
+
+    fn update_edit_state(&self) {
+        let imp = self.imp();
+        let undo = !imp.history.borrow().is_empty();
+        let redo = !imp.redo.borrow().is_empty();
+        imp.undo_button.set_sensitive(undo);
+        imp.redo_button.set_sensitive(redo);
+        for (name, enabled) in [("undo", undo), ("redo", redo)] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
+            }
+        }
+        let steps = imp.history.borrow().len();
+        imp.pending_crop.set_visible(imp.dirty.get());
+        imp.pending_crop.set_text(&match steps {
+            0 => "Edited. Save to write it back.".to_string(),
+            1 => "1 edit. Save to write it back.".to_string(),
+            n => format!("{n} edits. Save to write it back."),
+        });
+    }
+
+    /// Put an image on screen as the thing being edited.
+    fn show_working(&self) {
+        let imp = self.imp();
+        let Some(image) = imp.working.borrow().clone() else {
+            return;
+        };
+        let rgba = image.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        let texture = canvas::texture_from(width, height, false, rgba.into_raw());
+        // Resets zoom, rotation and flips, which is right: they are now baked
+        // into these pixels.
+        imp.view.canvas().set_texture(Some(texture));
+        imp.title
+            .set_subtitle(&format!("Edited · {width} × {height}"));
+    }
+
+    fn push_history(&self, previous: image::DynamicImage) {
+        let imp = self.imp();
+        let mut history = imp.history.borrow_mut();
+        history.push(previous);
+        if history.len() > Self::HISTORY_LIMIT {
+            history.remove(0);
+        }
+        drop(history);
+        imp.redo.borrow_mut().clear();
+        imp.dirty.set(true);
+    }
+
+    fn undo(&self) {
+        let imp = self.imp();
+        let Some(previous) = imp.history.borrow_mut().pop() else {
+            return;
+        };
+        if let Some(current) = imp.working.replace(Some(previous)) {
+            imp.redo.borrow_mut().push(current);
+        }
+        self.show_working();
+        self.update_edit_state();
+    }
+
+    fn redo(&self) {
+        let imp = self.imp();
+        let Some(next) = imp.redo.borrow_mut().pop() else {
+            return;
+        };
+        if let Some(current) = imp.working.replace(Some(next)) {
+            imp.history.borrow_mut().push(current);
+        }
+        self.show_working();
+        self.update_edit_state();
+    }
+
+    /// Everything the view is showing, as pixels: the working image with any
+    /// rotation or flip that has not been baked in yet.
+    fn rendered(&self) -> Option<image::DynamicImage> {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let working = imp.working.borrow().clone()?;
+        let display = canvas.display_size()?;
+        export::apply(
+            working,
+            canvas.rotation(),
+            canvas.flip_horizontal(),
+            canvas.flip_vertical(),
+            None,
+            display,
+        )
+        .ok()
+    }
+
+    fn has_live_transform(&self) -> bool {
+        let canvas = self.imp().view.canvas();
+        canvas.rotation().abs() > 0.01 || canvas.flip_horizontal() || canvas.flip_vertical()
+    }
+
+    fn downloads_dir() -> PathBuf {
+        glib::user_special_dir(glib::UserDirectory::Downloads).unwrap_or_else(glib::home_dir)
+    }
+
+    fn suggested_name(source: &Path) -> String {
+        let stem = source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_string());
+        let extension = source
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "png".to_string());
+        format!("{stem}-edited.{extension}")
+    }
+
+    /// Save writes over the image being viewed, which is what Save means.
+    fn save_default(&self) {
+        let Some(source) = self.imp().current.borrow().clone() else {
+            return;
+        };
+        if !self.imp().dirty.get() && !self.has_live_transform() {
+            self.toast("No changes to save.");
+            return;
+        }
+        self.write_edited(source, true);
+    }
+
+    fn save_as(&self) {
+        let Some(source) = self.imp().current.borrow().clone() else {
+            return;
+        };
+        let dialog = gtk::FileDialog::builder()
+            .title("Save Edited Image")
+            .modal(true)
+            .initial_name(Self::suggested_name(&source))
+            .initial_folder(&gio::File::for_path(Self::downloads_dir()))
+            .build();
+
+        dialog.save(
+            Some(self),
+            gio::Cancellable::NONE,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |result| match result {
+                    Ok(file) => {
+                        if let Some(path) = file.path() {
+                            window.write_edited(path, false);
+                        }
+                    }
+                    Err(error) => {
+                        if !error.matches(gtk::DialogError::Dismissed) {
+                            window.toast(&format!("Could not save: {error}"));
+                        }
+                    }
+                }
+            ),
+        );
+    }
+
+    /// `in_place` means this became the file on screen, so the session carries
+    /// on from the saved pixels with nothing left pending.
+    fn write_edited(&self, destination: PathBuf, in_place: bool) {
+        self.load_working();
+        let Some(image) = self.rendered() else {
+            self.toast("Nothing to save yet.");
+            return;
+        };
+
+        let (sender, receiver) = async_channel::bounded(1);
+        let target = destination.clone();
+        let encoded = image.clone();
+        std::thread::spawn(move || {
+            // Encoding a large image is slow enough to matter.
+            let _ = sender.send_blocking(export::write(&encoded, &target));
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok(())) => {
+                        let shown = destination
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if in_place {
+                            // The transforms are on disk now, so fold them into
+                            // the working pixels and start clean.
+                            let imp = window.imp();
+                            imp.working.replace(Some(image));
+                            imp.history.borrow_mut().clear();
+                            imp.redo.borrow_mut().clear();
+                            imp.dirty.set(false);
+                            window.show_working();
+                            window.imp().title.set_subtitle("");
+                            window.update_edit_state();
+                        }
+                        window.toast(&format!("Saved {shown}"));
+                    }
+                    Ok(Err(message)) => window.toast(&message),
+                    Err(_) => window.toast("The exporter stopped unexpectedly."),
+                }
+            }
+        ));
+    }
+
+    /// The edit sidebar: tools at the top, output at the bottom.
+    fn build_edit_panel(&self) -> &gtk::Box {
+        let imp = self.imp();
+        let panel = &imp.edit_panel;
+        panel.set_width_request(300);
+        panel.set_margin_top(12);
+        panel.set_margin_bottom(12);
+        panel.set_margin_start(12);
+        panel.set_margin_end(12);
+        panel.set_visible(false);
+
+        let heading = gtk::Label::new(Some("Edit"));
+        heading.add_css_class("title-4");
+        heading.set_xalign(0.0);
+        panel.append(&heading);
+
+        let history_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        history_row.set_homogeneous(true);
+        imp.undo_button.set_tooltip_text(Some("Undo (Ctrl+Z)"));
+        imp.undo_button.set_action_name(Some("win.undo"));
+        imp.undo_button.set_sensitive(false);
+        imp.redo_button.set_tooltip_text(Some("Redo (Ctrl+Shift+Z)"));
+        imp.redo_button.set_action_name(Some("win.redo"));
+        imp.redo_button.set_sensitive(false);
+        history_row.append(&imp.undo_button);
+        history_row.append(&imp.redo_button);
+        panel.append(&history_row);
+
+        // -- crop tool --
+        let crop = &imp.crop_toggle;
+        crop.set_tooltip_text(Some("Choose the part of the image to keep"));
+        crop.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if window.imp().syncing_panel.get() {
+                    return;
+                }
+                window.set_cropping(button.is_active());
+            }
+        ));
+        panel.append(crop);
+
+        let options = &imp.crop_options;
+        // Hidden until the crop tool is picked, so the panel stays quiet.
+        options.set_visible(false);
+
+        let aspect_label = gtk::Label::new(Some("Aspect ratio"));
+        aspect_label.add_css_class("dim-label");
+        aspect_label.set_xalign(0.0);
+        options.append(&aspect_label);
+
+        // The ratios people actually crop to, plus unconstrained.
+        let ratios: [(&str, f64); 8] = [
+            ("Free", 0.0),
+            ("1:1", 1.0),
+            ("4:5", 4.0 / 5.0),
+            ("5:4", 5.0 / 4.0),
+            ("3:2", 3.0 / 2.0),
+            ("2:3", 2.0 / 3.0),
+            ("16:9", 16.0 / 9.0),
+            ("9:16", 9.0 / 16.0),
+        ];
+        let grid = gtk::FlowBox::new();
+        grid.set_selection_mode(gtk::SelectionMode::None);
+        grid.set_max_children_per_line(4);
+        grid.set_row_spacing(4);
+        grid.set_column_spacing(4);
+        let mut first: Option<gtk::ToggleButton> = None;
+        for (label, ratio) in ratios {
+            let button = gtk::ToggleButton::with_label(label);
+            match &first {
+                // One group, so picking a ratio releases the last one.
+                Some(anchor) => button.set_group(Some(anchor)),
+                None => {
+                    button.set_active(true);
+                    first = Some(button.clone());
+                }
+            }
+            button.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |button| {
+                    if !button.is_active() || window.imp().syncing_panel.get() {
+                        return;
+                    }
+                    window.imp().freehand_toggle.set_active(false);
+                    window.imp().view.canvas().set_aspect(ratio);
+                }
+            ));
+            grid.append(&button);
+        }
+        options.append(&grid);
+
+        let freehand = &imp.freehand_toggle;
+        freehand.set_tooltip_text(Some("Draw the area to keep"));
+        freehand.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if window.imp().syncing_panel.get() {
+                    return;
+                }
+                window.imp().view.canvas().set_freehand(button.is_active());
+            }
+        ));
+        options.append(freehand);
+
+        imp.crop_size.add_css_class("dim-label");
+        imp.crop_size.add_css_class("numeric");
+        imp.crop_size.set_xalign(0.0);
+        options.append(&imp.crop_size);
+
+        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        actions.set_homogeneous(true);
+        let reset = gtk::Button::with_label("Reset");
+        reset.set_action_name(Some("win.crop-reset"));
+        let confirm = gtk::Button::with_label("OK");
+        confirm.add_css_class("suggested-action");
+        confirm.set_action_name(Some("win.crop-apply"));
+        actions.append(&reset);
+        actions.append(&confirm);
+        options.append(&actions);
+        panel.append(options);
+
+        imp.pending_crop.add_css_class("dim-label");
+        imp.pending_crop.set_xalign(0.0);
+        imp.pending_crop.set_wrap(true);
+        imp.pending_crop.set_visible(false);
+        panel.append(&imp.pending_crop);
+
+        // -- output --
+        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        spacer.set_vexpand(true);
+        panel.append(&spacer);
+
+        let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        save_row.set_homogeneous(true);
+        let save = gtk::Button::with_label("Save");
+        save.add_css_class("suggested-action");
+        save.set_tooltip_text(Some("Write a copy to your Downloads folder"));
+        save.set_action_name(Some("win.save"));
+        let save_as = gtk::Button::with_label("Save As…");
+        save_as.set_action_name(Some("win.save-as"));
+        save_row.append(&save);
+        save_row.append(&save_as);
+        panel.append(&save_row);
+
+        imp.view.canvas().connect_crop_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |size| {
+                window.imp().crop_size.set_text(&match size {
+                    Some((w, h)) => format!("Selection: {w} × {h} px"),
+                    None => "Draw an area to keep".to_string(),
+                });
+            }
+        ));
+
+        panel
+    }
+
+    /// Enter or leave the interactive crop.
+    fn set_cropping(&self, active: bool) {
+        let imp = self.imp();
+        imp.crop_options.set_visible(active);
+        imp.view.canvas().set_cropping(active);
+        if active {
+            imp.pending_crop.set_visible(false);
+        }
+        self.update_crop_actions();
+    }
+
+    fn update_crop_actions(&self) {
+        let cropping = self.imp().view.canvas().is_cropping();
+        for name in ["crop-apply", "crop-reset"] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(cropping);
+            }
+        }
     }
 
     /// Match the chrome and the button to whether we are fullscreen.
@@ -620,12 +1158,96 @@ impl Window {
                 move |_, _| {
                     let next = window.imp().playlist.borrow_mut().as_mut().map(|l| l.step(delta));
                     if let Some(path) = next {
-                        window.load(path, false);
+                        window.navigate_to(path, false);
                     }
                 }
             ));
             self.add_action(&action);
         }
+
+        self.imp().edit_button.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let open = button.is_active();
+                window.imp().edit_panel.set_visible(open);
+                if open {
+                    // Decode once, when editing actually starts, rather than
+                    // holding a full-resolution buffer for every image browsed.
+                    window.load_working();
+                } else {
+                    // Leaving the panel puts the crop tool away with it.
+                    window.imp().crop_toggle.set_active(false);
+                }
+            }
+        ));
+
+        let edit = gio::SimpleAction::new("edit", None);
+        edit.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let button = &window.imp().edit_button;
+                if button.is_sensitive() {
+                    button.set_active(!button.is_active());
+                }
+            }
+        ));
+        self.add_action(&edit);
+
+        for name in ["undo", "redo"] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(false);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| {
+                    if name == "undo" {
+                        window.undo();
+                    } else {
+                        window.redo();
+                    }
+                }
+            ));
+            self.add_action(&action);
+        }
+
+        let crop_apply = gio::SimpleAction::new("crop-apply", None);
+        crop_apply.set_enabled(false);
+        crop_apply.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.commit_crop()
+        ));
+        self.add_action(&crop_apply);
+
+        let crop_reset = gio::SimpleAction::new("crop-reset", None);
+        crop_reset.set_enabled(false);
+        crop_reset.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.imp().freehand_toggle.set_active(false);
+                window.imp().view.canvas().reset_crop();
+            }
+        ));
+        self.add_action(&crop_reset);
+
+        let save = gio::SimpleAction::new("save", None);
+        save.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.save_default()
+        ));
+        self.add_action(&save);
+
+        let save_as = gio::SimpleAction::new("save-as", None);
+        save_as.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.save_as()
+        ));
+        self.add_action(&save_as);
 
         let delete = gio::SimpleAction::new("delete", None);
         delete.connect_activate(glib::clone!(
@@ -789,7 +1411,37 @@ impl Window {
             return;
         };
         // Opened from outside, so the folder it lives in is new to us.
-        self.load(path, true);
+        self.navigate_to(path, true);
+    }
+
+    /// Go to another image, checking first that nothing unsaved is lost.
+    fn navigate_to(&self, path: PathBuf, rescan: bool) {
+        if !self.imp().dirty.get() {
+            self.load(path, rescan);
+            return;
+        }
+        let dialog = adw::AlertDialog::new(
+            Some("Discard Changes?"),
+            Some("This image has edits that have not been saved."),
+        );
+        dialog.add_response("cancel", "Keep Editing");
+        dialog.add_response("discard", "Discard");
+        dialog.set_response_appearance("discard", adw::ResponseAppearance::Destructive);
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response == "discard" {
+                        window.load(path.clone(), rescan);
+                    }
+                }
+            ),
+        );
+        dialog.present(Some(self));
     }
 
     /// `rescan` reads the folder listing again. Stepping through that listing
@@ -863,6 +1515,22 @@ impl Window {
                         window.imp().view.show_image(image);
                         window.imp().rotate_button.set_sensitive(true);
                         window.imp().delete_button.set_sensitive(true);
+                        window.imp().edit_button.set_sensitive(true);
+                        // The canvas drops the old selection, so put the panel
+                        // back in step with it.
+                        let imp = window.imp();
+                        imp.syncing_panel.set(true);
+                        imp.crop_toggle.set_active(false);
+                        imp.freehand_toggle.set_active(false);
+                        imp.syncing_panel.set(false);
+                        imp.crop_options.set_visible(false);
+                        imp.pending_crop.set_visible(false);
+                        window.update_crop_actions();
+                        // Edits belong to the image they were made on.
+                        window.reset_editing();
+                        if imp.edit_button.is_active() {
+                            window.load_working();
+                        }
                     }
                     Err(message) => window.fail(&message),
                 }
