@@ -82,6 +82,36 @@ fn load_css() {
             outline-offset: -2px;
             background: alpha(@accent_bg_color, 0.18);
         }
+        /* The two file actions carry a tint rather than a plain button face,
+           so the destructive one is never mistaken for the reversible one.
+           Both are drawn from libadwaita's palette, so they track the theme. */
+        .image-actions { padding: 6px 12px; }
+        .image-actions button {
+            padding-left: 12px;
+            padding-right: 12px;
+        }
+        .image-actions button.edit-action {
+            color: @warning_color;
+            background: alpha(@warning_bg_color, 0.18);
+        }
+        .image-actions button.edit-action:hover {
+            background: alpha(@warning_bg_color, 0.32);
+        }
+        .image-actions button.edit-action:checked {
+            color: @warning_fg_color;
+            background: @warning_bg_color;
+        }
+        .image-actions button.delete-action {
+            color: @destructive_color;
+            background: alpha(@destructive_bg_color, 0.18);
+        }
+        .image-actions button.delete-action:hover {
+            background: alpha(@destructive_bg_color, 0.32);
+        }
+        .image-actions button:disabled {
+            color: alpha(@window_fg_color, 0.35);
+            background: alpha(@window_fg_color, 0.06);
+        }
         ",
     );
     if let Some(display) = gdk::Display::default() {

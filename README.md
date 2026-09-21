@@ -71,6 +71,11 @@ zooming into one stays sharp instead of turning into a grid of squares.
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - **Save** writes the edited image back over the original; **Save As…** writes a copy,
   offering Downloads by default. Nothing touches disk until you ask it to
+- **Cancel**, or `Esc`, leaves the editor and asks first, so a session several edits
+  deep is never thrown away by a stray key
+- Editing is modal on purpose: the filmstrip, the arrow keys and Delete all switch off
+  while the picture on screen is unsaved work, so there is no way to wander off it by
+  accident
 
 ### Formats
 
@@ -96,6 +101,14 @@ zooming into one stays sharp instead of turning into a grid of squares.
   picture arrives rotated or cropped
 - Delete with a confirmation offering **Move to Bin** (recoverable) or **Delete
   Permanently** (not), clearly distinguished; afterwards the view moves to the next image
+
+### Layout
+
+- A second bar under the header carries the two actions that change the file rather
+  than the view — **Edit** in amber, **Delete** in red — each with its name beside its
+  icon, which keeps them out of the row of view controls and makes the destructive one
+  impossible to hit by mistake
+- Both bars fold away in fullscreen
 
 ### Appearance
 
@@ -124,7 +137,7 @@ zooming into one stays sharp instead of turning into a grid of squares.
 | `Ctrl+C` | Copy the image to the clipboard |
 | `F11` / `Ctrl+F` | Fullscreen |
 | `Delete` | Delete the current image |
-| `Esc` | Leave fullscreen, or close the options panel |
+| `Esc` | Leave fullscreen, close the options panel, or cancel editing |
 | `Ctrl+W` / `Ctrl+Q` | Close window / quit |
 
 ## Building

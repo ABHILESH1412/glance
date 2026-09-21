@@ -72,6 +72,9 @@ mod imp {
         pub monitor: RefCell<Option<gio::FileMonitor>>,
         pub rescan_timer: RefCell<Option<glib::SourceId>>,
         pub header_stack: gtk::Stack,
+        /// The second bar, under the header: the two actions that change the
+        /// file itself, kept away from the view controls.
+        pub action_bar: gtk::Box,
         pub rotate_button: gtk::Button,
         pub flip_h_button: gtk::ToggleButton,
         pub flip_v_button: gtk::ToggleButton,
@@ -122,6 +125,7 @@ mod imp {
                 monitor: RefCell::new(None),
                 rescan_timer: RefCell::new(None),
                 header_stack: gtk::Stack::new(),
+                action_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
                 flip_h_button: gtk::ToggleButton::new(),
                 flip_v_button: gtk::ToggleButton::new(),
@@ -264,13 +268,30 @@ impl Window {
         copy_button.set_action_name(Some("win.copy"));
         copy_button.set_sensitive(false);
 
+        // These two act on the file rather than on the view, so they live on
+        // their own bar below with a name beside the icon. Colour says which
+        // is which before the label is read: amber for the reversible one,
+        // red for the one that removes a file.
         let edit_button = &imp.edit_button;
-        edit_button.set_icon_name("document-edit-symbolic");
-        edit_button.set_tooltip_text(Some("Edit"));
+        edit_button.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("document-edit-symbolic")
+                .label("Edit")
+                .build(),
+        ));
+        edit_button.set_tooltip_text(Some("Edit this image (Ctrl+E)"));
+        edit_button.add_css_class("edit-action");
         edit_button.set_sensitive(false);
 
         let delete_button = &imp.delete_button;
-        delete_button.set_tooltip_text(Some("Delete Image"));
+        delete_button.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("user-trash-symbolic")
+                .label("Delete")
+                .build(),
+        ));
+        delete_button.set_tooltip_text(Some("Delete this image (Delete)"));
+        delete_button.add_css_class("delete-action");
         delete_button.set_action_name(Some("win.delete"));
         delete_button.set_sensitive(false);
 
@@ -285,9 +306,15 @@ impl Window {
         header.pack_end(&menu_button);
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
-        header.pack_end(delete_button);
-        header.pack_end(edit_button);
         header.pack_end(copy_button);
+
+        let action_bar = &imp.action_bar;
+        action_bar.add_css_class("toolbar");
+        action_bar.add_css_class("image-actions");
+        action_bar.append(edit_button);
+        action_bar.append(delete_button);
+        // Nothing to act on until something is open.
+        action_bar.set_visible(false);
 
         // While the options are open the header carries nothing but the way
         // out of them.
@@ -311,6 +338,7 @@ impl Window {
 
         let toolbar = &imp.toolbar;
         toolbar.add_top_bar(header_stack);
+        toolbar.add_top_bar(action_bar);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(self.build_rotation_bar());
         toolbar.add_bottom_bar(&imp.strip);
@@ -893,6 +921,13 @@ impl Window {
         spacer.set_vexpand(true);
         panel.append(&spacer);
 
+        // The way out that keeps nothing. Above the save buttons rather than
+        // beside them, so leaving and committing are never one slip apart.
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.set_tooltip_text(Some("Leave the editor without saving (Esc)"));
+        cancel.set_action_name(Some("win.edit-cancel"));
+        panel.append(&cancel);
+
         let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         save_row.set_homogeneous(true);
         let save = gtk::Button::with_label("Save");
@@ -1069,7 +1104,6 @@ impl Window {
         }
         imp.transform_open.set(open);
         imp.rotation_bar.set_visible(open);
-        imp.strip.set_visible(!open && imp.playlist.borrow().is_some());
         imp.header_stack
             .set_visible_child_name(if open { "transform" } else { "normal" });
         self.update_navigation();
@@ -1241,6 +1275,11 @@ impl Window {
                     // Leaving the panel puts the crop tool away with it.
                     window.imp().crop_toggle.set_active(false);
                 }
+                // Deleting the file you are in the middle of editing is a
+                // trap, so it goes away along with the filmstrip.
+                let has_file = window.imp().current.borrow().is_some();
+                window.imp().delete_button.set_sensitive(!open && has_file);
+                window.update_navigation();
             }
         ));
 
@@ -1273,6 +1312,14 @@ impl Window {
             ));
             self.add_action(&action);
         }
+
+        let edit_cancel = gio::SimpleAction::new("edit-cancel", None);
+        edit_cancel.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.cancel_editing()
+        ));
+        self.add_action(&edit_cancel);
 
         let crop_apply = gio::SimpleAction::new("crop-apply", None);
         crop_apply.set_enabled(false);
@@ -1342,7 +1389,8 @@ impl Window {
         self.add_action(&fullscreen);
 
         // Escape should undo whatever is currently "on top": leaving fullscreen
-        // first, then closing the transform options.
+        // first, then the transform options, then the editor. The editor is
+        // last because it is the only one that asks before it goes.
         let dismiss = gio::SimpleAction::new("dismiss", None);
         dismiss.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -1350,8 +1398,10 @@ impl Window {
             move |_, _| {
                 if window.is_fullscreen() {
                     window.unfullscreen();
-                } else {
+                } else if window.imp().transform_open.get() {
                     window.set_transform_open(false);
+                } else {
+                    window.cancel_editing();
                 }
             }
         ));
@@ -1587,6 +1637,7 @@ impl Window {
                         window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
                         window.imp().copy_button.set_sensitive(true);
+                        window.imp().action_bar.set_visible(true);
                         // The canvas drops the old selection, so put the panel
                         // back in step with it.
                         let imp = window.imp();
@@ -1819,20 +1870,81 @@ impl Window {
         imp.rotate_button.set_sensitive(false);
         imp.delete_button.set_sensitive(false);
         imp.copy_button.set_sensitive(false);
+        // Turning the toggle off restores the filmstrip and the arrow keys.
+        imp.edit_button.set_active(false);
         imp.edit_button.set_sensitive(false);
+        imp.action_bar.set_visible(false);
         self.set_transform_open(false);
         self.update_navigation();
     }
 
-    /// Navigation is pointless with one image, and while the transform options
-    /// are open the arrow keys belong to the rotation slider.
+    /// Navigation is pointless with one image; while the transform options are
+    /// open the arrow keys belong to the rotation slider; and while editing the
+    /// picture on screen is unsaved work, so stepping off it — by key, by arrow
+    /// or by thumbnail — is switched off and the filmstrip goes with it.
     fn update_navigation(&self) {
         let imp = self.imp();
-        let enabled = imp.playlist.borrow().is_some() && !imp.transform_open.get();
+        let busy = imp.transform_open.get() || imp.edit_button.is_active();
+        let enabled = imp.playlist.borrow().is_some() && !busy;
         for name in ["next-image", "previous-image"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(enabled);
             }
+        }
+        imp.strip.set_visible(enabled);
+    }
+
+    /// Leave the editor, throwing the session away. Asked for out loud first:
+    /// the pixels on screen may be several edits from the file on disk.
+    fn cancel_editing(&self) {
+        let imp = self.imp();
+        if !imp.edit_button.is_active() {
+            return;
+        }
+        let unsaved = imp.dirty.get() || self.has_live_transform();
+        let dialog = adw::AlertDialog::new(
+            Some("Cancel Editing?"),
+            Some(if unsaved {
+                "Your unsaved changes to this image will be lost."
+            } else {
+                "This will close the editor."
+            }),
+        );
+        dialog.add_response("no", "No");
+        dialog.add_response("yes", "Yes");
+        if unsaved {
+            dialog.set_response_appearance("yes", adw::ResponseAppearance::Destructive);
+        }
+        // Escape and clicking away both mean "carry on editing".
+        dialog.set_default_response(Some("no"));
+        dialog.set_close_response("no");
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response == "yes" {
+                        window.discard_editing();
+                    }
+                }
+            ),
+        );
+        dialog.present(Some(self));
+    }
+
+    /// Drop the edit session and put the file back on screen untouched.
+    fn discard_editing(&self) {
+        let imp = self.imp();
+        self.reset_editing();
+        // Closing the panel also puts the crop tool away and restores the
+        // filmstrip, through the toggle's own handler.
+        imp.edit_button.set_active(false);
+        // The canvas is showing edited pixels with a live rotation possibly on
+        // top, so re-read the file rather than trying to unwind either.
+        let path = imp.current.borrow().clone();
+        if let Some(path) = path {
+            self.load(path, false);
         }
     }
 
