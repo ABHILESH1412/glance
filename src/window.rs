@@ -43,6 +43,7 @@ mod imp {
         pub toolbar: adw::ToolbarView,
         pub fullscreen_button: gtk::Button,
         pub delete_button: gtk::Button,
+        pub copy_button: gtk::Button,
         pub edit_button: gtk::ToggleButton,
         pub edit_panel: gtk::Box,
         pub crop_toggle: gtk::ToggleButton,
@@ -102,6 +103,7 @@ mod imp {
                 toolbar: adw::ToolbarView::new(),
                 fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
                 delete_button: gtk::Button::from_icon_name("user-trash-symbolic"),
+                copy_button: gtk::Button::from_icon_name("edit-copy-symbolic"),
                 edit_button: gtk::ToggleButton::new(),
                 edit_panel: gtk::Box::new(gtk::Orientation::Vertical, 12),
                 crop_toggle: gtk::ToggleButton::with_label("Crop"),
@@ -198,6 +200,9 @@ impl Window {
         edit_section.append(Some("_Save a Copy"), Some("win.save"));
         edit_section.append(Some("Save _As…"), Some("win.save-as"));
 
+        let clipboard_section = gio::Menu::new();
+        clipboard_section.append(Some("_Copy Image"), Some("win.copy"));
+
         let file_section = gio::Menu::new();
         file_section.append(Some("_Delete Image…"), Some("win.delete"));
 
@@ -231,6 +236,7 @@ impl Window {
         about_section.append(Some("_About Simple Viewer"), Some("win.about"));
 
         let menu = gio::Menu::new();
+        menu.append_section(None, &clipboard_section);
         menu.append_section(None, &edit_section);
         menu.append_section(None, &file_section);
         menu.append_section(None, &view_section);
@@ -252,6 +258,11 @@ impl Window {
         rotate_button.set_tooltip_text(Some("Rotate and Flip"));
         rotate_button.set_action_name(Some("win.transform-open"));
         rotate_button.set_sensitive(false);
+
+        let copy_button = &imp.copy_button;
+        copy_button.set_tooltip_text(Some("Copy Image (Ctrl+C)"));
+        copy_button.set_action_name(Some("win.copy"));
+        copy_button.set_sensitive(false);
 
         let edit_button = &imp.edit_button;
         edit_button.set_icon_name("document-edit-symbolic");
@@ -276,6 +287,7 @@ impl Window {
         header.pack_end(fullscreen_button);
         header.pack_end(delete_button);
         header.pack_end(edit_button);
+        header.pack_end(copy_button);
 
         // While the options are open the header carries nothing but the way
         // out of them.
@@ -600,6 +612,56 @@ impl Window {
             .map(|e| e.to_string_lossy().into_owned())
             .unwrap_or_else(|| "png".to_string());
         format!("{stem}-edited.{extension}")
+    }
+
+    /// Put the picture on the clipboard exactly as it is on screen, edits and
+    /// all, so pasting elsewhere gives what the viewer is showing.
+    fn copy_to_clipboard(&self) {
+        let imp = self.imp();
+        let Some(source) = imp.current.borrow().clone() else {
+            return;
+        };
+        let canvas = imp.view.canvas();
+        let Some(display) = canvas.display_size() else {
+            return;
+        };
+        let (rotation, flip_h, flip_v) = (
+            canvas.rotation(),
+            canvas.flip_horizontal(),
+            canvas.flip_vertical(),
+        );
+        // Reuse the editing buffer when there is one; otherwise decode afresh
+        // rather than retaining a full-resolution copy just to copy once.
+        let existing = imp.working.borrow().clone();
+
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let result = match existing {
+                Some(image) => Ok(image),
+                None => export::open(&source),
+            }
+            .and_then(|image| export::apply(image, rotation, flip_h, flip_v, None, display));
+            let _ = sender.send_blocking(result);
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok(image)) => {
+                        let rgba = image.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        let texture =
+                            canvas::texture_from(width, height, false, rgba.into_raw());
+                        window.clipboard().set_texture(&texture);
+                        window.toast("Image copied.");
+                    }
+                    Ok(Err(message)) => window.toast(&message),
+                    Err(_) => window.toast("Copying stopped unexpectedly."),
+                }
+            }
+        ));
     }
 
     /// Save writes over the image being viewed, which is what Save means.
@@ -1249,6 +1311,14 @@ impl Window {
         ));
         self.add_action(&save_as);
 
+        let copy = gio::SimpleAction::new("copy", None);
+        copy.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.copy_to_clipboard()
+        ));
+        self.add_action(&copy);
+
         let delete = gio::SimpleAction::new("delete", None);
         delete.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -1516,6 +1586,7 @@ impl Window {
                         window.imp().rotate_button.set_sensitive(true);
                         window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
+                        window.imp().copy_button.set_sensitive(true);
                         // The canvas drops the old selection, so put the panel
                         // back in step with it.
                         let imp = window.imp();
@@ -1747,6 +1818,8 @@ impl Window {
         imp.title.set_subtitle("");
         imp.rotate_button.set_sensitive(false);
         imp.delete_button.set_sensitive(false);
+        imp.copy_button.set_sensitive(false);
+        imp.edit_button.set_sensitive(false);
         self.set_transform_open(false);
         self.update_navigation();
     }

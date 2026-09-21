@@ -59,6 +59,19 @@ zooming into one stays sharp instead of turning into a grid of squares.
   the picture regardless of how it is rotated
 - All of it lives in a panel opened from the header, so it stays out of the way
 
+### Editing
+
+- **Crop** from a panel opened with the Edit button: drag out a rectangle, then move
+  it or pull any of its eight handles, with the cursor changing to say which you are
+  about to do
+- Aspect presets for the usual social sizes — 1:1, 4:5, 5:4, 3:2, 2:3, 16:9, 9:16 — or
+  free, or **freehand**, tracing any shape with the pointer
+- `Enter` applies the crop **to the picture you are looking at**, so the next crop, the
+  next rotation and the next flip all build on the result, the way an editor works
+- Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
+- **Save** writes the edited image back over the original; **Save As…** writes a copy,
+  offering Downloads by default. Nothing touches disk until you ask it to
+
 ### Formats
 
 | Family | Formats |
@@ -78,6 +91,9 @@ zooming into one stays sharp instead of turning into a grid of squares.
 ### Managing files
 
 - Open via the header button, `Ctrl+O`, drag-and-drop, or a path on the command line
+- **Copy to clipboard** from the header or with `Ctrl+C`, ready to paste into a chat,
+  a document or an editor; the copy reflects the current view, so a rotated or cropped
+  picture arrives rotated or cropped
 - Delete with a confirmation offering **Move to Bin** (recoverable) or **Delete
   Permanently** (not), clearly distinguished; afterwards the view moves to the next image
 
@@ -101,6 +117,11 @@ zooming into one stays sharp instead of turning into a grid of squares.
 | `Ctrl+Shift+R` | Reset rotation |
 | `Ctrl+H` / `Ctrl+J` | Flip horizontally / vertically |
 | `Ctrl+T` | Rotate and flip options |
+| `Ctrl+E` | Edit panel (crop) |
+| `Enter` | Apply the crop |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo an edit |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save in place / Save As… |
+| `Ctrl+C` | Copy the image to the clipboard |
 | `F11` / `Ctrl+F` | Fullscreen |
 | `Delete` | Delete the current image |
 | `Esc` | Leave fullscreen, or close the options panel |
@@ -152,12 +173,10 @@ Wanted, but not built:
 - Opening a folder directly (today you open a file and browse its folder)
 - Slideshow mode with a configurable delay
 - Per-image background colour toggle, for judging transparent PNGs
-- Crop
 - Basic adjustments: brightness, contrast, saturation
 - Resize and export with a quality slider
 - Convert between formats
 - Lossless JPEG rotation
-- Copy to clipboard
 - Drawing and annotation
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output

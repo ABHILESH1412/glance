@@ -134,6 +134,7 @@ fn main() -> glib::ExitCode {
         app.set_accels_for_action("win.dismiss", &["Escape"]);
         app.set_accels_for_action("win.fullscreen", &["F11", "<Primary>f"]);
         app.set_accels_for_action("win.delete", &["Delete"]);
+        app.set_accels_for_action("win.copy", &["<Primary>c"]);
         app.set_accels_for_action("win.edit", &["<Primary>e"]);
         app.set_accels_for_action("win.undo", &["<Primary>z"]);
         app.set_accels_for_action("win.redo", &["<Primary><Shift>z", "<Primary>y"]);
