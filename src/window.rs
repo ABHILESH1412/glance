@@ -16,6 +16,7 @@ use gtk::{gdk, gio, glib};
 
 use crate::adjust::{self, Adjustments};
 use crate::compress;
+use crate::draw;
 use crate::image_view::ImageView;
 use crate::filmstrip::{self, FilmStrip};
 use crate::loader;
@@ -101,8 +102,16 @@ mod imp {
         pub size_value: gtk::SpinButton,
         pub size_unit: gtk::DropDown,
         pub size_note: gtk::Label,
+        pub export_toggle: gtk::ToggleButton,
+        pub export_options: gtk::Box,
         pub quality_row: gtk::Box,
         pub quality_scale: gtk::Scale,
+        pub draw_toggle: gtk::ToggleButton,
+        pub draw_options: gtk::Box,
+        pub draw_tools: RefCell<Vec<gtk::ToggleButton>>,
+        pub draw_colour: gtk::ColorDialogButton,
+        pub draw_width: gtk::SpinButton,
+        pub draw_hint: gtk::Label,
         pub text_toggle: gtk::ToggleButton,
         pub text_options: gtk::Box,
         pub text_entry: gtk::Entry,
@@ -195,8 +204,16 @@ mod imp {
                 size_value: gtk::SpinButton::with_range(1.0, 99_999.0, 10.0),
                 size_unit: gtk::DropDown::default(),
                 size_note: gtk::Label::new(None),
+                export_toggle: gtk::ToggleButton::with_label("Export"),
+                export_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 quality_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 quality_scale: gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0),
+                draw_toggle: gtk::ToggleButton::with_label("Draw"),
+                draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
+                draw_tools: RefCell::new(Vec::new()),
+                draw_colour: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
+                draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),
+                draw_hint: gtk::Label::new(None),
                 text_toggle: gtk::ToggleButton::with_label("Text"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
@@ -674,12 +691,15 @@ impl Window {
         imp.resize_toggle.set_active(false);
         imp.view.canvas().clear_text();
         imp.text_toggle.set_active(false);
+        imp.view.canvas().clear_marks();
+        imp.draw_toggle.set_active(false);
         self.update_edit_state();
     }
 
     fn update_edit_state(&self) {
         let imp = self.imp();
-        let undo = !imp.history.borrow().is_empty();
+        let canvas = imp.view.canvas();
+        let undo = !imp.history.borrow().is_empty() || canvas.has_marks() || canvas.has_text();
         let redo = !imp.redo.borrow().is_empty();
         imp.undo_button.set_sensitive(undo);
         imp.redo_button.set_sensitive(redo);
@@ -718,6 +738,10 @@ impl Window {
         // Baking burns the words into the pixels, so the tool starts empty.
         imp.text_toggle.set_active(false);
         self.sync_text_panel();
+        // The strokes are pixels now, but the pen should still be in hand:
+        // closing the tool after every save would make drawing a chore.
+        // `set_texture` dropped the canvas's copy, so hand it back.
+        self.sync_draw_tool();
         imp.title
             .set_subtitle(&format!("Edited · {width} × {height}"));
     }
@@ -777,6 +801,7 @@ impl Window {
             || canvas.flip_vertical()
             || canvas.has_resize()
             || canvas.has_text()
+            || canvas.has_marks()
             || !canvas.adjustments().is_identity()
     }
 
@@ -1031,10 +1056,23 @@ impl Window {
         panel.set_margin_end(12);
         panel.set_visible(false);
 
+        // The tools live in a scroller. There are enough of them now that an
+        // expanded section overflows a short window, and without this GTK
+        // squeezes the whole column — sliding every button out from under the
+        // pointer that was about to press one.
+        let tools = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&tools)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .vexpand(true)
+            .build();
+        panel.append(&scroller);
+
         let heading = gtk::Label::new(Some("Edit"));
         heading.add_css_class("title-4");
         heading.set_xalign(0.0);
-        panel.append(&heading);
+        tools.append(&heading);
 
         let history_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         history_row.set_homogeneous(true);
@@ -1046,7 +1084,7 @@ impl Window {
         imp.redo_button.set_sensitive(false);
         history_row.append(&imp.undo_button);
         history_row.append(&imp.redo_button);
-        panel.append(&history_row);
+        tools.append(&history_row);
 
         // -- crop tool --
         let crop = &imp.crop_toggle;
@@ -1058,10 +1096,13 @@ impl Window {
                 if window.imp().syncing_panel.get() {
                     return;
                 }
+                if button.is_active() {
+                    window.close_other_sections(button);
+                }
                 window.set_cropping(button.is_active());
             }
         ));
-        panel.append(crop);
+        tools.append(crop);
 
         let options = &imp.crop_options;
         // Hidden until the crop tool is picked, so the panel stays quiet.
@@ -1143,7 +1184,7 @@ impl Window {
         actions.append(&reset);
         actions.append(&confirm);
         options.append(&actions);
-        panel.append(options);
+        tools.append(options);
 
         // -- resize --
         let sizing = &imp.resize_toggle;
@@ -1153,6 +1194,9 @@ impl Window {
             self,
             move |button| {
                 let open = button.is_active();
+                if open {
+                    window.close_other_sections(button);
+                }
                 window.imp().resize_options.set_visible(open);
                 // The handles belong to the tool, so they come and go with it.
                 window.imp().view.canvas().set_resizing(open);
@@ -1161,7 +1205,7 @@ impl Window {
                 }
             }
         ));
-        panel.append(sizing);
+        tools.append(sizing);
 
         let sizes = &imp.resize_options;
         sizes.set_visible(false);
@@ -1226,7 +1270,7 @@ impl Window {
         size_actions.append(&size_reset);
         size_actions.append(&size_apply);
         sizes.append(&size_actions);
-        panel.append(sizes);
+        tools.append(sizes);
 
         // -- tone --
         let tone = &imp.adjust_toggle;
@@ -1234,9 +1278,14 @@ impl Window {
         tone.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |button| window.imp().adjust_options.set_visible(button.is_active())
+            move |button| {
+                if button.is_active() {
+                    window.close_other_sections(button);
+                }
+                window.imp().adjust_options.set_visible(button.is_active());
+            }
         ));
-        panel.append(tone);
+        tools.append(tone);
 
         let tones = &imp.adjust_options;
         tones.set_visible(false);
@@ -1270,7 +1319,106 @@ impl Window {
         tone_actions.append(&tone_reset);
         tone_actions.append(&tone_apply);
         tones.append(&tone_actions);
-        panel.append(tones);
+        tools.append(tones);
+
+        // -- drawing --
+        let pens = &imp.draw_toggle;
+        pens.set_tooltip_text(Some("Draw on the picture"));
+        pens.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let open = button.is_active();
+                if open {
+                    window.close_other_sections(button);
+                }
+                window.imp().draw_options.set_visible(open);
+                window.sync_draw_tool();
+                if !open {
+                    window.imp().view.canvas().set_draw_tool(None);
+                }
+            }
+        ));
+        tools.append(pens);
+
+        let strokes = &imp.draw_options;
+        strokes.set_visible(false);
+
+        // One tool at a time, so picking one lets the last go.
+        let tool_grid = gtk::FlowBox::new();
+        tool_grid.set_selection_mode(gtk::SelectionMode::None);
+        // Two across: three named buttons side by side made the whole sidebar
+        // wider than the picture needed it to be.
+        tool_grid.set_max_children_per_line(2);
+        tool_grid.set_row_spacing(4);
+        tool_grid.set_column_spacing(4);
+        let mut anchor: Option<gtk::ToggleButton> = None;
+        for tool in draw::TOOLS {
+            let button = gtk::ToggleButton::new();
+            button.set_child(Some(
+                &adw::ButtonContent::builder()
+                    .icon_name(tool.icon())
+                    .label(tool.label())
+                    .build(),
+            ));
+            button.set_tooltip_text(Some(tool.label()));
+            match &anchor {
+                Some(first) => button.set_group(Some(first)),
+                None => anchor = Some(button.clone()),
+            }
+            button.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_| window.sync_draw_tool()
+            ));
+            tool_grid.append(&button);
+            imp.draw_tools.borrow_mut().push(button);
+        }
+        strokes.append(&tool_grid);
+
+        let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let width_caption = gtk::Label::new(Some("Width"));
+        width_caption.add_css_class("dim-label");
+        imp.draw_width.set_value(6.0);
+        imp.draw_width.set_width_chars(4);
+        imp.draw_width.set_tooltip_text(Some("Line thickness, in the image's own pixels"));
+        imp.draw_width.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |spin| window.imp().view.canvas().set_draw_width(spin.value())
+        ));
+        let colour_caption = gtk::Label::new(Some("Colour"));
+        colour_caption.add_css_class("dim-label");
+        imp.draw_colour.set_tooltip_text(Some("Colour of the ink"));
+        imp.draw_colour.connect_rgba_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| window.imp().view.canvas().set_draw_colour(button.rgba())
+        ));
+        stroke_row.append(&width_caption);
+        stroke_row.append(&imp.draw_width);
+        stroke_row.append(&colour_caption);
+        stroke_row.append(&imp.draw_colour);
+        strokes.append(&stroke_row);
+
+        let draw_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        draw_actions.set_homogeneous(true);
+        let undo_stroke = gtk::Button::with_label("Undo stroke");
+        undo_stroke.set_tooltip_text(Some("Take back the last thing laid over the picture (Ctrl+Z)"));
+        undo_stroke.set_action_name(Some("win.undo"));
+        let clear = gtk::Button::with_label("Clear");
+        clear.set_tooltip_text(Some("Remove every stroke"));
+        clear.set_action_name(Some("win.draw-clear"));
+        draw_actions.append(&undo_stroke);
+        draw_actions.append(&clear);
+        strokes.append(&draw_actions);
+
+        imp.draw_hint.add_css_class("dim-label");
+        imp.draw_hint.set_xalign(0.0);
+        imp.draw_hint.set_wrap(true);
+        imp.draw_hint.set_text("Pick a tool, then drag on the picture.");
+        strokes.append(&imp.draw_hint);
+        tools.append(strokes);
 
         // -- text --
         let text = &imp.text_toggle;
@@ -1280,6 +1428,9 @@ impl Window {
             self,
             move |button| {
                 let open = button.is_active();
+                if open {
+                    window.close_other_sections(button);
+                }
                 window.imp().text_options.set_visible(open);
                 // The grab handles belong to the tool, so they go with it.
                 window.imp().view.canvas().set_text_tool(open);
@@ -1288,7 +1439,7 @@ impl Window {
                 }
             }
         ));
-        panel.append(text);
+        tools.append(text);
 
         let words = &imp.text_options;
         words.set_visible(false);
@@ -1388,18 +1539,34 @@ impl Window {
         imp.text_hint.set_xalign(0.0);
         imp.text_hint.set_wrap(true);
         words.append(&imp.text_hint);
-        panel.append(words);
+        tools.append(words);
 
         imp.pending_crop.add_css_class("dim-label");
         imp.pending_crop.set_xalign(0.0);
         imp.pending_crop.set_wrap(true);
         imp.pending_crop.set_visible(false);
-        panel.append(&imp.pending_crop);
+        tools.append(&imp.pending_crop);
 
         // -- output --
-        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        spacer.set_vexpand(true);
-        panel.append(&spacer);
+        // Writing a copy is a section like the tools, so the sidebar shows one
+        // group of controls at a time instead of all of them at once. Only the
+        // two ways out stay pinned below.
+        let sending = &imp.export_toggle;
+        sending.set_tooltip_text(Some("Format, size and quality for a copy"));
+        sending.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if button.is_active() {
+                    window.close_other_sections(button);
+                }
+                window.imp().export_options.set_visible(button.is_active());
+            }
+        ));
+        tools.append(sending);
+        let sending_box = &imp.export_options;
+        sending_box.set_visible(false);
+        tools.append(sending_box);
 
         // Export writes a copy in another format, at whatever size the resize
         // tool is showing. Grouped with the other writers, above the way out.
@@ -1426,13 +1593,20 @@ impl Window {
                 window.describe_target_size();
             }
         ));
+        // The format goes at the very top of the section so it cannot move:
+        // choosing a lossy one adds a caveat and a quality dial below it, and a
+        // picker that slides away as you use it is a picker you fight.
+        let format_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        format_row.append(drop);
+        sending_box.append(&format_row);
+
         let export_button = gtk::Button::with_label("Export…");
+        export_button.set_hexpand(true);
         export_button.set_tooltip_text(Some(
             "Write a copy somewhere else, in the format and at the size chosen \
              here (Ctrl+Shift+S)",
         ));
         export_button.set_action_name(Some("win.export"));
-        export_row.append(drop);
         export_row.append(&export_button);
         // The note goes above the row, not below it. Everything from here down
         // is anchored to the bottom of the panel, so a note appearing when the
@@ -1445,7 +1619,6 @@ impl Window {
         // here down is anchored to the bottom of the panel, so a note that
         // grows to a second line would otherwise slide the controls above it
         // out from under the pointer. Only the notes themselves move.
-        panel.append(&imp.format_note);
 
         // How hard the lossy formats squeeze, when no size is being aimed at.
         let quality_caption = gtk::Label::new(Some("Quality"));
@@ -1462,7 +1635,7 @@ impl Window {
         ));
         imp.quality_row.append(&quality_caption);
         imp.quality_row.append(quality);
-        panel.append(&imp.quality_row);
+        sending_box.append(&imp.quality_row);
 
         // Aiming at a file size: the thing people otherwise go to an
         // advertising-funded website for.
@@ -1507,10 +1680,12 @@ impl Window {
         imp.size_note.set_xalign(0.0);
         imp.size_note.set_wrap(true);
 
-        panel.append(&imp.size_note);
-        panel.append(&imp.size_wanted);
-        panel.append(&size_row);
-        panel.append(&export_row);
+        sending_box.append(&imp.size_wanted);
+        sending_box.append(&size_row);
+        sending_box.append(&export_row);
+        // Both notes after every control, for the same reason.
+        sending_box.append(&imp.format_note);
+        sending_box.append(&imp.size_note);
         self.describe_format();
         self.describe_target_size();
 
@@ -1537,7 +1712,12 @@ impl Window {
         imp.view.canvas().connect_text_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move || window.sync_text_panel()
+            move || {
+                window.sync_text_panel();
+                // A stroke or a line of text is now something undo can take
+                // back, so the action has to be told it has work to do.
+                window.update_edit_state();
+            }
         ));
 
         // Dragging a handle has to reach the numbers, the same way typing a
@@ -1596,6 +1776,49 @@ impl Window {
         }
         imp.syncing_panel.set(false);
         self.describe_size();
+    }
+
+    /// One tool at a time. Five sections open at once made a sidebar taller
+    /// than the window, and you can only use one of them anyway.
+    fn close_other_sections(&self, keep: &gtk::ToggleButton) {
+        let imp = self.imp();
+        for section in [
+            &imp.crop_toggle,
+            &imp.resize_toggle,
+            &imp.adjust_toggle,
+            &imp.draw_toggle,
+            &imp.text_toggle,
+            &imp.export_toggle,
+        ] {
+            if section != keep && section.is_active() {
+                section.set_active(false);
+            }
+        }
+    }
+
+    /// Hand the canvas whichever tool is pressed in, or none.
+    fn sync_draw_tool(&self) {
+        let imp = self.imp();
+        let chosen = if imp.draw_toggle.is_active() {
+            imp.draw_tools
+                .borrow()
+                .iter()
+                .position(|button| button.is_active())
+                .and_then(|index| draw::TOOLS.get(index).copied())
+        } else {
+            None
+        };
+        let canvas = imp.view.canvas();
+        canvas.set_draw_colour(imp.draw_colour.rgba());
+        canvas.set_draw_width(imp.draw_width.value());
+        canvas.set_draw_tool(chosen);
+        imp.draw_hint.set_text(match chosen {
+            Some(tool) => match tool {
+                draw::Tool::Pen | draw::Tool::Highlighter => "Drag on the picture to draw.",
+                _ => "Drag on the picture from one corner to the other.",
+            },
+            None => "Pick a tool, then drag on the picture.",
+        });
     }
 
     /// Change the selected item, unless the panel is only echoing the canvas
@@ -1725,8 +1948,9 @@ impl Window {
     fn update_quality_row(&self) {
         let imp = self.imp();
         let lossy = self.chosen_target().map(|t| t.lossy()).unwrap_or(false);
-        imp.quality_row.set_visible(lossy);
-        imp.quality_scale.set_sensitive(!imp.size_wanted.is_active());
+        // Always present, so choosing a format cannot slide the controls
+        // below it; just inert when there is no quality to choose.
+        imp.quality_scale.set_sensitive(lossy && !imp.size_wanted.is_active());
     }
 
     /// What aiming at a size will mean for this format, or what the last
@@ -2177,6 +2401,7 @@ impl Window {
                     window.imp().adjust_toggle.set_active(false);
                     window.imp().resize_toggle.set_active(false);
                     window.imp().text_toggle.set_active(false);
+                    window.imp().draw_toggle.set_active(false);
                 }
                 // Deleting the file you are in the middle of editing is a
                 // trap, so it goes away along with the filmstrip.
@@ -2208,7 +2433,13 @@ impl Window {
                 self,
                 move |_, _| {
                     if name == "undo" {
-                        window.undo();
+                        // The newest thing first: having just drawn a stroke,
+                        // undo should take that back, not a crop from before
+                        // it. Anything still unbaked is newer than everything
+                        // baked, because baking clears it.
+                        if !window.imp().view.canvas().undo_overlay() {
+                            window.undo();
+                        }
                     } else {
                         window.redo();
                     }
@@ -2270,6 +2501,14 @@ impl Window {
             move |_, _| window.export()
         ));
         self.add_action(&export);
+
+        let draw_clear = gio::SimpleAction::new("draw-clear", None);
+        draw_clear.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().clear_marks()
+        ));
+        self.add_action(&draw_clear);
 
         let text_add = gio::SimpleAction::new("text-add", None);
         text_add.connect_activate(glib::clone!(

@@ -99,13 +99,20 @@ approximated.
   line under the picker for what a format will cost you — JPEG has no transparency, GIF
   is 256 colours and one frame. A format with a limit of its own says so before the file
   dialog opens rather than after: ICO refuses anything past 256 × 256
+- **Draw** on the picture: a pen, a highlighter that lets what is under it show
+  through, straight lines, arrows with a head that sizes itself to the line, rectangles
+  and ellipses. Pick a colour and a width in image pixels; `Ctrl+Z` takes back the last
+  stroke, and Clear takes back all of them
 - **Text** laid over the picture: type it, pick the family, the size in image pixels,
   bold, italic, underline, the colour of the letters and the colour of the plate behind
   them — set that one's opacity to zero for no plate. Drag it anywhere on the picture;
   add as many lines as you like and click one to select it
-- Text stays text for as long as it is unsaved, so it can be moved, restyled and
-  retyped; the preview on screen and the pixels that get written go through the same
-  layout and the same render nodes, so what you position is what you get
+- Strokes and text stay themselves for as long as they are unsaved — movable,
+  restyleable, undoable — and they stack in the order they were made. The preview on
+  screen and the pixels that get written go through the same paths and the same render
+  nodes, so what you position is what you get
+- The sidebar shows **one section at a time**: opening Crop puts Draw away. Six of them
+  — Crop, Resize, Adjust, Draw, Text, Export — with Cancel and Save always to hand
 - A **quality** dial for the lossy formats, defaulting to 85. It appears only for
   formats that have one — the lossless ones would ignore it — and steps aside when a
   file size is being aimed at, since the search is choosing quality for you; when that
@@ -238,7 +245,6 @@ cargo test
 
 Wanted, but not built:
 
-- Freehand drawing and shapes
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
 - Progressive loading for very large images, so a 100MP TIFF appears in stages

@@ -18,11 +18,11 @@ use crate::loader;
 /// Apply the live edits, and optionally a crop, to an image already in memory.
 ///
 /// Order matters and mirrors what the view does — resize, flip, rotate, lay on
-/// the text, then cut. Resizing comes first because the crop rectangle is
+/// the text and drawings, then cut. Resizing comes first because the crop rectangle is
 /// recorded against the size on screen, which is the resized one; cutting first
 /// would take the wrong part. Text goes on once the picture is in display
-/// space, which is the frame its positions were recorded in, and before the
-/// crop, so a cut through a caption cuts it exactly as it looked. Tone comes
+/// space, which is the frame their positions were recorded in, and before the
+/// crop, so a cut through a caption or an arrow cuts it exactly as it looked. Tone comes
 /// last because it is per-pixel and commutes with all of it, so it may as well
 /// run on the fewest pixels.
 pub fn apply(
@@ -47,9 +47,9 @@ pub fn apply(
     }
     image = rotate(image, live.rotation);
 
-    if !live.texts.is_empty() {
+    if !live.overlays.is_empty() {
         let mut rgba = image.to_rgba8();
-        crate::text::composite(&mut rgba, &live.texts);
+        crate::text::composite(&mut rgba, &live.overlays);
         image = DynamicImage::ImageRgba8(rgba);
     }
 

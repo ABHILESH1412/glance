@@ -2,6 +2,7 @@ mod adjust;
 mod canvas;
 mod compress;
 mod decoders;
+mod draw;
 mod export;
 mod filmstrip;
 mod format;

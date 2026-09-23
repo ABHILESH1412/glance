@@ -31,6 +31,9 @@ pub struct TextItem {
     pub colour: gdk::RGBA,
     /// Alpha zero means no plate behind the text.
     pub background: gdk::RGBA,
+    /// When this was added, so text and drawings stack in the order they were
+    /// made rather than by which list they live in.
+    pub sequence: u64,
 }
 
 impl Default for TextItem {
@@ -46,19 +49,54 @@ impl Default for TextItem {
             underline: false,
             colour: gdk::RGBA::WHITE,
             background: gdk::RGBA::new(0.0, 0.0, 0.0, 0.0),
+            sequence: 0,
         }
     }
 }
 
-/// One text item already drawn into pixels, ready to be composited.
+/// Something already drawn into pixels, waiting to be laid over the picture.
 ///
-/// Rendering has to happen on the main loop, where the font machinery and the
-/// renderer live; compositing does not, so the two are separated here and the
-/// pixels travel to the worker thread.
-pub struct RenderedText {
+/// Text and drawings both end up here. Rendering has to happen on the main
+/// loop, where the font machinery and the renderer live; compositing does not,
+/// so the two are separated and only the pixels travel to the worker thread.
+pub struct Patch {
     pub pixels: RgbaImage,
     pub x: i64,
     pub y: i64,
+    /// When the thing that made this was added, so patches go down in the
+    /// order they were made rather than the order their lists happen to be in.
+    pub sequence: u64,
+}
+
+impl Patch {
+    /// Take the pixels out of a rendered texture.
+    ///
+    /// Straight RGBA is asked for rather than GDK's premultiplied BGRA
+    /// default, so no unpremultiply step of our own can get it subtly wrong.
+    pub fn from_texture(texture: &gdk::Texture, x: i64, y: i64) -> Self {
+        let mut downloader = gdk::TextureDownloader::new(texture);
+        downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+        let (bytes, stride) = downloader.download_bytes();
+        let (width, height) = (texture.width() as u32, texture.height() as u32);
+        let mut pixels = RgbaImage::new(width, height);
+        for row in 0..height as usize {
+            let line = &bytes[row * stride..row * stride + width as usize * 4];
+            for column in 0..width as usize {
+                let p = &line[column * 4..column * 4 + 4];
+                pixels.put_pixel(
+                    column as u32,
+                    row as u32,
+                    image::Rgba([p[0], p[1], p[2], p[3]]),
+                );
+            }
+        }
+        Self { pixels, x, y, sequence: 0 }
+    }
+
+    pub fn at_sequence(mut self, sequence: u64) -> Self {
+        self.sequence = sequence;
+        self
+    }
 }
 
 impl TextItem {
@@ -136,7 +174,7 @@ impl TextItem {
     ///
     /// Goes through the same renderer that put it on screen, so what is saved
     /// is what was previewed rather than a second implementation's idea of it.
-    pub fn render(&self, widget: &impl IsA<gtk::Widget>) -> Option<RenderedText> {
+    pub fn render(&self, widget: &impl IsA<gtk::Widget>) -> Option<Patch> {
         if self.content.is_empty() {
             return None;
         }
@@ -152,40 +190,20 @@ impl TextItem {
             Some(&graphene::Rect::new(0.0, 0.0, width as f32, height as f32)),
         );
 
-        // Ask for straight RGBA rather than GDK's premultiplied BGRA default,
-        // so no unpremultiply step of our own can get it subtly wrong.
-        let mut downloader = gdk::TextureDownloader::new(&texture);
-        downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
-        let (bytes, stride) = downloader.download_bytes();
-
-        let (w, h) = (texture.width() as u32, texture.height() as u32);
-        let mut pixels = RgbaImage::new(w, h);
-        for y in 0..h as usize {
-            let row = &bytes[y * stride..y * stride + w as usize * 4];
-            for x in 0..w as usize {
-                let p = &row[x * 4..x * 4 + 4];
-                pixels.put_pixel(
-                    x as u32,
-                    y as u32,
-                    image::Rgba([p[0], p[1], p[2], p[3]]),
-                );
-            }
-        }
-        Some(RenderedText {
-            pixels,
-            x: self.x.round() as i64,
-            y: self.y.round() as i64,
-        })
+        Some(
+            Patch::from_texture(&texture, self.x.round() as i64, self.y.round() as i64)
+                .at_sequence(self.sequence),
+        )
     }
 }
 
-/// Lay rendered text over an image, in place.
+/// Lay patches over an image, in place, oldest first.
 ///
 /// Straight alpha on both sides, source-over. Anything hanging off an edge is
 /// simply not drawn.
-pub fn composite(base: &mut RgbaImage, texts: &[RenderedText]) {
+pub fn composite(base: &mut RgbaImage, patches: &[Patch]) {
     let (bw, bh) = (base.width() as i64, base.height() as i64);
-    for text in texts {
+    for text in patches {
         for (tx, ty, pixel) in text.pixels.enumerate_pixels() {
             let (x, y) = (text.x + i64::from(tx), text.y + i64::from(ty));
             if x < 0 || y < 0 || x >= bw || y >= bh {
@@ -249,10 +267,11 @@ mod tests {
     #[test]
     fn text_past_the_edge_is_clipped() {
         let mut base = RgbaImage::from_pixel(4, 4, image::Rgba([0, 0, 0, 255]));
-        let patch = RenderedText {
+        let patch = Patch {
             pixels: RgbaImage::from_pixel(4, 4, image::Rgba([255, 0, 0, 255])),
             x: 2,
             y: 2,
+            sequence: 0,
         };
         composite(&mut base, &[patch]);
         assert_eq!(base.get_pixel(3, 3).0, [255, 0, 0, 255]);

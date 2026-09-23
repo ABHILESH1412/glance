@@ -18,7 +18,8 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
 use crate::adjust::Adjustments;
-use crate::text::{RenderedText, TextItem};
+use crate::draw::{Mark, Tool};
+use crate::text::{Patch, TextItem};
 use crate::decoders::svg;
 use crate::loader::VectorSource;
 
@@ -129,6 +130,19 @@ mod imp {
         pub cropping: Cell<bool>,
         /// Text laid over the picture, in the order it was added.
         pub texts: RefCell<Vec<TextItem>>,
+        /// Marks drawn over the picture, in the order they were made.
+        pub marks: RefCell<Vec<Mark>>,
+        /// The tool a drag will draw with, when one is chosen.
+        pub draw_tool: Cell<Option<Tool>>,
+        /// Not `Cell`: `RGBA` has no `Default`, and a default of all zeroes
+        /// would be a pen that draws nothing.
+        pub draw_colour: RefCell<Option<gdk::RGBA>>,
+        pub draw_width: Cell<f64>,
+        /// The stroke being drawn right now, before the pointer is lifted.
+        pub drawing: RefCell<Option<Mark>>,
+        /// Counts every overlay added, so marks and text stack in the order
+        /// they were made rather than by which list they live in.
+        pub sequence: Cell<u64>,
         /// True while the text tool is picking things up and putting them down.
         pub text_tool: Cell<bool>,
         pub selected_text: Cell<Option<usize>>,
@@ -269,7 +283,7 @@ pub struct LiveEdits {
     pub adjust: Adjustments,
     /// Text already drawn into pixels, because compositing happens off the
     /// main loop and the font machinery may not leave it.
-    pub texts: Vec<RenderedText>,
+    pub overlays: Vec<Patch>,
 }
 
 impl LiveEdits {
@@ -280,7 +294,7 @@ impl LiveEdits {
             && !self.flip_h
             && !self.flip_v
             && self.adjust.is_identity()
-            && self.texts.is_empty()
+            && self.overlays.is_empty()
     }
 }
 
@@ -427,7 +441,7 @@ impl ImageCanvas {
             flip_h: self.flip_horizontal(),
             flip_v: self.flip_vertical(),
             adjust: self.adjustments(),
-            texts: self.rendered_texts(),
+            overlays: self.rendered_overlays(),
         }
     }
 
@@ -454,6 +468,10 @@ impl ImageCanvas {
         imp.texts.borrow_mut().clear();
         imp.selected_text.set(None);
         imp.text_tool.set(false);
+        imp.marks.borrow_mut().clear();
+        imp.drawing.replace(None);
+        imp.draw_tool.set(None);
+        imp.sequence.set(0);
         imp.tile.replace(None);
         imp.budget_scale.set(f64::INFINITY);
         imp.rendered_scale.set(1.0);
@@ -762,15 +780,137 @@ impl ImageCanvas {
         }
     }
 
-    /// Every item drawn into pixels at image resolution, ready to composite.
-    /// Main loop only: the renderer and the font machinery live here.
-    pub fn rendered_texts(&self) -> Vec<RenderedText> {
-        self.imp()
+    /// Everything laid over the picture, drawn into pixels and put back in the
+    /// order it was made. Main loop only: the renderer and the font machinery
+    /// live here.
+    pub fn rendered_overlays(&self) -> Vec<Patch> {
+        let imp = self.imp();
+        let mut patches: Vec<Patch> = imp
             .texts
             .borrow()
             .iter()
             .filter_map(|item| item.render(self))
-            .collect()
+            .chain(
+                imp.marks
+                    .borrow()
+                    .iter()
+                    .filter_map(|mark| mark.render(self).map(|p| p.at_sequence(mark.sequence))),
+            )
+            .collect();
+        patches.sort_by_key(|patch| patch.sequence);
+        patches
+    }
+
+    // -- drawing ----------------------------------------------------------
+
+    /// Pick a tool, or `None` to put them all away.
+    pub fn set_draw_tool(&self, tool: Option<Tool>) {
+        let imp = self.imp();
+        imp.draw_tool.set(tool);
+        if tool.is_none() {
+            imp.drawing.replace(None);
+        }
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    pub fn draw_tool(&self) -> Option<Tool> {
+        self.imp().draw_tool.get()
+    }
+
+    pub fn set_draw_colour(&self, colour: gdk::RGBA) {
+        self.imp().draw_colour.replace(Some(colour));
+    }
+
+    pub fn set_draw_width(&self, width: f64) {
+        self.imp().draw_width.set(width.max(1.0));
+    }
+
+    pub fn has_marks(&self) -> bool {
+        !self.imp().marks.borrow().is_empty()
+    }
+
+    /// Take back the most recent thing laid over the picture, whether that was
+    /// a stroke or a line of text.
+    pub fn undo_overlay(&self) -> bool {
+        let imp = self.imp();
+        let newest_mark = imp.marks.borrow().last().map(|m| m.sequence);
+        let newest_text = imp.texts.borrow().last().map(|t| t.sequence);
+        match (newest_mark, newest_text) {
+            (None, None) => return false,
+            (Some(mark), Some(text)) if text > mark => {
+                imp.texts.borrow_mut().pop();
+                let remaining = imp.texts.borrow().len();
+                imp.selected_text
+                    .set((remaining > 0).then_some(remaining - 1));
+            }
+            (Some(_), _) => {
+                imp.marks.borrow_mut().pop();
+            }
+            (None, Some(_)) => {
+                imp.texts.borrow_mut().pop();
+                let remaining = imp.texts.borrow().len();
+                imp.selected_text
+                    .set((remaining > 0).then_some(remaining - 1));
+            }
+        }
+        self.queue_draw();
+        self.notify_text();
+        true
+    }
+
+    pub fn clear_marks(&self) {
+        let imp = self.imp();
+        imp.marks.borrow_mut().clear();
+        imp.drawing.replace(None);
+        self.queue_draw();
+        self.notify_text();
+    }
+
+    fn next_sequence(&self) -> u64 {
+        let imp = self.imp();
+        let next = imp.sequence.get() + 1;
+        imp.sequence.set(next);
+        next
+    }
+
+    fn begin_mark(&self, point: (f64, f64)) {
+        let imp = self.imp();
+        let Some(tool) = imp.draw_tool.get() else {
+            return;
+        };
+        let start = self.to_display(point);
+        imp.drawing.replace(Some(Mark {
+            tool,
+            points: vec![start],
+            colour: imp
+                .draw_colour
+                .borrow()
+                .unwrap_or_else(|| gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
+            width: imp.draw_width.get(),
+            sequence: self.next_sequence(),
+        }));
+    }
+
+    fn extend_mark(&self, point: (f64, f64)) {
+        let imp = self.imp();
+        let at = self.to_display(point);
+        if let Some(mark) = imp.drawing.borrow_mut().as_mut() {
+            mark.extend(at);
+        }
+        self.queue_draw();
+    }
+
+    fn finish_mark(&self) {
+        let imp = self.imp();
+        let Some(mark) = imp.drawing.replace(None) else {
+            return;
+        };
+        if mark.is_worth_keeping() {
+            imp.marks.borrow_mut().push(mark);
+            self.notify_text();
+        }
+        self.queue_draw();
     }
 
     /// The topmost item under a widget point, if any.
@@ -1653,6 +1793,10 @@ impl ImageCanvas {
     }
 
     fn update_cursor(&self) {
+        if self.imp().draw_tool.get().is_some() {
+            self.set_cursor_from_name(Some("crosshair"));
+            return;
+        }
         if self.imp().text_tool.get() {
             let over_text = self.text_at(self.imp().pointer.get()).is_some();
             let name = if over_text {
@@ -1867,7 +2011,7 @@ impl ImageCanvas {
             if toned {
                 snapshot.pop();
             }
-            self.draw_text(snapshot);
+            self.draw_overlays(snapshot);
             self.draw_crop(snapshot);
             self.draw_resize(snapshot);
             return;
@@ -1915,64 +2059,97 @@ impl ImageCanvas {
         if toned {
             snapshot.pop();
         }
-        self.draw_text(snapshot);
+        self.draw_overlays(snapshot);
         self.draw_crop(snapshot);
         self.draw_resize(snapshot);
+    }
+
+    /// Everything laid over the picture, oldest first — the same order the
+    /// bake composites in, so the preview is not a different picture.
+    fn draw_overlays(&self, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        // Both lists are already in the order they were made, so one pass
+        // taking whichever is older keeps them interleaved correctly.
+        let marks = imp.marks.borrow().clone();
+        let texts = imp.texts.borrow().clone();
+        let (mut m, mut t) = (0, 0);
+        while m < marks.len() || t < texts.len() {
+            let take_mark = match (marks.get(m), texts.get(t)) {
+                (Some(mark), Some(text)) => mark.sequence <= text.sequence,
+                (Some(_), None) => true,
+                _ => false,
+            };
+            if take_mark {
+                self.draw_mark(snapshot, &marks[m]);
+                m += 1;
+            } else {
+                self.draw_one_text(snapshot, &texts[t], t);
+                t += 1;
+            }
+        }
+        // The stroke still under the pointer goes on top of all of it.
+        if let Some(mark) = imp.drawing.borrow().as_ref() {
+            self.draw_mark(snapshot, mark);
+        }
+    }
+
+    fn draw_mark(&self, snapshot: &gtk::Snapshot, mark: &Mark) {
+        let Some(node) = mark.to_node() else {
+            return;
+        };
+        let Some((x, y, _, _)) = mark.bounds() else {
+            return;
+        };
+        let scale = self.imp().target_scale.get() as f32;
+        let (wx, wy) = self.from_display((x, y));
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(wx as f32, wy as f32));
+        snapshot.scale(scale, scale);
+        snapshot.append_node(&node);
+        snapshot.restore();
     }
 
     /// Text sits in display space, so it is drawn in widget space with the
     /// zoom applied — the same way the crop overlay is placed, and for the
     /// same reason: display space is already past the rotation.
-    fn draw_text(&self, snapshot: &gtk::Snapshot) {
+    fn draw_one_text(&self, snapshot: &gtk::Snapshot, item: &TextItem, index: usize) {
         let imp = self.imp();
-        let texts = imp.texts.borrow();
-        if texts.is_empty() {
+        let Some(node) = item.to_node(self) else {
+            return;
+        };
+        let scale = imp.target_scale.get() as f32;
+        let (x, y) = self.from_display((item.x, item.y));
+        snapshot.save();
+        snapshot.translate(&graphene::Point::new(x as f32, y as f32));
+        snapshot.scale(scale, scale);
+        snapshot.append_node(&node);
+        snapshot.restore();
+
+        // A dashed box around the selected item, only while the tool is out:
+        // it is a handle, not part of the picture.
+        if !imp.text_tool.get() || imp.selected_text.get() != Some(index) {
             return;
         }
-        let scale = imp.target_scale.get() as f32;
-        let selected = imp.selected_text.get();
-        let showing_tool = imp.text_tool.get();
-        for (index, item) in texts.iter().enumerate() {
-            let Some(node) = item.to_node(self) else {
-                continue;
-            };
-            let (x, y) = self.from_display((item.x, item.y));
-            snapshot.save();
-            snapshot.translate(&graphene::Point::new(x as f32, y as f32));
-            snapshot.scale(scale, scale);
-            snapshot.append_node(&node);
-            snapshot.restore();
-
-            // A dashed box around the selected item, only while the tool is
-            // out: it is a handle, not part of the picture.
-            if showing_tool && selected == Some(index) {
-                let (width, height) = item.bounds(self);
-                let rect = graphene::Rect::new(
-                    x as f32,
-                    y as f32,
-                    (width * f64::from(scale)) as f32,
-                    (height * f64::from(scale)) as f32,
-                );
-                let outline = gsk::PathBuilder::new();
-                outline.add_rect(&rect);
-                let path = outline.to_path();
-                snapshot.append_stroke(
-                    &path,
-                    &gsk::Stroke::new(3.0),
-                    &gdk::RGBA::new(0.0, 0.0, 0.0, 0.45),
-                );
-                let dashed = gsk::Stroke::new(1.5);
-                dashed.set_dash(&[6.0, 4.0]);
-                snapshot.append_stroke(&path, &dashed, &gdk::RGBA::new(1.0, 1.0, 1.0, 0.95));
-            }
-        }
+        let (width, height) = item.bounds(self);
+        let rect = graphene::Rect::new(
+            x as f32,
+            y as f32,
+            (width * f64::from(scale)) as f32,
+            (height * f64::from(scale)) as f32,
+        );
+        let outline = gsk::PathBuilder::new();
+        outline.add_rect(&rect);
+        let path = outline.to_path();
+        snapshot.append_stroke(
+            &path,
+            &gsk::Stroke::new(3.0),
+            &gdk::RGBA::new(0.0, 0.0, 0.0, 0.45),
+        );
+        let dashed = gsk::Stroke::new(1.5);
+        dashed.set_dash(&[6.0, 4.0]);
+        snapshot.append_stroke(&path, &dashed, &gdk::RGBA::new(1.0, 1.0, 1.0, 0.95));
     }
 
-    /// The crop overlay, drawn in widget space so the handles stay a constant
-    /// size on screen however far the image is zoomed.
-    /// The resize outline: the picture's own edge, with a grip on each corner
-    /// and each side. Drawn over the image rather than dimming anything —
-    /// nothing is being excluded here, only measured.
     fn draw_resize(&self, snapshot: &gtk::Snapshot) {
         let imp = self.imp();
         if !imp.resizing.get() {
@@ -2179,6 +2356,11 @@ impl ImageCanvas {
                 imp.dragging.set(false);
                 imp.drag_origin.set(imp.centre.get());
 
+                if imp.draw_tool.get().is_some() {
+                    canvas.begin_mark((start_x, start_y));
+                    return;
+                }
+
                 if imp.text_tool.get() {
                     let hit = canvas.text_at((start_x, start_y));
                     imp.selected_text.set(hit);
@@ -2228,8 +2410,17 @@ impl ImageCanvas {
         drag.connect_drag_update(glib::clone!(
             #[weak(rename_to = canvas)]
             self,
-            move |_, dx, dy| {
+            move |gesture, dx, dy| {
                 let imp = canvas.imp();
+
+                if imp.draw_tool.get().is_some() && imp.drawing.borrow().is_some() {
+                    // `dx` is measured from where the press landed, so the
+                    // gesture's own start point turns it back into a position.
+                    if let Some((start_x, start_y)) = gesture.start_point() {
+                        canvas.extend_mark((start_x + dx, start_y + dy));
+                    }
+                    return;
+                }
 
                 if imp.text_tool.get() {
                     if let Some(index) = imp.selected_text.get() {
@@ -2308,6 +2499,7 @@ impl ImageCanvas {
             #[weak(rename_to = canvas)]
             self,
             move |_, _, _| {
+                canvas.finish_mark();
                 canvas.imp().dragging.set(false);
                 canvas.update_cursor();
                 // Panning moves the visible region, so a vector may need a
