@@ -52,6 +52,14 @@ mod imp {
         pub buttons: RefCell<Vec<gtk::Button>>,
         pub pictures: RefCell<Vec<gtk::Picture>>,
         pub files: RefCell<Vec<PathBuf>>,
+        /// Whether the window will have the strip on screen at all.
+        ///
+        /// The strip rebuilds itself whenever the folder changes, and used to
+        /// decide its own visibility from the file count — which meant that
+        /// saving into the folder being viewed brought it back mid-edit,
+        /// because the rescan happened after the window had hidden it. The
+        /// window's intent is recorded here so a rebuild cannot override it.
+        pub allowed: Cell<bool>,
         pub index: Cell<usize>,
         /// Slots currently built, which is what `size_allocate` compares against.
         pub slots: Cell<usize>,
@@ -117,7 +125,11 @@ glib::wrapper! {
 
 impl Default for FilmStrip {
     fn default() -> Self {
-        glib::Object::new()
+        let strip: Self = glib::Object::new();
+        // No objection until the window raises one, so the strip behaves as it
+        // always did unless something deliberately puts it away.
+        strip.imp().allowed.set(true);
+        strip
     }
 }
 
@@ -244,12 +256,21 @@ impl FilmStrip {
         fits.min(MAX_SLOTS)
     }
 
+    /// Show the strip, or keep it away regardless of what the folder holds.
+    pub fn set_allowed(&self, allowed: bool) {
+        if self.imp().allowed.get() == allowed {
+            return;
+        }
+        self.imp().allowed.set(allowed);
+        self.rebuild();
+    }
+
     fn rebuild(&self) {
         let imp = self.imp();
         let files = imp.files.borrow().clone();
 
-        if files.len() < 2 {
-            // One image, or none: there is nothing to browse.
+        // One image, or none, or the window wants it out of the way.
+        if files.len() < 2 || !imp.allowed.get() {
             self.set_visible(false);
             imp.showing.replace(Vec::new());
             return;

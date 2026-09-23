@@ -18,6 +18,7 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
 use crate::adjust::Adjustments;
+use crate::text::{RenderedText, TextItem};
 use crate::decoders::svg;
 use crate::loader::VectorSource;
 
@@ -126,6 +127,16 @@ mod imp {
         /// True while the crop rectangle is being drawn or adjusted, during
         /// which dragging resizes the selection instead of panning.
         pub cropping: Cell<bool>,
+        /// Text laid over the picture, in the order it was added.
+        pub texts: RefCell<Vec<TextItem>>,
+        /// True while the text tool is picking things up and putting them down.
+        pub text_tool: Cell<bool>,
+        pub selected_text: Cell<Option<usize>>,
+        /// Where the item being dragged started, so the gesture measures from
+        /// one place rather than accumulating rounding.
+        pub text_origin: Cell<(f64, f64)>,
+        #[allow(clippy::type_complexity)]
+        pub on_text_changed: RefCell<Option<Box<dyn Fn()>>>,
         /// True while the resize handles are on the picture.
         pub resizing: Cell<bool>,
         /// The working image's real pixel size. `logical` is what is on screen
@@ -247,7 +258,7 @@ pub struct Tile {
 ///
 /// Travelling together keeps the exporter honest: four loose arguments of two
 /// bools and a float are easy to hand over in the wrong order.
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
 pub struct LiveEdits {
     /// Pixel size to resample to, when the view is showing a size the pixels
     /// do not have yet.
@@ -256,6 +267,9 @@ pub struct LiveEdits {
     pub flip_h: bool,
     pub flip_v: bool,
     pub adjust: Adjustments,
+    /// Text already drawn into pixels, because compositing happens off the
+    /// main loop and the font machinery may not leave it.
+    pub texts: Vec<RenderedText>,
 }
 
 impl LiveEdits {
@@ -266,6 +280,7 @@ impl LiveEdits {
             && !self.flip_h
             && !self.flip_v
             && self.adjust.is_identity()
+            && self.texts.is_empty()
     }
 }
 
@@ -412,6 +427,7 @@ impl ImageCanvas {
             flip_h: self.flip_horizontal(),
             flip_v: self.flip_vertical(),
             adjust: self.adjustments(),
+            texts: self.rendered_texts(),
         }
     }
 
@@ -435,6 +451,9 @@ impl ImageCanvas {
         imp.vector.replace(None);
         imp.scene.replace(None);
         imp.adjust.set(Adjustments::default());
+        imp.texts.borrow_mut().clear();
+        imp.selected_text.set(None);
+        imp.text_tool.set(false);
         imp.tile.replace(None);
         imp.budget_scale.set(f64::INFINITY);
         imp.rendered_scale.set(1.0);
@@ -642,6 +661,130 @@ impl ImageCanvas {
         (self.imp().target_scale.get() - self.fit_scale()).abs() < 0.001
     }
 
+    // -- text -------------------------------------------------------------
+
+    pub fn set_text_tool(&self, active: bool) {
+        let imp = self.imp();
+        imp.text_tool.set(active);
+        if !active {
+            imp.selected_text.set(None);
+        }
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    pub fn is_text_tool(&self) -> bool {
+        self.imp().text_tool.get()
+    }
+
+    pub fn texts(&self) -> Vec<TextItem> {
+        self.imp().texts.borrow().clone()
+    }
+
+    pub fn has_text(&self) -> bool {
+        !self.imp().texts.borrow().is_empty()
+    }
+
+    pub fn selected_text(&self) -> Option<TextItem> {
+        let index = self.imp().selected_text.get()?;
+        self.imp().texts.borrow().get(index).cloned()
+    }
+
+    /// Put a new item in the middle of what is on screen, so it lands
+    /// somewhere visible however far the view has been panned.
+    pub fn add_text(&self, mut item: TextItem) {
+        let imp = self.imp();
+        let (width, height) = item.bounds(self);
+        let centre = self.to_display(self.viewport_centre());
+        item.x = (centre.0 - width / 2.0).round();
+        item.y = (centre.1 - height / 2.0).round();
+        let mut texts = imp.texts.borrow_mut();
+        texts.push(item);
+        let index = texts.len() - 1;
+        drop(texts);
+        imp.selected_text.set(Some(index));
+        self.queue_draw();
+        self.notify_text();
+    }
+
+    /// Change the selected item in place.
+    pub fn update_selected_text(&self, edit: impl FnOnce(&mut TextItem)) {
+        let imp = self.imp();
+        let Some(index) = imp.selected_text.get() else {
+            return;
+        };
+        {
+            let mut texts = imp.texts.borrow_mut();
+            let Some(item) = texts.get_mut(index) else {
+                return;
+            };
+            edit(item);
+        }
+        self.queue_draw();
+        self.notify_text();
+    }
+
+    pub fn remove_selected_text(&self) {
+        let imp = self.imp();
+        let Some(index) = imp.selected_text.get() else {
+            return;
+        };
+        let mut texts = imp.texts.borrow_mut();
+        if index >= texts.len() {
+            return;
+        }
+        texts.remove(index);
+        let remaining = texts.len();
+        drop(texts);
+        imp.selected_text
+            .set((remaining > 0).then(|| index.min(remaining - 1)));
+        self.queue_draw();
+        self.notify_text();
+    }
+
+    pub fn clear_text(&self) {
+        let imp = self.imp();
+        imp.texts.borrow_mut().clear();
+        imp.selected_text.set(None);
+        self.queue_draw();
+        self.notify_text();
+    }
+
+    /// Called whenever the items or the selection change, so the panel can
+    /// show what is actually selected.
+    pub fn connect_text_changed(&self, f: impl Fn() + 'static) {
+        self.imp().on_text_changed.replace(Some(Box::new(f)));
+    }
+
+    fn notify_text(&self) {
+        if let Some(f) = self.imp().on_text_changed.borrow().as_ref() {
+            f();
+        }
+    }
+
+    /// Every item drawn into pixels at image resolution, ready to composite.
+    /// Main loop only: the renderer and the font machinery live here.
+    pub fn rendered_texts(&self) -> Vec<RenderedText> {
+        self.imp()
+            .texts
+            .borrow()
+            .iter()
+            .filter_map(|item| item.render(self))
+            .collect()
+    }
+
+    /// The topmost item under a widget point, if any.
+    fn text_at(&self, point: (f64, f64)) -> Option<usize> {
+        let display = self.to_display(point);
+        let texts = self.imp().texts.borrow();
+        texts
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, item)| item.contains(self, display.0, display.1))
+            .map(|(index, _)| index)
+    }
+
     // -- resizing ---------------------------------------------------------
 
     /// The working image's real pixel size, before any pending resize.
@@ -690,6 +833,22 @@ impl ImageCanvas {
         let size = (f64::from(width.max(1)), f64::from(height.max(1)));
         if imp.logical.get() == size {
             return;
+        }
+        // Text is anchored to the picture, so it travels with a resize rather
+        // than staying put while the picture shrinks out from under it. Each
+        // call scales by the ratio, so a drag's many steps compose to exactly
+        // the same factor as one jump would.
+        let previous = imp.logical.get();
+        let (rx, ry) = (size.0 / previous.0.max(1e-9), size.1 / previous.1.max(1e-9));
+        if (rx - 1.0).abs() > 1e-9 || (ry - 1.0).abs() > 1e-9 {
+            for item in imp.texts.borrow_mut().iter_mut() {
+                item.x *= rx;
+                item.y *= ry;
+                // One scale for the letters: they cannot be stretched
+                // unevenly, so the smaller change wins and the text stays
+                // inside the picture either way.
+                item.size *= rx.min(ry);
+            }
         }
         imp.logical.set(size);
         // A crop recorded against the old size would now cut the wrong part.
@@ -1494,6 +1653,18 @@ impl ImageCanvas {
     }
 
     fn update_cursor(&self) {
+        if self.imp().text_tool.get() {
+            let over_text = self.text_at(self.imp().pointer.get()).is_some();
+            let name = if over_text {
+                Some("move")
+            } else if self.is_pannable() {
+                Some("grab")
+            } else {
+                None
+            };
+            self.set_cursor_from_name(name);
+            return;
+        }
         if self.imp().resizing.get() {
             // Only over a grip: elsewhere the picture still pans, and saying
             // otherwise would promise something the drag does not do.
@@ -1696,6 +1867,7 @@ impl ImageCanvas {
             if toned {
                 snapshot.pop();
             }
+            self.draw_text(snapshot);
             self.draw_crop(snapshot);
             self.draw_resize(snapshot);
             return;
@@ -1743,8 +1915,57 @@ impl ImageCanvas {
         if toned {
             snapshot.pop();
         }
+        self.draw_text(snapshot);
         self.draw_crop(snapshot);
         self.draw_resize(snapshot);
+    }
+
+    /// Text sits in display space, so it is drawn in widget space with the
+    /// zoom applied — the same way the crop overlay is placed, and for the
+    /// same reason: display space is already past the rotation.
+    fn draw_text(&self, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        let texts = imp.texts.borrow();
+        if texts.is_empty() {
+            return;
+        }
+        let scale = imp.target_scale.get() as f32;
+        let selected = imp.selected_text.get();
+        let showing_tool = imp.text_tool.get();
+        for (index, item) in texts.iter().enumerate() {
+            let Some(node) = item.to_node(self) else {
+                continue;
+            };
+            let (x, y) = self.from_display((item.x, item.y));
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(x as f32, y as f32));
+            snapshot.scale(scale, scale);
+            snapshot.append_node(&node);
+            snapshot.restore();
+
+            // A dashed box around the selected item, only while the tool is
+            // out: it is a handle, not part of the picture.
+            if showing_tool && selected == Some(index) {
+                let (width, height) = item.bounds(self);
+                let rect = graphene::Rect::new(
+                    x as f32,
+                    y as f32,
+                    (width * f64::from(scale)) as f32,
+                    (height * f64::from(scale)) as f32,
+                );
+                let outline = gsk::PathBuilder::new();
+                outline.add_rect(&rect);
+                let path = outline.to_path();
+                snapshot.append_stroke(
+                    &path,
+                    &gsk::Stroke::new(3.0),
+                    &gdk::RGBA::new(0.0, 0.0, 0.0, 0.45),
+                );
+                let dashed = gsk::Stroke::new(1.5);
+                dashed.set_dash(&[6.0, 4.0]);
+                snapshot.append_stroke(&path, &dashed, &gdk::RGBA::new(1.0, 1.0, 1.0, 0.95));
+            }
+        }
     }
 
     /// The crop overlay, drawn in widget space so the handles stay a constant
@@ -1913,7 +2134,10 @@ impl ImageCanvas {
                 canvas.imp().pointer.set((x, y));
                 // While cropping or resizing, the pointer should say what a
                 // drag would do.
-                if canvas.imp().cropping.get() || canvas.imp().resizing.get() {
+                if canvas.imp().cropping.get()
+                    || canvas.imp().resizing.get()
+                    || canvas.imp().text_tool.get()
+                {
                     canvas.update_cursor();
                 }
             }
@@ -1955,6 +2179,20 @@ impl ImageCanvas {
                 imp.dragging.set(false);
                 imp.drag_origin.set(imp.centre.get());
 
+                if imp.text_tool.get() {
+                    let hit = canvas.text_at((start_x, start_y));
+                    imp.selected_text.set(hit);
+                    canvas.queue_draw();
+                    canvas.notify_text();
+                    if let Some(index) = hit {
+                        if let Some(item) = imp.texts.borrow().get(index) {
+                            imp.text_origin.set((item.x, item.y));
+                        }
+                        return;
+                    }
+                    // Nothing under the pointer, so the drag pans as usual.
+                }
+
                 if imp.resizing.get() {
                     let handle = canvas.resize_handle_at((start_x, start_y));
                     imp.resize_handle.set(handle);
@@ -1992,6 +2230,23 @@ impl ImageCanvas {
             self,
             move |_, dx, dy| {
                 let imp = canvas.imp();
+
+                if imp.text_tool.get() {
+                    if let Some(index) = imp.selected_text.get() {
+                        let scale = imp.target_scale.get().max(1e-9);
+                        let (ox, oy) = imp.text_origin.get();
+                        {
+                            let mut texts = imp.texts.borrow_mut();
+                            if let Some(item) = texts.get_mut(index) {
+                                item.x = ox + dx / scale;
+                                item.y = oy + dy / scale;
+                            }
+                        }
+                        canvas.queue_draw();
+                        canvas.notify_text();
+                        return;
+                    }
+                }
 
                 if imp.resizing.get() {
                     if let Some(handle) = imp.resize_handle.get() {

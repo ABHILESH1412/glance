@@ -34,6 +34,16 @@ pub struct Shown {
     subtitle: String,
 }
 
+/// A colour well that lets the alpha channel be set, so "no background" is a
+/// colour you can choose rather than a separate switch.
+fn colour_button(initial: gdk::RGBA) -> gtk::ColorDialogButton {
+    let dialog = gtk::ColorDialog::new();
+    dialog.set_with_alpha(true);
+    let button = gtk::ColorDialogButton::new(Some(dialog));
+    button.set_rgba(&initial);
+    button
+}
+
 /// A pixel-dimension entry. Wide range, typed or stepped.
 fn dimension_spin() -> gtk::SpinButton {
     let spin = gtk::SpinButton::with_range(1.0, 30_000.0, 1.0);
@@ -86,6 +96,17 @@ mod imp {
         pub natural_label: gtk::Label,
         pub format_drop: gtk::DropDown,
         pub format_note: gtk::Label,
+        pub text_toggle: gtk::ToggleButton,
+        pub text_options: gtk::Box,
+        pub text_entry: gtk::Entry,
+        pub text_size: gtk::SpinButton,
+        pub text_bold: gtk::ToggleButton,
+        pub text_italic: gtk::ToggleButton,
+        pub text_underline: gtk::ToggleButton,
+        pub text_colour: gtk::ColorDialogButton,
+        pub text_background: gtk::ColorDialogButton,
+        pub text_font: gtk::FontDialogButton,
+        pub text_hint: gtk::Label,
         pub adjust_toggle: gtk::ToggleButton,
         pub adjust_options: gtk::Box,
         pub brightness_scale: gtk::Scale,
@@ -163,6 +184,17 @@ mod imp {
                 natural_label: gtk::Label::new(None),
                 format_drop: gtk::DropDown::default(),
                 format_note: gtk::Label::new(None),
+                text_toggle: gtk::ToggleButton::with_label("Text"),
+                text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
+                text_entry: gtk::Entry::new(),
+                text_size: gtk::SpinButton::with_range(6.0, 2000.0, 1.0),
+                text_bold: gtk::ToggleButton::with_label("B"),
+                text_italic: gtk::ToggleButton::with_label("I"),
+                text_underline: gtk::ToggleButton::with_label("U"),
+                text_colour: colour_button(gdk::RGBA::WHITE),
+                text_background: colour_button(gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
+                text_font: gtk::FontDialogButton::new(Some(gtk::FontDialog::new())),
+                text_hint: gtk::Label::new(None),
                 adjust_toggle: gtk::ToggleButton::with_label("Adjust"),
                 adjust_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 brightness_scale: tone_scale(),
@@ -627,6 +659,8 @@ impl Window {
         self.sync_tone_panel();
         imp.view.canvas().reset_size();
         imp.resize_toggle.set_active(false);
+        imp.view.canvas().clear_text();
+        imp.text_toggle.set_active(false);
         self.update_edit_state();
     }
 
@@ -668,6 +702,9 @@ impl Window {
         // Baking gives the picture a new real size, and turns the tool off.
         imp.resize_toggle.set_active(false);
         self.sync_resize_panel();
+        // Baking burns the words into the pixels, so the tool starts empty.
+        imp.text_toggle.set_active(false);
+        self.sync_text_panel();
         imp.title
             .set_subtitle(&format!("Edited · {width} × {height}"));
     }
@@ -718,8 +755,16 @@ impl Window {
         export::apply(working, canvas.live_edits(), None, display).ok()
     }
 
+    /// Cheaply: asking `live_edits` would draw every text item into pixels
+    /// just to find out whether there are any.
     fn has_live_transform(&self) -> bool {
-        !self.imp().view.canvas().live_edits().is_identity()
+        let canvas = self.imp().view.canvas();
+        canvas.rotation().abs() > 0.01
+            || canvas.flip_horizontal()
+            || canvas.flip_vertical()
+            || canvas.has_resize()
+            || canvas.has_text()
+            || !canvas.adjustments().is_identity()
     }
 
     fn downloads_dir() -> PathBuf {
@@ -1180,6 +1225,124 @@ impl Window {
         tones.append(&tone_actions);
         panel.append(tones);
 
+        // -- text --
+        let text = &imp.text_toggle;
+        text.set_tooltip_text(Some("Lay words over the picture"));
+        text.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let open = button.is_active();
+                window.imp().text_options.set_visible(open);
+                // The grab handles belong to the tool, so they go with it.
+                window.imp().view.canvas().set_text_tool(open);
+                if open {
+                    window.sync_text_panel();
+                }
+            }
+        ));
+        panel.append(text);
+
+        let words = &imp.text_options;
+        words.set_visible(false);
+
+        imp.text_entry.set_placeholder_text(Some("Type something"));
+        imp.text_entry.connect_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |entry| {
+                let content = entry.text().to_string();
+                window.edit_text(move |item| item.content = content.clone());
+            }
+        ));
+        words.append(&imp.text_entry);
+
+        imp.text_font.set_level(gtk::FontLevel::Family);
+        imp.text_font.set_use_font(true);
+        imp.text_font.connect_font_desc_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let family = button
+                    .font_desc()
+                    .and_then(|desc| desc.family())
+                    .map(|f| f.to_string());
+                if let Some(family) = family {
+                    window.edit_text(move |item| item.family = family.clone());
+                }
+            }
+        ));
+        words.append(&imp.text_font);
+
+        let style_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let size_label = gtk::Label::new(Some("Size"));
+        size_label.add_css_class("dim-label");
+        imp.text_size.set_value(48.0);
+        imp.text_size.set_width_chars(4);
+        imp.text_size.set_tooltip_text(Some("Font size, in the image's own pixels"));
+        imp.text_size.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |spin| {
+                let size = spin.value();
+                window.edit_text(move |item| item.size = size);
+            }
+        ));
+        style_row.append(&size_label);
+        style_row.append(&imp.text_size);
+
+        // B, I and U, drawn as what they do.
+        for (button, css, tip) in [
+            (&imp.text_bold, "text-bold", "Bold"),
+            (&imp.text_italic, "text-italic", "Italic"),
+            (&imp.text_underline, "text-underline", "Underline"),
+        ] {
+            button.add_css_class(css);
+            button.set_tooltip_text(Some(tip));
+            button.connect_toggled(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_| window.push_text_style()
+            ));
+            style_row.append(button);
+        }
+        words.append(&style_row);
+
+        let colour_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (label, button, tip) in [
+            ("Text", &imp.text_colour, "Colour of the letters"),
+            ("Behind", &imp.text_background, "Plate behind the letters — set its opacity to zero for none"),
+        ] {
+            let caption = gtk::Label::new(Some(label));
+            caption.add_css_class("dim-label");
+            button.set_tooltip_text(Some(tip));
+            button.connect_rgba_notify(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_| window.push_text_style()
+            ));
+            colour_row.append(&caption);
+            colour_row.append(button);
+        }
+        words.append(&colour_row);
+
+        let text_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        text_actions.set_homogeneous(true);
+        let add = gtk::Button::with_label("Add");
+        add.add_css_class("suggested-action");
+        add.set_action_name(Some("win.text-add"));
+        let remove = gtk::Button::with_label("Remove");
+        remove.set_action_name(Some("win.text-remove"));
+        text_actions.append(&add);
+        text_actions.append(&remove);
+        words.append(&text_actions);
+
+        imp.text_hint.add_css_class("dim-label");
+        imp.text_hint.set_xalign(0.0);
+        imp.text_hint.set_wrap(true);
+        words.append(&imp.text_hint);
+        panel.append(words);
+
         imp.pending_crop.add_css_class("dim-label");
         imp.pending_crop.set_xalign(0.0);
         imp.pending_crop.set_wrap(true);
@@ -1247,6 +1410,14 @@ impl Window {
         save_row.append(&save_as);
         panel.append(&save_row);
 
+        // Clicking or dragging a piece of text has to reach the panel, the
+        // same way typing in the panel reaches the picture.
+        imp.view.canvas().connect_text_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move || window.sync_text_panel()
+        ));
+
         // Dragging a handle has to reach the numbers, the same way typing a
         // number reaches the handles.
         imp.view.canvas().connect_resize_changed(glib::clone!(
@@ -1303,6 +1474,101 @@ impl Window {
         }
         imp.syncing_panel.set(false);
         self.describe_size();
+    }
+
+    /// Change the selected item, unless the panel is only echoing the canvas
+    /// back at itself.
+    fn edit_text(&self, change: impl FnOnce(&mut crate::text::TextItem)) {
+        if self.imp().syncing_panel.get() {
+            return;
+        }
+        self.imp().view.canvas().update_selected_text(change);
+    }
+
+    /// The three style toggles and the two colours, pushed together: they all
+    /// come from the same widgets and it is not worth a closure each.
+    fn push_text_style(&self) {
+        let imp = self.imp();
+        if imp.syncing_panel.get() {
+            return;
+        }
+        let (bold, italic, underline) = (
+            imp.text_bold.is_active(),
+            imp.text_italic.is_active(),
+            imp.text_underline.is_active(),
+        );
+        let (colour, background) = (imp.text_colour.rgba(), imp.text_background.rgba());
+        imp.view.canvas().update_selected_text(move |item| {
+            item.bold = bold;
+            item.italic = italic;
+            item.underline = underline;
+            item.colour = colour;
+            item.background = background;
+        });
+    }
+
+    /// Show whichever item is selected. With none, the controls keep whatever
+    /// they were set to and become the recipe for the next one added.
+    fn sync_text_panel(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let selected = canvas.selected_text();
+        imp.text_hint.set_text(&match (&selected, canvas.has_text()) {
+            (Some(_), _) => "Drag it into place on the picture.".to_string(),
+            (None, true) => "Click a piece of text on the picture to select it.".to_string(),
+            (None, false) => "Add lays a new line in the middle of the view.".to_string(),
+        });
+        let Some(item) = selected else {
+            self.update_text_actions();
+            return;
+        };
+        imp.syncing_panel.set(true);
+        imp.text_entry.set_text(&item.content);
+        imp.text_size.set_value(item.size);
+        imp.text_bold.set_active(item.bold);
+        imp.text_italic.set_active(item.italic);
+        imp.text_underline.set_active(item.underline);
+        imp.text_colour.set_rgba(&item.colour);
+        imp.text_background.set_rgba(&item.background);
+        imp.syncing_panel.set(false);
+        self.update_text_actions();
+    }
+
+    fn update_text_actions(&self) {
+        let selected = self.imp().view.canvas().selected_text().is_some();
+        if let Some(action) = self
+            .lookup_action("text-remove")
+            .and_downcast::<gio::SimpleAction>()
+        {
+            action.set_enabled(selected);
+        }
+    }
+
+    /// A new item takes its look from whatever the controls currently show, so
+    /// adding two in a row gives two that match.
+    fn text_from_panel(&self) -> crate::text::TextItem {
+        let imp = self.imp();
+        let content = imp.text_entry.text().to_string();
+        crate::text::TextItem {
+            content: if content.is_empty() {
+                "Text".to_string()
+            } else {
+                content
+            },
+            size: imp.text_size.value(),
+            family: imp
+                .text_font
+                .font_desc()
+                .and_then(|desc| desc.family())
+                .map(|f| f.to_string())
+                .unwrap_or_else(|| "Sans".to_string()),
+            bold: imp.text_bold.is_active(),
+            italic: imp.text_italic.is_active(),
+            underline: imp.text_underline.is_active(),
+            colour: imp.text_colour.rgba(),
+            background: imp.text_background.rgba(),
+            ..Default::default()
+        }
     }
 
     /// What the chosen format will cost the picture, if anything.
@@ -1716,6 +1982,7 @@ impl Window {
                     window.imp().crop_toggle.set_active(false);
                     window.imp().adjust_toggle.set_active(false);
                     window.imp().resize_toggle.set_active(false);
+                    window.imp().text_toggle.set_active(false);
                 }
                 // Deleting the file you are in the middle of editing is a
                 // trap, so it goes away along with the filmstrip.
@@ -1809,6 +2076,26 @@ impl Window {
             move |_, _| window.export()
         ));
         self.add_action(&export);
+
+        let text_add = gio::SimpleAction::new("text-add", None);
+        text_add.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let item = window.text_from_panel();
+                window.imp().view.canvas().add_text(item);
+            }
+        ));
+        self.add_action(&text_add);
+
+        let text_remove = gio::SimpleAction::new("text-remove", None);
+        text_remove.set_enabled(false);
+        text_remove.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().remove_selected_text()
+        ));
+        self.add_action(&text_remove);
 
         let adjust_reset = gio::SimpleAction::new("adjust-reset", None);
         adjust_reset.set_enabled(false);
@@ -2403,7 +2690,9 @@ impl Window {
                 action.set_enabled(enabled);
             }
         }
-        imp.strip.set_visible(enabled);
+        // Told, not set: a folder rescan rebuilds the strip, and it must not
+        // be able to put itself back on screen while the editor is open.
+        imp.strip.set_allowed(enabled);
     }
 
     /// Leave the editor, throwing the session away. Asked for out loud first:

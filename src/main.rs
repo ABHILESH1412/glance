@@ -8,6 +8,7 @@ mod image_view;
 mod loader;
 mod playlist;
 mod scene;
+mod text;
 mod thumbs;
 mod window;
 
@@ -117,6 +118,10 @@ fn load_css() {
         .image-actions button.delete-action:hover {
             background: alpha(@destructive_bg_color, 0.32);
         }
+        /* The three style toggles show what they do rather than spelling it. */
+        button.text-bold label { font-weight: bold; }
+        button.text-italic label { font-style: italic; }
+        button.text-underline label { text-decoration-line: underline; }
         .image-actions button:disabled {
             color: alpha(@window_fg_color, 0.35);
             background: alpha(@window_fg_color, 0.06);

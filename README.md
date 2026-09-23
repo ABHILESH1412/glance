@@ -99,6 +99,13 @@ approximated.
   line under the picker for what a format will cost you — JPEG has no transparency, GIF
   is 256 colours and one frame. A format with a limit of its own says so before the file
   dialog opens rather than after: ICO refuses anything past 256 × 256
+- **Text** laid over the picture: type it, pick the family, the size in image pixels,
+  bold, italic, underline, the colour of the letters and the colour of the plate behind
+  them — set that one's opacity to zero for no plate. Drag it anywhere on the picture;
+  add as many lines as you like and click one to select it
+- Text stays text for as long as it is unsaved, so it can be moved, restyled and
+  retyped; the preview on screen and the pixels that get written go through the same
+  layout and the same render nodes, so what you position is what you get
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - **Save** writes the edited image back over the original; **Save As…** writes a copy,
   offering Downloads by default. Nothing touches disk until you ask it to
@@ -217,7 +224,7 @@ cargo test
 Wanted, but not built:
 
 - A quality slider for JPEG and WebP; they are written at the encoder's default
-- Drawing and annotation
+- Freehand drawing and shapes
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
 - Progressive loading for very large images, so a 100MP TIFF appears in stages
@@ -228,6 +235,8 @@ Wanted, but not built:
   export it as a PNG or a JPEG at any size — but pixels cannot be written back as
   shapes, so there is no photograph-to-SVG direction to offer. Exporting an SVG
   unchanged is what Save As is for.
+- Text is positioned against the picture's current size. Resizing afterwards carries it
+  along, but a crop or a rotation applied after the fact will not move it for you.
 - Exporting an animated GIF or WebP writes the frame you are looking at. A still picture
   exported *as* a GIF is fine — it is a single-frame GIF — but nothing here creates
   animation.
