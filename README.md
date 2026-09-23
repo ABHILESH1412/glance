@@ -106,6 +106,16 @@ approximated.
 - Text stays text for as long as it is unsaved, so it can be moved, restyled and
   retyped; the preview on screen and the pixels that get written go through the same
   layout and the same render nodes, so what you position is what you get
+- **Aim for a file size** when exporting — "make this 500 KB", the thing people
+  otherwise upload their photographs to an advertising-funded website for. Tick the box,
+  give a number in KB or MB, and the export works towards it: for JPEG it searches the
+  quality dial for the best-looking file that fits, and scales the picture down only if
+  quality alone cannot get there. Formats with no quality dial can only be met by
+  scaling, and the panel says so
+- The same box handles the opposite problem — a form demanding a *minimum* size. The
+  file is padded up to it with a metadata block the format already has a place for (a
+  JPEG comment, a PNG text chunk), so not a pixel changes and the file stays valid. The
+  panel reports exactly how much filler went in
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - **Save** writes the edited image back over the original; **Save As…** writes a copy,
   offering Downloads by default. Nothing touches disk until you ask it to
@@ -223,7 +233,8 @@ cargo test
 
 Wanted, but not built:
 
-- A quality slider for JPEG and WebP; they are written at the encoder's default
+- A quality slider as such; quality is chosen for you when you aim at a file size, and
+  is the encoder's default otherwise
 - Freehand drawing and shapes
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output

@@ -1,5 +1,6 @@
 mod adjust;
 mod canvas;
+mod compress;
 mod decoders;
 mod export;
 mod filmstrip;

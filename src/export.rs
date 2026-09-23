@@ -132,7 +132,7 @@ pub fn write(image: &DynamicImage, destination: &Path) -> Result<(), String> {
     result.map_err(|error| format!("Could not save: {error}"))
 }
 
-fn flatten(image: &DynamicImage) -> image::RgbImage {
+pub(crate) fn flatten(image: &DynamicImage) -> image::RgbImage {
     let rgba = image.to_rgba8();
     let mut out = image::RgbImage::new(rgba.width(), rgba.height());
     for (x, y, pixel) in rgba.enumerate_pixels() {

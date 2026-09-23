@@ -15,6 +15,7 @@ use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::adjust::{self, Adjustments};
+use crate::compress;
 use crate::image_view::ImageView;
 use crate::filmstrip::{self, FilmStrip};
 use crate::loader;
@@ -96,6 +97,10 @@ mod imp {
         pub natural_label: gtk::Label,
         pub format_drop: gtk::DropDown,
         pub format_note: gtk::Label,
+        pub size_wanted: gtk::CheckButton,
+        pub size_value: gtk::SpinButton,
+        pub size_unit: gtk::DropDown,
+        pub size_note: gtk::Label,
         pub text_toggle: gtk::ToggleButton,
         pub text_options: gtk::Box,
         pub text_entry: gtk::Entry,
@@ -184,6 +189,10 @@ mod imp {
                 natural_label: gtk::Label::new(None),
                 format_drop: gtk::DropDown::default(),
                 format_note: gtk::Label::new(None),
+                size_wanted: gtk::CheckButton::with_label("Aim for a file size"),
+                size_value: gtk::SpinButton::with_range(1.0, 99_999.0, 10.0),
+                size_unit: gtk::DropDown::default(),
+                size_note: gtk::Label::new(None),
                 text_toggle: gtk::ToggleButton::with_label("Text"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
@@ -878,7 +887,10 @@ impl Window {
                 move |result| match result {
                     Ok(file) => {
                         if let Some(path) = file.path() {
-                            window.write_edited(path, false);
+                            match window.size_wanted() {
+                                Some(wanted) => window.write_fitted(path, wanted),
+                                None => window.write_edited(path, false),
+                            }
                         }
                     }
                     Err(error) => {
@@ -922,6 +934,78 @@ impl Window {
                 }
             ),
         );
+    }
+
+    /// Export with a file size to hit, rather than whatever the encoder's
+    /// defaults produce.
+    fn write_fitted(&self, destination: PathBuf, wanted: u64) {
+        self.load_working();
+        let Some(image) = self.rendered() else {
+            self.toast("Nothing to export yet.");
+            return;
+        };
+        let Some(target) = export::TARGETS.get(self.imp().format_drop.selected() as usize) else {
+            return;
+        };
+        let original = (image.width(), image.height());
+        self.imp()
+            .size_note
+            .set_text(&format!("Working towards {}…", compress::describe(wanted)));
+
+        let (sender, receiver) = async_channel::bounded(1);
+        let path = destination.clone();
+        std::thread::spawn(move || {
+            // A dozen or so encodes of a full-size picture: nowhere near the
+            // main loop.
+            let outcome = compress::fit_to_size(&image, target, wanted).and_then(|fit| {
+                std::fs::write(&path, &fit.bytes)
+                    .map_err(|error| format!("Could not write the file: {error}"))
+                    .map(|()| fit)
+            });
+            let _ = sender.send_blocking(outcome);
+        });
+
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok(fit)) => {
+                        let name = destination
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        // Say exactly what it took, including anything that is
+                        // not picture: padding is honest or it is nothing.
+                        let mut how = Vec::new();
+                        if let Some(quality) = fit.quality {
+                            how.push(format!("quality {quality}"));
+                        }
+                        if (fit.width, fit.height) != original {
+                            how.push(format!("scaled to {} × {}", fit.width, fit.height));
+                        }
+                        if fit.padding > 0 {
+                            how.push(format!("{} of padding", compress::describe(fit.padding)));
+                        }
+                        let detail = if how.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — {}", how.join(", "))
+                        };
+                        window.imp().size_note.set_text(&format!(
+                            "Wrote {}{detail}.",
+                            compress::describe(fit.size())
+                        ));
+                        window.toast(&format!("Exported {name}"));
+                    }
+                    Ok(Err(message)) => {
+                        window.imp().size_note.set_text(&message);
+                        window.toast(&message);
+                    }
+                    Err(_) => window.toast("The exporter stopped unexpectedly."),
+                }
+            }
+        ));
     }
 
     /// `in_place` means this became the file on screen, so the session carries
@@ -1374,7 +1458,10 @@ impl Window {
         drop.connect_selected_notify(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |_| window.describe_format()
+            move |_| {
+                window.describe_format();
+                window.describe_target_size();
+            }
         ));
         let export_button = gtk::Button::with_label("Export…");
         export_button.set_action_name(Some("win.export"));
@@ -1387,9 +1474,60 @@ impl Window {
         imp.format_note.add_css_class("dim-label");
         imp.format_note.set_xalign(0.0);
         imp.format_note.set_wrap(true);
+        // Both notes go above every control in this block. Everything from
+        // here down is anchored to the bottom of the panel, so a note that
+        // grows to a second line would otherwise slide the controls above it
+        // out from under the pointer. Only the notes themselves move.
         panel.append(&imp.format_note);
+
+        // Aiming at a file size: the thing people otherwise go to an
+        // advertising-funded website for.
+        imp.size_wanted.set_tooltip_text(Some(
+            "Squeeze the file down to this, or pad it up to it if it is smaller",
+        ));
+        imp.size_wanted.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.describe_target_size()
+        ));
+        imp.size_value.set_value(500.0);
+        imp.size_value.set_width_chars(5);
+        imp.size_value.set_hexpand(true);
+        imp.size_value.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.describe_target_size()
+        ));
+        let units = gtk::StringList::new(&["KB", "MB"]);
+        imp.size_unit.set_model(Some(&units));
+        imp.size_unit.set_selected(0);
+        imp.size_unit.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.describe_target_size()
+        ));
+        for control in [
+            imp.size_value.upcast_ref::<gtk::Widget>(),
+            imp.size_unit.upcast_ref::<gtk::Widget>(),
+        ] {
+            imp.size_wanted
+                .bind_property("active", control, "sensitive")
+                .sync_create()
+                .build();
+        }
+        let size_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        size_row.append(&imp.size_value);
+        size_row.append(&imp.size_unit);
+        imp.size_note.add_css_class("dim-label");
+        imp.size_note.set_xalign(0.0);
+        imp.size_note.set_wrap(true);
+
+        panel.append(&imp.size_note);
+        panel.append(&imp.size_wanted);
+        panel.append(&size_row);
         panel.append(&export_row);
         self.describe_format();
+        self.describe_target_size();
 
         // The way out that keeps nothing. Above the save buttons rather than
         // beside them, so leaving and committing are never one slip apart.
@@ -1569,6 +1707,58 @@ impl Window {
             background: imp.text_background.rgba(),
             ..Default::default()
         }
+    }
+
+    /// The size an export should aim for, if one was asked for.
+    fn size_wanted(&self) -> Option<u64> {
+        let imp = self.imp();
+        if !imp.size_wanted.is_active() {
+            return None;
+        }
+        let unit = if imp.size_unit.selected() == 1 {
+            compress::MB
+        } else {
+            compress::KB
+        };
+        Some((imp.size_value.value().max(1.0) as u64).saturating_mul(unit))
+    }
+
+    /// What aiming at a size will mean for this format, or what the last
+    /// attempt achieved.
+    fn describe_target_size(&self) {
+        let imp = self.imp();
+        let Some(wanted) = self.size_wanted() else {
+            let current = imp
+                .current
+                .borrow()
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|meta| meta.len());
+            imp.size_note.set_visible(current.is_some());
+            if let Some(size) = current {
+                imp.size_note
+                    .set_text(&format!("This file is {} on disk.", compress::describe(size)));
+            }
+            return;
+        };
+        let lossy = export::TARGETS
+            .get(imp.format_drop.selected() as usize)
+            .map(|target| matches!(target.extension, "jpg" | "jpeg"))
+            .unwrap_or(false);
+        imp.size_note.set_visible(true);
+        imp.size_note.set_text(&if lossy {
+            format!(
+                "Quality will be dialled to land just under {}, and the picture \
+                 scaled down only if quality alone cannot get there.",
+                compress::describe(wanted)
+            )
+        } else {
+            format!(
+                "This format has no quality dial, so {} can only be reached by \
+                 scaling the picture down. JPEG will hold more detail at a size.",
+                compress::describe(wanted)
+            )
+        });
     }
 
     /// What the chosen format will cost the picture, if anything.
@@ -2435,6 +2625,7 @@ impl Window {
                         window.imp().edit_button.set_sensitive(true);
                         window.imp().copy_button.set_sensitive(true);
                         window.imp().resize_button.set_sensitive(true);
+                        window.describe_target_size();
                         window.imp().action_bar.set_visible(true);
                         // The canvas drops the old selection, so put the panel
                         // back in step with it.
