@@ -59,6 +59,10 @@ pub fn apply(
     Ok(live.adjust.bake(image))
 }
 
+/// Where the quality dial sits when nobody has moved it. High enough that a
+/// photograph keeps its detail, low enough that the file is not absurd.
+pub const DEFAULT_QUALITY: u8 = 85;
+
 /// A format an edited image can be written to.
 ///
 /// Every entry here is a *raster* format, and that is the whole rule about what
@@ -75,6 +79,15 @@ pub struct Target {
     pub max_dimension: Option<u32>,
     /// Shown beside the name when the format costs the picture something.
     pub caveat: Option<&'static str>,
+}
+
+impl Target {
+    /// Whether this format has a quality to choose. Only JPEG does here: the
+    /// others in the list are lossless, and this build writes WebP losslessly
+    /// too.
+    pub fn lossy(&self) -> bool {
+        matches!(self.extension, "jpg" | "jpeg")
+    }
 }
 
 /// Ordered by how likely someone is to want them, not alphabetically.
@@ -115,21 +128,36 @@ pub fn open(source: &Path) -> Result<DynamicImage, String> {
     Ok(DynamicImage::ImageRgba8(buffer))
 }
 
-pub fn write(image: &DynamicImage, destination: &Path) -> Result<(), String> {
+/// Write the image out. `quality` is honoured by the formats that have a dial;
+/// the rest are lossless and ignore it.
+pub fn write(
+    image: &DynamicImage,
+    destination: &Path,
+    quality: Option<u8>,
+) -> Result<(), String> {
     let extension = destination
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("png")
         .to_ascii_lowercase();
 
-    let result = if matches!(extension.as_str(), "jpg" | "jpeg") {
+    if matches!(extension.as_str(), "jpg" | "jpeg") {
         // JPEG cannot carry transparency, so anything a freehand cut removed
         // would otherwise come out black.
-        DynamicImage::ImageRgb8(flatten(image)).save(destination)
-    } else {
-        image.save(destination)
-    };
-    result.map_err(|error| format!("Could not save: {error}"))
+        let rgb = flatten(image);
+        let file = std::fs::File::create(destination)
+            .map_err(|error| format!("Could not save: {error}"))?;
+        let mut writer = std::io::BufWriter::new(file);
+        return image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut writer,
+            quality.unwrap_or(DEFAULT_QUALITY),
+        )
+        .encode_image(&rgb)
+        .map_err(|error| format!("Could not save: {error}"));
+    }
+    image
+        .save(destination)
+        .map_err(|error| format!("Could not save: {error}"))
 }
 
 pub(crate) fn flatten(image: &DynamicImage) -> image::RgbImage {
@@ -324,7 +352,7 @@ mod format_tests {
         for target in TARGETS {
             let limit = target.max_dimension.unwrap_or(64).min(64);
             let path = dir.join(format!("probe.{}", target.extension));
-            let result = write(&sample(limit, limit), &path);
+            let result = write(&sample(limit, limit), &path, Some(DEFAULT_QUALITY));
             assert!(result.is_ok(), "{} failed: {:?}", target.label, result);
             let written = image::open(&path).expect("what we wrote should read back");
             assert_eq!((written.width(), written.height()), (limit, limit));

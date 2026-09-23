@@ -61,13 +61,9 @@ pub fn describe(bytes: u64) -> String {
     }
 }
 
-fn has_quality_dial(target: &Target) -> bool {
-    matches!(target.extension, "jpg" | "jpeg")
-}
-
 fn encode(image: &DynamicImage, target: &Target, quality: u8) -> Result<Vec<u8>, String> {
     let mut out = std::io::Cursor::new(Vec::new());
-    if has_quality_dial(target) {
+    if target.lossy() {
         // JPEG cannot carry transparency, so flatten first for the same
         // reason the ordinary writer does.
         let rgb = crate::export::flatten(image);
@@ -90,7 +86,7 @@ fn search_quality(
     target: &Target,
     wanted: u64,
 ) -> Result<Option<Fit>, String> {
-    if !has_quality_dial(target) {
+    if !target.lossy() {
         let bytes = encode(image, target, MAX_QUALITY)?;
         return Ok((bytes.len() as u64 <= wanted).then(|| Fit {
             width: image.width(),
@@ -146,7 +142,7 @@ pub fn fit_to_size(image: &DynamicImage, target: &Target, wanted: u64) -> Result
         return Ok(Fit {
             width,
             height,
-            quality: has_quality_dial(target).then_some(MAX_QUALITY),
+            quality: target.lossy().then_some(MAX_QUALITY),
             padding,
             bytes,
         });

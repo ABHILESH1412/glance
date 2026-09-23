@@ -106,6 +106,10 @@ approximated.
 - Text stays text for as long as it is unsaved, so it can be moved, restyled and
   retyped; the preview on screen and the pixels that get written go through the same
   layout and the same render nodes, so what you position is what you get
+- A **quality** dial for the lossy formats, defaulting to 85. It appears only for
+  formats that have one — the lossless ones would ignore it — and steps aside when a
+  file size is being aimed at, since the search is choosing quality for you; when that
+  finishes, the dial moves to show what it settled on
 - **Aim for a file size** when exporting — "make this 500 KB", the thing people
   otherwise upload their photographs to an advertising-funded website for. Tick the box,
   give a number in KB or MB, and the export works towards it: for JPEG it searches the
@@ -117,8 +121,9 @@ approximated.
   JPEG comment, a PNG text chunk), so not a pixel changes and the file stays valid. The
   panel reports exactly how much filler went in
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
-- **Save** writes the edited image back over the original; **Save As…** writes a copy,
-  offering Downloads by default. Nothing touches disk until you ask it to
+- Two ways out with pixels, not three: **Save** writes the edited image back over the
+  original, and **Export…** writes a copy somewhere else, in the format, at the size and
+  at the quality you choose. Nothing touches disk until you ask it to
 - **Cancel**, or `Esc`, leaves the editor and asks first, so a session several edits
   deep is never thrown away by a stray key
 - Editing is modal on purpose: the filmstrip, the arrow keys and Delete all switch off
@@ -183,7 +188,7 @@ approximated.
 | `Ctrl+R` | Resize |
 | `Enter` | Apply the crop |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo an edit |
-| `Ctrl+S` / `Ctrl+Shift+S` | Save in place / Save As… |
+| `Ctrl+S` / `Ctrl+Shift+S` | Save in place / Export… |
 | `Ctrl+C` | Copy the image to the clipboard |
 | `F11` / `Ctrl+F` | Fullscreen |
 | `Delete` | Delete the current image |
@@ -233,8 +238,6 @@ cargo test
 
 Wanted, but not built:
 
-- A quality slider as such; quality is chosen for you when you aim at a file size, and
-  is the encoder's default otherwise
 - Freehand drawing and shapes
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
@@ -244,8 +247,8 @@ Wanted, but not built:
 
 - **SVG is not an export format.** A drawing can be written as pixels — open an SVG and
   export it as a PNG or a JPEG at any size — but pixels cannot be written back as
-  shapes, so there is no photograph-to-SVG direction to offer. Exporting an SVG
-  unchanged is what Save As is for.
+  shapes, so there is no photograph-to-SVG direction to offer. To keep an SVG as an SVG,
+  copy the file.
 - Text is positioned against the picture's current size. Resizing afterwards carries it
   along, but a crop or a rotation applied after the fact will not move it for you.
 - Exporting an animated GIF or WebP writes the frame you are looking at. A still picture

@@ -184,7 +184,7 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.redo", idle: &["<Primary><Shift>z", "<Primary>y"], typing: &[] },
     Accel { action: "win.crop-apply", idle: &["Return", "KP_Enter"], typing: &[] },
     Accel { action: "win.save", idle: &["<Primary>s"], typing: &["<Primary>s"] },
-    Accel { action: "win.save-as", idle: &["<Primary><Shift>s"], typing: &["<Primary><Shift>s"] },
+    Accel { action: "win.export", idle: &["<Primary><Shift>s"], typing: &["<Primary><Shift>s"] },
     Accel { action: "win.flip-horizontal", idle: &["<Primary>h"], typing: &[] },
     Accel { action: "win.flip-vertical", idle: &["<Primary>j"], typing: &[] },
 ];

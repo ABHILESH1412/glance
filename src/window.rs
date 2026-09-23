@@ -101,6 +101,8 @@ mod imp {
         pub size_value: gtk::SpinButton,
         pub size_unit: gtk::DropDown,
         pub size_note: gtk::Label,
+        pub quality_row: gtk::Box,
+        pub quality_scale: gtk::Scale,
         pub text_toggle: gtk::ToggleButton,
         pub text_options: gtk::Box,
         pub text_entry: gtk::Entry,
@@ -193,6 +195,8 @@ mod imp {
                 size_value: gtk::SpinButton::with_range(1.0, 99_999.0, 10.0),
                 size_unit: gtk::DropDown::default(),
                 size_note: gtk::Label::new(None),
+                quality_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+                quality_scale: gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0),
                 text_toggle: gtk::ToggleButton::with_label("Text"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
@@ -301,8 +305,8 @@ impl Window {
 
         let edit_section = gio::Menu::new();
         edit_section.append(Some("_Edit…"), Some("win.edit"));
-        edit_section.append(Some("_Save a Copy"), Some("win.save"));
-        edit_section.append(Some("Save _As…"), Some("win.save-as"));
+        edit_section.append(Some("_Save"), Some("win.save"));
+        edit_section.append(Some("_Export…"), Some("win.export"));
 
         let clipboard_section = gio::Menu::new();
         clipboard_section.append(Some("_Copy Image"), Some("win.copy"));
@@ -780,17 +784,6 @@ impl Window {
         glib::user_special_dir(glib::UserDirectory::Downloads).unwrap_or_else(glib::home_dir)
     }
 
-    fn suggested_name(source: &Path) -> String {
-        let stem = source
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "image".to_string());
-        let extension = source
-            .extension()
-            .map(|e| e.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "png".to_string());
-        format!("{stem}-edited.{extension}")
-    }
 
     /// Put the picture on the clipboard exactly as it is on screen, edits and
     /// all, so pasting elsewhere gives what the viewer is showing.
@@ -903,39 +896,6 @@ impl Window {
         );
     }
 
-    fn save_as(&self) {
-        let Some(source) = self.imp().current.borrow().clone() else {
-            return;
-        };
-        let dialog = gtk::FileDialog::builder()
-            .title("Save Edited Image")
-            .modal(true)
-            .initial_name(Self::suggested_name(&source))
-            .initial_folder(&gio::File::for_path(Self::downloads_dir()))
-            .build();
-
-        dialog.save(
-            Some(self),
-            gio::Cancellable::NONE,
-            glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |result| match result {
-                    Ok(file) => {
-                        if let Some(path) = file.path() {
-                            window.write_edited(path, false);
-                        }
-                    }
-                    Err(error) => {
-                        if !error.matches(gtk::DialogError::Dismissed) {
-                            window.toast(&format!("Could not save: {error}"));
-                        }
-                    }
-                }
-            ),
-        );
-    }
-
     /// Export with a file size to hit, rather than whatever the encoder's
     /// defaults produce.
     fn write_fitted(&self, destination: PathBuf, wanted: u64) {
@@ -980,6 +940,8 @@ impl Window {
                         let mut how = Vec::new();
                         if let Some(quality) = fit.quality {
                             how.push(format!("quality {quality}"));
+                            // The search knows what the dial should have said.
+                            window.imp().quality_scale.set_value(f64::from(quality));
                         }
                         if (fit.width, fit.height) != original {
                             how.push(format!("scaled to {} × {}", fit.width, fit.height));
@@ -1020,9 +982,10 @@ impl Window {
         let (sender, receiver) = async_channel::bounded(1);
         let target = destination.clone();
         let encoded = image.clone();
+        let quality = self.quality();
         std::thread::spawn(move || {
             // Encoding a large image is slow enough to matter.
-            let _ = sender.send_blocking(export::write(&encoded, &target));
+            let _ = sender.send_blocking(export::write(&encoded, &target, quality));
         });
 
         glib::spawn_future_local(glib::clone!(
@@ -1464,6 +1427,10 @@ impl Window {
             }
         ));
         let export_button = gtk::Button::with_label("Export…");
+        export_button.set_tooltip_text(Some(
+            "Write a copy somewhere else, in the format and at the size chosen \
+             here (Ctrl+Shift+S)",
+        ));
         export_button.set_action_name(Some("win.export"));
         export_row.append(drop);
         export_row.append(&export_button);
@@ -1480,6 +1447,23 @@ impl Window {
         // out from under the pointer. Only the notes themselves move.
         panel.append(&imp.format_note);
 
+        // How hard the lossy formats squeeze, when no size is being aimed at.
+        let quality_caption = gtk::Label::new(Some("Quality"));
+        quality_caption.add_css_class("dim-label");
+        let quality = &imp.quality_scale;
+        quality.set_draw_value(true);
+        quality.set_value_pos(gtk::PositionType::Right);
+        quality.set_digits(0);
+        quality.set_hexpand(true);
+        quality.set_value(f64::from(export::DEFAULT_QUALITY));
+        quality.set_tooltip_text(Some(
+            "How much detail JPEG keeps. Higher is a bigger file; the lossless \
+             formats ignore it.",
+        ));
+        imp.quality_row.append(&quality_caption);
+        imp.quality_row.append(quality);
+        panel.append(&imp.quality_row);
+
         // Aiming at a file size: the thing people otherwise go to an
         // advertising-funded website for.
         imp.size_wanted.set_tooltip_text(Some(
@@ -1490,6 +1474,7 @@ impl Window {
             self,
             move |_| window.describe_target_size()
         ));
+        // Visible only once the panel knows the format; set after both exist.
         imp.size_value.set_value(500.0);
         imp.size_value.set_width_chars(5);
         imp.size_value.set_hexpand(true);
@@ -1536,17 +1521,16 @@ impl Window {
         cancel.set_action_name(Some("win.edit-cancel"));
         panel.append(&cancel);
 
-        let save_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        save_row.set_homogeneous(true);
+        // Two ways out with pixels, not three: write back over the original,
+        // or write a copy with the format, size and place of your choosing.
+        // Export covers everything the old Save As did and more.
         let save = gtk::Button::with_label("Save");
         save.add_css_class("suggested-action");
-        save.set_tooltip_text(Some("Write a copy to your Downloads folder"));
+        save.set_tooltip_text(Some(
+            "Write these changes back over the original file (Ctrl+S)",
+        ));
         save.set_action_name(Some("win.save"));
-        let save_as = gtk::Button::with_label("Save As…");
-        save_as.set_action_name(Some("win.save-as"));
-        save_row.append(&save);
-        save_row.append(&save_as);
-        panel.append(&save_row);
+        panel.append(&save);
 
         // Clicking or dragging a piece of text has to reach the panel, the
         // same way typing in the panel reaches the picture.
@@ -1723,10 +1707,33 @@ impl Window {
         Some((imp.size_value.value().max(1.0) as u64).saturating_mul(unit))
     }
 
+    /// The quality to write with, where the format has a dial and nothing
+    /// else is choosing it.
+    fn quality(&self) -> Option<u8> {
+        let imp = self.imp();
+        self.chosen_target()
+            .filter(|target| target.lossy())
+            .map(|_| imp.quality_scale.value().round().clamp(1.0, 100.0) as u8)
+    }
+
+    fn chosen_target(&self) -> Option<&'static export::Target> {
+        export::TARGETS.get(self.imp().format_drop.selected() as usize)
+    }
+
+    /// The dial is only meaningful for a lossy format, and only when a size
+    /// target is not already choosing the quality for you.
+    fn update_quality_row(&self) {
+        let imp = self.imp();
+        let lossy = self.chosen_target().map(|t| t.lossy()).unwrap_or(false);
+        imp.quality_row.set_visible(lossy);
+        imp.quality_scale.set_sensitive(!imp.size_wanted.is_active());
+    }
+
     /// What aiming at a size will mean for this format, or what the last
     /// attempt achieved.
     fn describe_target_size(&self) {
         let imp = self.imp();
+        self.update_quality_row();
         let Some(wanted) = self.size_wanted() else {
             let current = imp
                 .current
@@ -1741,10 +1748,7 @@ impl Window {
             }
             return;
         };
-        let lossy = export::TARGETS
-            .get(imp.format_drop.selected() as usize)
-            .map(|target| matches!(target.extension, "jpg" | "jpeg"))
-            .unwrap_or(false);
+        let lossy = self.chosen_target().map(|target| target.lossy()).unwrap_or(false);
         imp.size_note.set_visible(true);
         imp.size_note.set_text(&if lossy {
             format!(
@@ -2337,13 +2341,6 @@ impl Window {
         ));
         self.add_action(&save);
 
-        let save_as = gio::SimpleAction::new("save-as", None);
-        save_as.connect_activate(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_, _| window.save_as()
-        ));
-        self.add_action(&save_as);
 
         let copy = gio::SimpleAction::new("copy", None);
         copy.connect_activate(glib::clone!(
