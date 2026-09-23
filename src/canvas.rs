@@ -650,6 +650,30 @@ impl ImageCanvas {
 
     // -- zoom -------------------------------------------------------------
 
+    /// Shift the view by a screen-space delta, following the fingers exactly.
+    ///
+    /// No easing: a two-finger scroll is a direct manipulation, and smoothing
+    /// it would feel like dragging the picture through treacle.
+    pub fn pan_by(&self, dx: f64, dy: f64) {
+        let imp = self.imp();
+        if imp.texture.borrow().is_none() || !self.is_pannable() {
+            return;
+        }
+        let (scale, rotation) = (imp.target_scale.get(), imp.target_rotation.get());
+        let (cx, cy) = imp.ideal_centre.get();
+        // Scrolling down moves the view down the picture, so the picture goes up.
+        let ideal = (cx - dx, cy - dy);
+        imp.ideal_centre.set(ideal);
+        imp.target_centre.set(self.clamp_centre(ideal, scale, rotation));
+        if let Some(tick) = imp.tick.take() {
+            tick.remove();
+        }
+        imp.scale.set(scale);
+        imp.rotation.set(rotation);
+        imp.centre.set(imp.target_centre.get());
+        self.settle();
+    }
+
     pub fn zoom_by(&self, factor: f64, anchor: Option<(f64, f64)>) {
         let anchor = anchor.unwrap_or_else(|| self.viewport_centre());
         self.set_scale_at(self.imp().target_scale.get() * factor, anchor, true);
@@ -2323,19 +2347,44 @@ impl ImageCanvas {
     }
 
     fn scroll_controller(&self) -> gtk::EventControllerScroll {
-        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+        // Both axes: a touchpad scrolls sideways too, and that should move the
+        // picture sideways rather than be thrown away.
+        let scroll =
+            gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
         scroll.connect_scroll(glib::clone!(
             #[weak(rename_to = canvas)]
             self,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |_, _, dy| {
+            move |controller, dx, dy| {
                 if !canvas.has_image() {
                     return glib::Propagation::Proceed;
                 }
+
+                // A touchpad reports how far the fingers moved across a
+                // surface; a wheel reports notches. That is the difference
+                // between "move the picture" and "change the scale", and it is
+                // what the hardware already tells us — no guessing needed.
+                let surface = controller
+                    .current_event()
+                    .and_then(|event| event.downcast::<gdk::ScrollEvent>().ok())
+                    .is_some_and(|event| event.unit() == gdk::ScrollUnit::Surface);
+                // Ctrl with a two-finger scroll is the usual way to zoom on a
+                // touchpad without pinching, so honour that too.
+                let zooming = controller
+                    .current_event_state()
+                    .contains(gdk::ModifierType::CONTROL_MASK);
+
+                if surface && !zooming {
+                    canvas.pan_by(dx, dy);
+                    return glib::Propagation::Stop;
+                }
                 // Exponential, so a touchpad's fractional deltas and a mouse
                 // wheel's whole notches both feel proportional.
-                canvas.zoom_by((-dy * WHEEL_STEP).exp(), Some(canvas.imp().pointer.get()));
+                // A touchpad's deltas are far smaller than a notch, so the
+                // same step would make Ctrl-scroll crawl.
+                let step = if surface { WHEEL_STEP / 8.0 } else { WHEEL_STEP };
+                canvas.zoom_by((-dy * step).exp(), Some(canvas.imp().pointer.get()));
                 glib::Propagation::Stop
             }
         ));

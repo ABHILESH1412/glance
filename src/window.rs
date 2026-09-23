@@ -857,6 +857,11 @@ impl Window {
     }
 
     /// Save writes over the image being viewed, which is what Save means.
+    /// Save writes over the file being viewed, so it asks first.
+    ///
+    /// The original is gone once this runs — there is no copy kept and nothing
+    /// to undo it with — which is worth one click to be sure of, and the
+    /// wording points at Export for anyone who wanted a copy instead.
     fn save_default(&self) {
         let Some(source) = self.imp().current.borrow().clone() else {
             return;
@@ -865,7 +870,37 @@ impl Window {
             self.toast("No changes to save.");
             return;
         }
-        self.write_edited(source, true);
+        let name = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "this image".to_string());
+
+        let dialog = adw::AlertDialog::new(
+            Some("Replace the original?"),
+            Some(&format!(
+                "“{name}” will be overwritten with these edits, and the original \
+                 cannot be brought back. Export writes a copy instead."
+            )),
+        );
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("replace", "Replace");
+        dialog.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
+        // Escape and clicking away both leave the file alone.
+        dialog.set_default_response(Some("cancel"));
+        dialog.set_close_response("cancel");
+        dialog.connect_response(
+            None,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, response| {
+                    if response == "replace" {
+                        window.write_edited(source.clone(), true);
+                    }
+                }
+            ),
+        );
+        dialog.present(Some(self));
     }
 
     /// Write a copy in the chosen format, at whatever size the resize tool is

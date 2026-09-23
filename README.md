@@ -46,6 +46,10 @@ approximated.
 - **Zoom anchors on the pointer** — the pixel under the cursor stays under the cursor,
   which makes wheel-zoom feel like moving a magnifier rather than working a slider
 - Click and drag to pan when zoomed in
+- **Two fingers on a touchpad pan; the wheel zooms.** The hardware says which it is —
+  a touchpad reports how far the fingers moved across a surface, a wheel reports
+  notches — so there is no guessing and no modifier to remember. Pinch zooms, and so
+  does `Ctrl` with two fingers for anyone who prefers it
 - Smooth, animated zoom and pan; scale interpolates geometrically, so 1×→2× feels like
   2×→4×
 - Double-click toggles between fit and 100%
@@ -129,7 +133,9 @@ approximated.
   panel reports exactly how much filler went in
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - Two ways out with pixels, not three: **Save** writes the edited image back over the
-  original, and **Export…** writes a copy somewhere else, in the format, at the size and
+  original — and asks first, because the original cannot be brought back and the
+  wording points at Export for anyone who wanted a copy — and **Export…** writes a copy
+  somewhere else, in the format, at the size and
   at the quality you choose. Nothing touches disk until you ask it to
 - **Cancel**, or `Esc`, leaves the editor and asks first, so a session several edits
   deep is never thrown away by a stray key
