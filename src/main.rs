@@ -1,3 +1,4 @@
+mod adjust;
 mod canvas;
 mod decoders;
 mod export;

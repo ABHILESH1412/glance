@@ -12,35 +12,34 @@ use std::path::Path;
 
 use image::{DynamicImage, Rgba, RgbaImage};
 
-use crate::canvas::CropSelection;
+use crate::canvas::{CropSelection, LiveEdits};
 use crate::loader;
 
-/// Apply the live transforms, and optionally a crop, to an image already in
-/// memory.
+/// Apply the live edits, and optionally a crop, to an image already in memory.
 ///
 /// Order matters and mirrors what the view does — flip, then rotate, then cut.
 /// That is what puts the crop rectangle, which is recorded in display space,
-/// into the same coordinates as the pixels it is cutting.
+/// into the same coordinates as the pixels it is cutting. Tone comes last
+/// because it is per-pixel and commutes with all of it, so it may as well run
+/// on the fewest pixels.
 pub fn apply(
     mut image: DynamicImage,
-    rotation: f64,
-    flip_h: bool,
-    flip_v: bool,
+    live: LiveEdits,
     crop: Option<&CropSelection>,
     display: (f64, f64),
 ) -> Result<DynamicImage, String> {
-    if flip_h {
+    if live.flip_h {
         image = image.fliph();
     }
-    if flip_v {
+    if live.flip_v {
         image = image.flipv();
     }
-    image = rotate(image, rotation);
+    image = rotate(image, live.rotation);
 
-    match crop {
-        Some(crop) => cut(image, crop, display),
-        None => Ok(image),
+    if let Some(crop) = crop {
+        image = cut(image, crop, display)?;
     }
+    Ok(live.adjust.bake(image))
 }
 
 /// Decode a file into the buffer that editing works on.

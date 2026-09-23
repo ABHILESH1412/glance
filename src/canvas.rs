@@ -17,6 +17,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
+use crate::adjust::Adjustments;
 use crate::decoders::svg;
 use crate::loader::VectorSource;
 
@@ -46,6 +47,10 @@ mod imp {
         /// apart is what lets an SVG be re-rendered without disturbing the view.
         pub logical: Cell<(f64, f64)>,
         pub vector: RefCell<Option<Arc<VectorSource>>>,
+        /// Tone controls, live. Kept here rather than in the working pixels so
+        /// dragging a slider is a GPU colour matrix instead of a pass over
+        /// every pixel of a large photograph.
+        pub adjust: Cell<Adjustments>,
         /// The drawing as GTK render nodes, when it could be translated.
         ///
         /// This is the fast path and it makes the whole tile machinery below
@@ -222,6 +227,25 @@ pub struct Tile {
     pub scale: f64,
 }
 
+/// Everything the view is showing that is not yet in the pixels.
+///
+/// Travelling together keeps the exporter honest: four loose arguments of two
+/// bools and a float are easy to hand over in the wrong order.
+#[derive(Clone, Copy, Default)]
+pub struct LiveEdits {
+    pub rotation: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub adjust: Adjustments,
+}
+
+impl LiveEdits {
+    /// Nothing pending, so the working pixels are already what is on screen.
+    pub fn is_identity(&self) -> bool {
+        self.rotation.abs() < 0.01 && !self.flip_h && !self.flip_v && self.adjust.is_identity()
+    }
+}
+
 /// One unit of work for the vector renderer.
 #[derive(Clone, Copy)]
 pub struct RenderJob {
@@ -356,11 +380,36 @@ impl ImageCanvas {
         self.reflow();
     }
 
+    /// What the view is showing on top of the working pixels.
+    pub fn live_edits(&self) -> LiveEdits {
+        LiveEdits {
+            rotation: self.rotation(),
+            flip_h: self.flip_horizontal(),
+            flip_v: self.flip_vertical(),
+            adjust: self.adjustments(),
+        }
+    }
+
+    pub fn adjustments(&self) -> Adjustments {
+        self.imp().adjust.get()
+    }
+
+    /// Show the image with different tone. Nothing is recomputed: the values
+    /// ride along until something asks for baked pixels.
+    pub fn set_adjustments(&self, adjust: Adjustments) {
+        if self.imp().adjust.get() == adjust {
+            return;
+        }
+        self.imp().adjust.set(adjust);
+        self.queue_draw();
+    }
+
     pub fn set_texture(&self, texture: Option<gdk::Texture>) {
         self.stop_animation();
         let imp = self.imp();
         imp.vector.replace(None);
         imp.scene.replace(None);
+        imp.adjust.set(Adjustments::default());
         imp.tile.replace(None);
         imp.budget_scale.set(f64::INFINITY);
         imp.rendered_scale.set(1.0);
@@ -1356,6 +1405,15 @@ impl ImageCanvas {
             gsk::ScalingFilter::Linear
         };
 
+        // Tone rides on top of whatever is drawn below, so it wraps the image
+        // and nothing else -- the crop overlay must stay the colour it is.
+        let adjust = imp.adjust.get();
+        let toned = !adjust.is_identity();
+        if toned {
+            let (matrix, offset) = adjust.colour_matrix();
+            snapshot.push_color_matrix(&matrix, &offset);
+        }
+
         snapshot.save();
         snapshot.translate(&graphene::Point::new(cx as f32, cy as f32));
         if rotation != 0.0 {
@@ -1388,6 +1446,9 @@ impl ImageCanvas {
             snapshot.append_node(scene);
             snapshot.restore();
             snapshot.restore();
+            if toned {
+                snapshot.pop();
+            }
             self.draw_crop(snapshot);
             return;
         }
@@ -1426,6 +1487,9 @@ impl ImageCanvas {
             None => snapshot.append_scaled_texture(&texture, filter, &base_rect),
         }
         snapshot.restore();
+        if toned {
+            snapshot.pop();
+        }
         self.draw_crop(snapshot);
     }
 

@@ -78,6 +78,15 @@ approximated.
   free, or **freehand**, tracing any shape with the pointer
 - `Enter` applies the crop **to the picture you are looking at**, so the next crop, the
   next rotation and the next flip all build on the result, the way an editor works
+- **Brightness, contrast and saturation**, each on a slider centred on zero. Dragging
+  one is instant whatever the image size, because the preview is a colour matrix the GPU
+  applies as it draws rather than a pass over every pixel; the same numbers are baked
+  into the pixels when you save. Contrast doubles at +100 and halves at -100, and
+  saturation mixes towards the Rec. 709 luma, so desaturating a red does not leave it
+  muddy
+- **Apply** fixes the current slider values into the image so they become an undo step
+  and further edits build on them; **Reset** returns all three to zero. Leaving them
+  unapplied is fine — saving, copying and cropping all carry them along
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - **Save** writes the edited image back over the original; **Save As…** writes a copy,
   offering Downloads by default. Nothing touches disk until you ask it to
@@ -194,7 +203,6 @@ cargo test
 
 Wanted, but not built:
 
-- Basic adjustments: brightness, contrast, saturation
 - Resize and export with a quality slider
 - Convert between formats
 - Drawing and annotation

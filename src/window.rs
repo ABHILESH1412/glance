@@ -14,6 +14,7 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 
+use crate::adjust::{self, Adjustments};
 use crate::image_view::ImageView;
 use crate::filmstrip::{self, FilmStrip};
 use crate::loader;
@@ -33,6 +34,20 @@ pub struct Shown {
     subtitle: String,
 }
 
+/// One tone slider: centred on zero, with a mark there so the neutral point
+/// can be found by feel, and its own number drawn beside it.
+fn tone_scale() -> gtk::Scale {
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, -adjust::RANGE, adjust::RANGE, 1.0);
+    scale.set_draw_value(true);
+    scale.set_value_pos(gtk::PositionType::Right);
+    scale.set_digits(0);
+    scale.add_mark(0.0, gtk::PositionType::Bottom, None);
+    // A range starting at its minimum would show -100 on a picture nothing had
+    // been done to.
+    scale.set_value(0.0);
+    scale
+}
+
 mod imp {
     use super::*;
 
@@ -49,6 +64,11 @@ mod imp {
         pub crop_toggle: gtk::ToggleButton,
         pub crop_options: gtk::Box,
         pub freehand_toggle: gtk::ToggleButton,
+        pub adjust_toggle: gtk::ToggleButton,
+        pub adjust_options: gtk::Box,
+        pub brightness_scale: gtk::Scale,
+        pub contrast_scale: gtk::Scale,
+        pub saturation_scale: gtk::Scale,
         pub crop_size: gtk::Label,
         pub pending_crop: gtk::Label,
         /// Set while pushing state into the panel, so the toggles do not echo
@@ -112,6 +132,11 @@ mod imp {
                 crop_toggle: gtk::ToggleButton::with_label("Crop"),
                 crop_options: gtk::Box::new(gtk::Orientation::Vertical, 8),
                 freehand_toggle: gtk::ToggleButton::with_label("Freehand"),
+                adjust_toggle: gtk::ToggleButton::with_label("Adjust"),
+                adjust_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
+                brightness_scale: tone_scale(),
+                contrast_scale: tone_scale(),
+                saturation_scale: tone_scale(),
                 crop_size: gtk::Label::new(None),
                 pending_crop: gtk::Label::new(None),
                 syncing_panel: Cell::new(false),
@@ -439,33 +464,42 @@ impl Window {
     /// until it is saved.
     fn commit_crop(&self) {
         let imp = self.imp();
-        let canvas = imp.view.canvas();
-        let (Some(crop), Some(display)) = (canvas.crop(), canvas.display_size()) else {
+        let Some(crop) = imp.view.canvas().crop() else {
             return;
         };
-        let Some(working) = imp.working.borrow().clone() else {
-            self.toast("Still preparing this image for editing.");
-            return;
-        };
-        let (rotation, flip_h, flip_v) = (
-            canvas.rotation(),
-            canvas.flip_horizontal(),
-            canvas.flip_vertical(),
-        );
-
         // Put the crop tool away immediately; the pixels follow.
         imp.syncing_panel.set(true);
         imp.crop_toggle.set_active(false);
         imp.freehand_toggle.set_active(false);
         imp.syncing_panel.set(false);
         self.set_cropping(false);
+        self.bake(Some(crop));
+    }
+
+    /// Fold everything pending into the working pixels, so what is on screen
+    /// becomes what the next edit builds on. This is the step that puts an
+    /// edit into the undo history.
+    fn bake(&self, crop: Option<canvas::CropSelection>) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let Some(display) = canvas.display_size() else {
+            return;
+        };
+        let Some(working) = imp.working.borrow().clone() else {
+            self.toast("Still preparing this image for editing.");
+            return;
+        };
+        let live = canvas.live_edits();
+        if live.is_identity() && crop.is_none() {
+            return;
+        }
 
         let (sender, receiver) = async_channel::bounded(1);
         std::thread::spawn(move || {
             // The copy kept for undo is made here rather than on the main loop.
             let previous = working.clone();
-            let result = export::apply(working, rotation, flip_h, flip_v, Some(&crop), display)
-                .map(|cropped| (previous, cropped));
+            let result = export::apply(working, live, crop.as_ref(), display)
+                .map(|baked| (previous, baked));
             let _ = sender.send_blocking(result);
         });
 
@@ -474,9 +508,9 @@ impl Window {
             self,
             async move {
                 match receiver.recv().await {
-                    Ok(Ok((previous, cropped))) => {
+                    Ok(Ok((previous, baked))) => {
                         window.push_history(previous);
-                        window.imp().working.replace(Some(cropped));
+                        window.imp().working.replace(Some(baked));
                         window.show_working();
                         window.update_edit_state();
                     }
@@ -528,6 +562,11 @@ impl Window {
         imp.history.borrow_mut().clear();
         imp.redo.borrow_mut().clear();
         imp.dirty.set(false);
+        // Zero the canvas and the sliders together rather than relying on
+        // whatever replaces the texture next: a slider still reading -50 over
+        // an untouched picture is a lie the next session would inherit.
+        imp.view.canvas().set_adjustments(Adjustments::default());
+        self.sync_tone_panel();
         self.update_edit_state();
     }
 
@@ -562,7 +601,10 @@ impl Window {
         let texture = canvas::texture_from(width, height, false, rgba.into_raw());
         // Resets zoom, rotation and flips, which is right: they are now baked
         // into these pixels.
+        // Resets zoom, rotation, flips and tone, which is right: they are now
+        // baked into these pixels. The sliders have to follow.
         imp.view.canvas().set_texture(Some(texture));
+        self.sync_tone_panel();
         imp.title
             .set_subtitle(&format!("Edited · {width} × {height}"));
     }
@@ -610,20 +652,11 @@ impl Window {
         let canvas = imp.view.canvas();
         let working = imp.working.borrow().clone()?;
         let display = canvas.display_size()?;
-        export::apply(
-            working,
-            canvas.rotation(),
-            canvas.flip_horizontal(),
-            canvas.flip_vertical(),
-            None,
-            display,
-        )
-        .ok()
+        export::apply(working, canvas.live_edits(), None, display).ok()
     }
 
     fn has_live_transform(&self) -> bool {
-        let canvas = self.imp().view.canvas();
-        canvas.rotation().abs() > 0.01 || canvas.flip_horizontal() || canvas.flip_vertical()
+        !self.imp().view.canvas().live_edits().is_identity()
     }
 
     fn downloads_dir() -> PathBuf {
@@ -653,11 +686,7 @@ impl Window {
         let Some(display) = canvas.display_size() else {
             return;
         };
-        let (rotation, flip_h, flip_v) = (
-            canvas.rotation(),
-            canvas.flip_horizontal(),
-            canvas.flip_vertical(),
-        );
+        let live = canvas.live_edits();
         // Reuse the editing buffer when there is one; otherwise decode afresh
         // rather than retaining a full-resolution copy just to copy once.
         let existing = imp.working.borrow().clone();
@@ -668,7 +697,7 @@ impl Window {
                 Some(image) => Ok(image),
                 None => export::open(&source),
             }
-            .and_then(|image| export::apply(image, rotation, flip_h, flip_v, None, display));
+            .and_then(|image| export::apply(image, live, None, display));
             let _ = sender.send_blocking(result);
         });
 
@@ -910,6 +939,50 @@ impl Window {
         options.append(&actions);
         panel.append(options);
 
+        // -- tone --
+        let tone = &imp.adjust_toggle;
+        tone.set_tooltip_text(Some("Brightness, contrast and saturation"));
+        tone.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| window.imp().adjust_options.set_visible(button.is_active())
+        ));
+        panel.append(tone);
+
+        let tones = &imp.adjust_options;
+        tones.set_visible(false);
+        for (label, scale) in [
+            ("Brightness", &imp.brightness_scale),
+            ("Contrast", &imp.contrast_scale),
+            ("Saturation", &imp.saturation_scale),
+        ] {
+            let caption = gtk::Label::new(Some(label));
+            caption.add_css_class("dim-label");
+            caption.set_xalign(0.0);
+            caption.set_margin_top(4);
+            tones.append(&caption);
+            scale.connect_value_changed(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_| window.tone_changed()
+            ));
+            tones.append(scale);
+        }
+
+        let tone_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        tone_actions.set_homogeneous(true);
+        tone_actions.set_margin_top(4);
+        let tone_reset = gtk::Button::with_label("Reset");
+        tone_reset.set_action_name(Some("win.adjust-reset"));
+        let tone_apply = gtk::Button::with_label("Apply");
+        tone_apply.add_css_class("suggested-action");
+        tone_apply.set_tooltip_text(Some("Fix these values into the image, so they can be undone as a step"));
+        tone_apply.set_action_name(Some("win.adjust-apply"));
+        tone_actions.append(&tone_reset);
+        tone_actions.append(&tone_apply);
+        tones.append(&tone_actions);
+        panel.append(tones);
+
         imp.pending_crop.add_css_class("dim-label");
         imp.pending_crop.set_xalign(0.0);
         imp.pending_crop.set_wrap(true);
@@ -952,6 +1025,43 @@ impl Window {
         ));
 
         panel
+    }
+
+    /// A slider moved: push the three values at the canvas, which shows them
+    /// without touching a pixel of the image.
+    fn tone_changed(&self) {
+        let imp = self.imp();
+        if imp.syncing_panel.get() {
+            return;
+        }
+        imp.view.canvas().set_adjustments(Adjustments {
+            brightness: imp.brightness_scale.value(),
+            contrast: imp.contrast_scale.value(),
+            saturation: imp.saturation_scale.value(),
+        });
+        self.update_tone_actions();
+    }
+
+    /// Put the canvas's values back into the sliders, after something baked
+    /// them into the pixels and reset them.
+    fn sync_tone_panel(&self) {
+        let imp = self.imp();
+        let adjust = imp.view.canvas().adjustments();
+        imp.syncing_panel.set(true);
+        imp.brightness_scale.set_value(adjust.brightness);
+        imp.contrast_scale.set_value(adjust.contrast);
+        imp.saturation_scale.set_value(adjust.saturation);
+        imp.syncing_panel.set(false);
+        self.update_tone_actions();
+    }
+
+    fn update_tone_actions(&self) {
+        let pending = !self.imp().view.canvas().adjustments().is_identity();
+        for name in ["adjust-reset", "adjust-apply"] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(pending);
+            }
+        }
     }
 
     /// Enter or leave the interactive crop.
@@ -1272,8 +1382,9 @@ impl Window {
                     // holding a full-resolution buffer for every image browsed.
                     window.load_working();
                 } else {
-                    // Leaving the panel puts the crop tool away with it.
+                    // Leaving the panel puts the tools away with it.
                     window.imp().crop_toggle.set_active(false);
+                    window.imp().adjust_toggle.set_active(false);
                 }
                 // Deleting the file you are in the middle of editing is a
                 // trap, so it goes away along with the filmstrip.
@@ -1320,6 +1431,27 @@ impl Window {
             move |_, _| window.cancel_editing()
         ));
         self.add_action(&edit_cancel);
+
+        let adjust_reset = gio::SimpleAction::new("adjust-reset", None);
+        adjust_reset.set_enabled(false);
+        adjust_reset.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.imp().view.canvas().set_adjustments(Adjustments::default());
+                window.sync_tone_panel();
+            }
+        ));
+        self.add_action(&adjust_reset);
+
+        let adjust_apply = gio::SimpleAction::new("adjust-apply", None);
+        adjust_apply.set_enabled(false);
+        adjust_apply.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.bake(None)
+        ));
+        self.add_action(&adjust_apply);
 
         let crop_apply = gio::SimpleAction::new("crop-apply", None);
         crop_apply.set_enabled(false);
