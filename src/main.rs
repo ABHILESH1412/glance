@@ -103,6 +103,13 @@ fn load_css() {
             color: @warning_fg_color;
             background: @warning_bg_color;
         }
+        .image-actions button.resize-action {
+            color: @accent_color;
+            background: alpha(@accent_bg_color, 0.18);
+        }
+        .image-actions button.resize-action:hover {
+            background: alpha(@accent_bg_color, 0.32);
+        }
         .image-actions button.delete-action {
             color: @destructive_color;
             background: alpha(@destructive_bg_color, 0.18);
@@ -122,6 +129,64 @@ fn load_css() {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+    }
+}
+
+/// An action's keys, and the subset of them that is safe while a text box has
+/// focus.
+///
+/// A window takes its accelerators before the focused widget sees the key, so a
+/// bare `0` never reaches a size entry and a bare `Delete` would remove the file
+/// instead of a digit. While something editable has focus, the bare keys are
+/// withdrawn and only the modified forms stay live.
+struct Accel {
+    action: &'static str,
+    idle: &'static [&'static str],
+    typing: &'static [&'static str],
+}
+
+const ACCELS: &[Accel] = &[
+    Accel { action: "win.open", idle: &["<Primary>o"], typing: &["<Primary>o"] },
+    Accel { action: "win.close", idle: &["<Primary>w"], typing: &["<Primary>w"] },
+    Accel { action: "app.quit", idle: &["<Primary>q"], typing: &["<Primary>q"] },
+    Accel { action: "win.zoom-in",
+            idle: &["<Primary>plus", "<Primary>equal", "plus", "equal"],
+            typing: &["<Primary>plus", "<Primary>equal"] },
+    Accel { action: "win.zoom-out",
+            idle: &["<Primary>minus", "minus"], typing: &["<Primary>minus"] },
+    Accel { action: "win.zoom-fit", idle: &["<Primary>0", "0"], typing: &["<Primary>0"] },
+    Accel { action: "win.zoom-actual", idle: &["<Primary>1", "1"], typing: &["<Primary>1"] },
+    Accel { action: "win.rotate-left",
+            idle: &["bracketleft", "<Primary>bracketleft"], typing: &["<Primary>bracketleft"] },
+    Accel { action: "win.rotate-right",
+            idle: &["bracketright", "<Primary>bracketright"], typing: &["<Primary>bracketright"] },
+    Accel { action: "win.rotate-reset", idle: &["<Primary><Shift>r"], typing: &["<Primary><Shift>r"] },
+    Accel { action: "win.next-image", idle: &["Right", "Page_Down", "space"], typing: &[] },
+    Accel { action: "win.previous-image", idle: &["Left", "Page_Up", "BackSpace"], typing: &[] },
+    Accel { action: "win.transform-open", idle: &["<Primary>t"], typing: &["<Primary>t"] },
+    // Escape stays live while typing: it is the way out of the editor, and a
+    // text box has nothing else to do with it.
+    Accel { action: "win.dismiss", idle: &["Escape"], typing: &["Escape"] },
+    Accel { action: "win.fullscreen", idle: &["F11", "<Primary>f"], typing: &["F11"] },
+    // The one that would do real harm: Delete in a size box must delete a
+    // digit, not the file.
+    Accel { action: "win.delete", idle: &["Delete"], typing: &[] },
+    Accel { action: "win.copy", idle: &["<Primary>c"], typing: &[] },
+    Accel { action: "win.edit", idle: &["<Primary>e"], typing: &["<Primary>e"] },
+    Accel { action: "win.resize", idle: &["<Primary>r"], typing: &["<Primary>r"] },
+    Accel { action: "win.undo", idle: &["<Primary>z"], typing: &[] },
+    Accel { action: "win.redo", idle: &["<Primary><Shift>z", "<Primary>y"], typing: &[] },
+    Accel { action: "win.crop-apply", idle: &["Return", "KP_Enter"], typing: &[] },
+    Accel { action: "win.save", idle: &["<Primary>s"], typing: &["<Primary>s"] },
+    Accel { action: "win.save-as", idle: &["<Primary><Shift>s"], typing: &["<Primary><Shift>s"] },
+    Accel { action: "win.flip-horizontal", idle: &["<Primary>h"], typing: &[] },
+    Accel { action: "win.flip-vertical", idle: &["<Primary>j"], typing: &[] },
+];
+
+/// Swap the whole set over when focus moves into or out of a text box.
+pub fn apply_accels(app: &adw::Application, typing: bool) {
+    for accel in ACCELS {
+        app.set_accels_for_action(accel.action, if typing { accel.typing } else { accel.idle });
     }
 }
 
@@ -145,36 +210,7 @@ fn main() -> glib::ExitCode {
 
         load_css();
 
-        app.set_accels_for_action("win.open", &["<Primary>o"]);
-        app.set_accels_for_action("win.close", &["<Primary>w"]);
-        app.set_accels_for_action("app.quit", &["<Primary>q"]);
-        // Both the bare and Ctrl forms: there is no text entry to conflict with,
-        // and "+" needs the unshifted "equal" too on most layouts.
-        app.set_accels_for_action(
-            "win.zoom-in",
-            &["<Primary>plus", "<Primary>equal", "plus", "equal"],
-        );
-        app.set_accels_for_action("win.zoom-out", &["<Primary>minus", "minus"]);
-        app.set_accels_for_action("win.zoom-fit", &["<Primary>0", "0"]);
-        app.set_accels_for_action("win.zoom-actual", &["<Primary>1", "1"]);
-        app.set_accels_for_action("win.rotate-left", &["bracketleft", "<Primary>bracketleft"]);
-        app.set_accels_for_action("win.rotate-right", &["bracketright", "<Primary>bracketright", "<Primary>r"]);
-        app.set_accels_for_action("win.rotate-reset", &["<Primary><Shift>r"]);
-        app.set_accels_for_action("win.next-image", &["Right", "Page_Down", "space"]);
-        app.set_accels_for_action("win.previous-image", &["Left", "Page_Up", "BackSpace"]);
-        app.set_accels_for_action("win.transform-open", &["<Primary>t"]);
-        app.set_accels_for_action("win.dismiss", &["Escape"]);
-        app.set_accels_for_action("win.fullscreen", &["F11", "<Primary>f"]);
-        app.set_accels_for_action("win.delete", &["Delete"]);
-        app.set_accels_for_action("win.copy", &["<Primary>c"]);
-        app.set_accels_for_action("win.edit", &["<Primary>e"]);
-        app.set_accels_for_action("win.undo", &["<Primary>z"]);
-        app.set_accels_for_action("win.redo", &["<Primary><Shift>z", "<Primary>y"]);
-        app.set_accels_for_action("win.crop-apply", &["Return", "KP_Enter"]);
-        app.set_accels_for_action("win.save", &["<Primary>s"]);
-        app.set_accels_for_action("win.save-as", &["<Primary><Shift>s"]);
-        app.set_accels_for_action("win.flip-horizontal", &["<Primary>h"]);
-        app.set_accels_for_action("win.flip-vertical", &["<Primary>j"]);
+        apply_accels(app, false);
     });
 
     app.connect_activate(|app| {

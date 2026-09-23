@@ -34,6 +34,19 @@ pub struct Shown {
     subtitle: String,
 }
 
+/// A pixel-dimension entry. Wide range, typed or stepped.
+fn dimension_spin() -> gtk::SpinButton {
+    let spin = gtk::SpinButton::with_range(1.0, 30_000.0, 1.0);
+    spin.set_numeric(true);
+    spin.set_snap_to_ticks(true);
+    // Sized to its digits. Letting it expand drags the whole sidebar wider
+    // than the picture it is meant to sit beside.
+    spin.set_hexpand(false);
+    spin.set_width_chars(5);
+    spin.set_max_width_chars(6);
+    spin
+}
+
 /// One tone slider: centred on zero, with a mark there so the neutral point
 /// can be found by feel, and its own number drawn beside it.
 fn tone_scale() -> gtk::Scale {
@@ -64,6 +77,15 @@ mod imp {
         pub crop_toggle: gtk::ToggleButton,
         pub crop_options: gtk::Box,
         pub freehand_toggle: gtk::ToggleButton,
+        pub resize_button: gtk::Button,
+        pub resize_toggle: gtk::ToggleButton,
+        pub resize_options: gtk::Box,
+        pub width_spin: gtk::SpinButton,
+        pub height_spin: gtk::SpinButton,
+        pub keep_aspect: gtk::CheckButton,
+        pub natural_label: gtk::Label,
+        pub format_drop: gtk::DropDown,
+        pub format_note: gtk::Label,
         pub adjust_toggle: gtk::ToggleButton,
         pub adjust_options: gtk::Box,
         pub brightness_scale: gtk::Scale,
@@ -132,6 +154,15 @@ mod imp {
                 crop_toggle: gtk::ToggleButton::with_label("Crop"),
                 crop_options: gtk::Box::new(gtk::Orientation::Vertical, 8),
                 freehand_toggle: gtk::ToggleButton::with_label("Freehand"),
+                resize_button: gtk::Button::new(),
+                resize_toggle: gtk::ToggleButton::with_label("Resize"),
+                resize_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
+                width_spin: dimension_spin(),
+                height_spin: dimension_spin(),
+                keep_aspect: gtk::CheckButton::with_label("Keep aspect ratio"),
+                natural_label: gtk::Label::new(None),
+                format_drop: gtk::DropDown::default(),
+                format_note: gtk::Label::new(None),
                 adjust_toggle: gtk::ToggleButton::with_label("Adjust"),
                 adjust_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 brightness_scale: tone_scale(),
@@ -215,6 +246,9 @@ impl Window {
         // The edit panel lives beside the picture rather than over it, so the
         // image never sits behind the controls being used on it.
         let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        // The picture takes the slack; without this the panel and the image
+        // split it and the sidebar ends up twice the width it asked for.
+        imp.view.widget().set_hexpand(true);
         body.append(imp.view.widget());
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
@@ -308,6 +342,18 @@ impl Window {
         edit_button.add_css_class("edit-action");
         edit_button.set_sensitive(false);
 
+        let resize_button = &imp.resize_button;
+        resize_button.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("view-fullscreen-symbolic")
+                .label("Resize")
+                .build(),
+        ));
+        resize_button.set_tooltip_text(Some("Change the pixel size (Ctrl+R)"));
+        resize_button.add_css_class("resize-action");
+        resize_button.set_action_name(Some("win.resize"));
+        resize_button.set_sensitive(false);
+
         let delete_button = &imp.delete_button;
         delete_button.set_child(Some(
             &adw::ButtonContent::builder()
@@ -337,6 +383,7 @@ impl Window {
         action_bar.add_css_class("toolbar");
         action_bar.add_css_class("image-actions");
         action_bar.append(edit_button);
+        action_bar.append(resize_button);
         action_bar.append(delete_button);
         // Nothing to act on until something is open.
         action_bar.set_visible(false);
@@ -368,6 +415,17 @@ impl Window {
         toolbar.add_bottom_bar(self.build_rotation_bar());
         toolbar.add_bottom_bar(&imp.strip);
         self.set_content(Some(toolbar));
+
+        // A window claims its accelerators before the focused widget sees the
+        // key, so while a size box has focus the bare ones are withdrawn.
+        // Without this, typing 300 lands as 3 and Delete removes the file.
+        self.connect_focus_widget_notify(|window| {
+            let typing = gtk::prelude::GtkWindowExt::focus(window)
+                .is_some_and(|widget| widget.is::<gtk::Editable>());
+            if let Some(app) = window.application().and_downcast::<adw::Application>() {
+                crate::apply_accels(&app, typing);
+            }
+        });
 
         // Fullscreen means the picture and nothing else, so the bars fold away.
         self.connect_fullscreened_notify(|window| window.sync_fullscreen());
@@ -567,6 +625,8 @@ impl Window {
         // an untouched picture is a lie the next session would inherit.
         imp.view.canvas().set_adjustments(Adjustments::default());
         self.sync_tone_panel();
+        imp.view.canvas().reset_size();
+        imp.resize_toggle.set_active(false);
         self.update_edit_state();
     }
 
@@ -605,6 +665,9 @@ impl Window {
         // baked into these pixels. The sliders have to follow.
         imp.view.canvas().set_texture(Some(texture));
         self.sync_tone_panel();
+        // Baking gives the picture a new real size, and turns the tool off.
+        imp.resize_toggle.set_active(false);
+        self.sync_resize_panel();
         imp.title
             .set_subtitle(&format!("Edited · {width} × {height}"));
     }
@@ -733,6 +796,56 @@ impl Window {
         self.write_edited(source, true);
     }
 
+    /// Write a copy in the chosen format, at whatever size the resize tool is
+    /// showing.
+    fn export(&self) {
+        let Some(source) = self.imp().current.borrow().clone() else {
+            return;
+        };
+        let Some(target) = export::TARGETS.get(self.imp().format_drop.selected() as usize) else {
+            return;
+        };
+        let canvas = self.imp().view.canvas();
+        // Ask the format before the file dialog: a refusal after choosing a
+        // name and a folder is a refusal arriving too late to be useful.
+        if let Some((width, height)) = canvas.target_size() {
+            if let Some(refusal) = target.refusal(width, height) {
+                self.toast(&refusal);
+                return;
+            }
+        }
+        let stem = source
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "image".to_string());
+        let dialog = gtk::FileDialog::builder()
+            .title(format!("Export as {}", target.label))
+            .modal(true)
+            .initial_name(format!("{stem}.{}", target.extension))
+            .initial_folder(&gio::File::for_path(Self::downloads_dir()))
+            .build();
+        dialog.save(
+            Some(self),
+            gio::Cancellable::NONE,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |result| match result {
+                    Ok(file) => {
+                        if let Some(path) = file.path() {
+                            window.write_edited(path, false);
+                        }
+                    }
+                    Err(error) => {
+                        if !error.matches(gtk::DialogError::Dismissed) {
+                            window.toast(&format!("Could not export: {error}"));
+                        }
+                    }
+                }
+            ),
+        );
+    }
+
     fn save_as(&self) {
         let Some(source) = self.imp().current.borrow().clone() else {
             return;
@@ -819,6 +932,7 @@ impl Window {
         let imp = self.imp();
         let panel = &imp.edit_panel;
         panel.set_width_request(300);
+        panel.set_hexpand(false);
         panel.set_margin_top(12);
         panel.set_margin_bottom(12);
         panel.set_margin_start(12);
@@ -939,6 +1053,89 @@ impl Window {
         options.append(&actions);
         panel.append(options);
 
+        // -- resize --
+        let sizing = &imp.resize_toggle;
+        sizing.set_tooltip_text(Some("Change the pixel size"));
+        sizing.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let open = button.is_active();
+                window.imp().resize_options.set_visible(open);
+                // The handles belong to the tool, so they come and go with it.
+                window.imp().view.canvas().set_resizing(open);
+                if open {
+                    window.sync_resize_panel();
+                }
+            }
+        ));
+        panel.append(sizing);
+
+        let sizes = &imp.resize_options;
+        sizes.set_visible(false);
+
+        // Side by side with the caption above each, so the pair reads as one
+        // measurement and the panel keeps its width.
+        let fields = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        fields.set_homogeneous(true);
+        for (label, spin) in [("Width", &imp.width_spin), ("Height", &imp.height_spin)] {
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            let caption = gtk::Label::new(Some(label));
+            caption.add_css_class("dim-label");
+            caption.set_xalign(0.0);
+            column.append(&caption);
+            column.append(spin);
+            fields.append(&column);
+            spin.connect_value_changed(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[strong]
+                label,
+                move |_| window.size_typed(label == "Width")
+            ));
+        }
+        sizes.append(&fields);
+
+        let keep = &imp.keep_aspect;
+        // On by default: stretching a photograph out of shape is almost never
+        // what someone reaching for a resize wants. The canvas has to be told
+        // separately — setting the box before its handler exists tells nobody,
+        // and the handles would then ignore the lock the box is showing.
+        keep.set_active(true);
+        imp.view.canvas().set_keep_aspect(true);
+        keep.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let keep = button.is_active();
+                window.imp().view.canvas().set_keep_aspect(keep);
+                // Ticking it should put a stretched picture straight, not just
+                // promise to hold the stretch from here on.
+                if keep && !window.imp().syncing_panel.get() {
+                    window.size_typed(true);
+                }
+            }
+        ));
+        sizes.append(keep);
+
+        imp.natural_label.add_css_class("dim-label");
+        imp.natural_label.set_xalign(0.0);
+        imp.natural_label.set_wrap(true);
+        sizes.append(&imp.natural_label);
+
+        let size_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        size_actions.set_homogeneous(true);
+        let size_reset = gtk::Button::with_label("Reset");
+        size_reset.set_action_name(Some("win.resize-reset"));
+        let size_apply = gtk::Button::with_label("Apply");
+        size_apply.add_css_class("suggested-action");
+        size_apply.set_tooltip_text(Some("Resample the image to this size, so it becomes an undo step"));
+        size_apply.set_action_name(Some("win.resize-apply"));
+        size_actions.append(&size_reset);
+        size_actions.append(&size_apply);
+        sizes.append(&size_actions);
+        panel.append(sizes);
+
         // -- tone --
         let tone = &imp.adjust_toggle;
         tone.set_tooltip_text(Some("Brightness, contrast and saturation"));
@@ -994,6 +1191,43 @@ impl Window {
         spacer.set_vexpand(true);
         panel.append(&spacer);
 
+        // Export writes a copy in another format, at whatever size the resize
+        // tool is showing. Grouped with the other writers, above the way out.
+        let export_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // Names only: the caveats go in the line below, where they can be read
+        // without making the sidebar wide enough to hold them.
+        let formats = gtk::StringList::new(&[]);
+        for target in export::TARGETS {
+            formats.append(target.label);
+        }
+        let drop = &imp.format_drop;
+        drop.set_model(Some(&formats));
+        drop.set_selected(0);
+        drop.set_hexpand(true);
+        drop.set_tooltip_text(Some(
+            "A drawing can be written as pixels, but pixels cannot be written \
+             as a drawing — so SVG is not offered here, whatever the original was.",
+        ));
+        drop.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.describe_format()
+        ));
+        let export_button = gtk::Button::with_label("Export…");
+        export_button.set_action_name(Some("win.export"));
+        export_row.append(drop);
+        export_row.append(&export_button);
+        // The note goes above the row, not below it. Everything from here down
+        // is anchored to the bottom of the panel, so a note appearing when the
+        // format changes would otherwise shove the Export button out from under
+        // the pointer that just picked the format.
+        imp.format_note.add_css_class("dim-label");
+        imp.format_note.set_xalign(0.0);
+        imp.format_note.set_wrap(true);
+        panel.append(&imp.format_note);
+        panel.append(&export_row);
+        self.describe_format();
+
         // The way out that keeps nothing. Above the save buttons rather than
         // beside them, so leaving and committing are never one slip apart.
         let cancel = gtk::Button::with_label("Cancel");
@@ -1013,6 +1247,14 @@ impl Window {
         save_row.append(&save_as);
         panel.append(&save_row);
 
+        // Dragging a handle has to reach the numbers, the same way typing a
+        // number reaches the handles.
+        imp.view.canvas().connect_resize_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.sync_resize_panel()
+        ));
+
         imp.view.canvas().connect_crop_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -1025,6 +1267,94 @@ impl Window {
         ));
 
         panel
+    }
+
+    /// A number was typed or stepped: push it at the canvas, which redraws the
+    /// picture at that size without resampling anything.
+    fn size_typed(&self, width_led: bool) {
+        let imp = self.imp();
+        if imp.syncing_panel.get() {
+            return;
+        }
+        let canvas = imp.view.canvas();
+        let Some((nw, nh)) = canvas.natural_size() else {
+            return;
+        };
+        let mut width = imp.width_spin.value().round().max(1.0);
+        let mut height = imp.height_spin.value().round().max(1.0);
+        if imp.keep_aspect.is_active() {
+            let ratio = f64::from(nw) / f64::from(nh).max(1e-9);
+            // Whichever box was touched leads; the other follows.
+            if width_led {
+                height = (width / ratio).round().max(1.0);
+            } else {
+                width = (height * ratio).round().max(1.0);
+            }
+        }
+        // Writing the size back would rewrite the box being typed into, under
+        // the cursor, so only the other one is touched and the echo from the
+        // canvas is suppressed for the duration.
+        imp.syncing_panel.set(true);
+        canvas.set_target_size(width as u32, height as u32);
+        if width_led {
+            imp.height_spin.set_value(height);
+        } else {
+            imp.width_spin.set_value(width);
+        }
+        imp.syncing_panel.set(false);
+        self.describe_size();
+    }
+
+    /// What the chosen format will cost the picture, if anything.
+    fn describe_format(&self) {
+        let imp = self.imp();
+        let note = export::TARGETS
+            .get(imp.format_drop.selected() as usize)
+            .and_then(|target| target.caveat);
+        imp.format_note.set_visible(note.is_some());
+        imp.format_note.set_text(note.unwrap_or_default());
+    }
+
+    /// The line under the boxes, and whether Reset and Apply have anything to
+    /// act on.
+    fn describe_size(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let (Some((w, h)), Some((nw, nh))) = (canvas.target_size(), canvas.natural_size()) else {
+            return;
+        };
+        let percent = f64::from(w) / f64::from(nw).max(1e-9) * 100.0;
+        imp.natural_label.set_text(&if (w, h) == (nw, nh) {
+            format!("Original size, {nw} × {nh}")
+        } else {
+            format!("From {nw} × {nh} — {percent:.0}% of the width")
+        });
+        self.update_resize_actions();
+    }
+
+    /// Put the canvas's size back into the boxes, after a handle drag or a
+    /// bake changed it behind their back.
+    fn sync_resize_panel(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let (Some((w, h)), Some((nw, nh))) = (canvas.target_size(), canvas.natural_size()) else {
+            return;
+        };
+        let _ = (nw, nh);
+        imp.syncing_panel.set(true);
+        imp.width_spin.set_value(f64::from(w));
+        imp.height_spin.set_value(f64::from(h));
+        imp.syncing_panel.set(false);
+        self.describe_size();
+    }
+
+    fn update_resize_actions(&self) {
+        let pending = self.imp().view.canvas().has_resize();
+        for name in ["resize-reset", "resize-apply"] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(pending);
+            }
+        }
     }
 
     /// A slider moved: push the three values at the canvas, which shows them
@@ -1385,11 +1715,13 @@ impl Window {
                     // Leaving the panel puts the tools away with it.
                     window.imp().crop_toggle.set_active(false);
                     window.imp().adjust_toggle.set_active(false);
+                    window.imp().resize_toggle.set_active(false);
                 }
                 // Deleting the file you are in the middle of editing is a
                 // trap, so it goes away along with the filmstrip.
                 let has_file = window.imp().current.borrow().is_some();
                 window.imp().delete_button.set_sensitive(!open && has_file);
+                window.imp().resize_button.set_sensitive(has_file);
                 window.update_navigation();
             }
         ));
@@ -1431,6 +1763,52 @@ impl Window {
             move |_, _| window.cancel_editing()
         ));
         self.add_action(&edit_cancel);
+
+        // Opening the tool from the header: the panel comes with it, because
+        // the numbers live there.
+        let resize = gio::SimpleAction::new("resize", None);
+        resize.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                if !imp.edit_button.is_sensitive() {
+                    return;
+                }
+                imp.edit_button.set_active(true);
+                imp.resize_toggle.set_active(!imp.resize_toggle.is_active());
+            }
+        ));
+        self.add_action(&resize);
+
+        let resize_reset = gio::SimpleAction::new("resize-reset", None);
+        resize_reset.set_enabled(false);
+        resize_reset.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                window.imp().view.canvas().reset_size();
+                window.sync_resize_panel();
+            }
+        ));
+        self.add_action(&resize_reset);
+
+        let resize_apply = gio::SimpleAction::new("resize-apply", None);
+        resize_apply.set_enabled(false);
+        resize_apply.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.bake(None)
+        ));
+        self.add_action(&resize_apply);
+
+        let export = gio::SimpleAction::new("export", None);
+        export.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.export()
+        ));
+        self.add_action(&export);
 
         let adjust_reset = gio::SimpleAction::new("adjust-reset", None);
         adjust_reset.set_enabled(false);
@@ -1769,6 +2147,7 @@ impl Window {
                         window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
                         window.imp().copy_button.set_sensitive(true);
+                        window.imp().resize_button.set_sensitive(true);
                         window.imp().action_bar.set_visible(true);
                         // The canvas drops the old selection, so put the panel
                         // back in step with it.
@@ -2005,6 +2384,7 @@ impl Window {
         // Turning the toggle off restores the filmstrip and the arrow keys.
         imp.edit_button.set_active(false);
         imp.edit_button.set_sensitive(false);
+        imp.resize_button.set_sensitive(false);
         imp.action_bar.set_visible(false);
         self.set_transform_open(false);
         self.update_navigation();

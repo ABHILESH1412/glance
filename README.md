@@ -87,6 +87,18 @@ approximated.
 - **Apply** fixes the current slider values into the image so they become an undo step
   and further edits build on them; **Reset** returns all three to zero. Leaving them
   unapplied is fine — saving, copying and cropping all carry them along
+- **Resize** from the header or `Ctrl+R`: drag any of the eight grips on the picture
+  itself, or type the pixels into the panel — each follows the other, so you can pull it
+  roughly into shape and then round the number off. **Keep aspect ratio** is on by
+  default and applies to both; unticking it lets the picture stretch
+- Nothing is resampled while you drag: the picture is simply drawn into a different
+  rectangle, so a grip stays smooth on an image of any size, and the one resample that
+  does happen — Lanczos, on export or apply — happens once
+- **Export** writes a copy in another format at whatever size the resize tool is
+  showing, leaving the original alone. PNG, JPEG, WebP, TIFF, BMP, GIF and ICO, with a
+  line under the picker for what a format will cost you — JPEG has no transparency, GIF
+  is 256 colours and one frame. A format with a limit of its own says so before the file
+  dialog opens rather than after: ICO refuses anything past 256 × 256
 - Undo and redo the last several edits with `Ctrl+Z` and `Ctrl+Shift+Z`
 - **Save** writes the edited image back over the original; **Save As…** writes a copy,
   offering Downloads by default. Nothing touches disk until you ask it to
@@ -150,7 +162,8 @@ approximated.
 | `Ctrl+Shift+R` | Reset rotation |
 | `Ctrl+H` / `Ctrl+J` | Flip horizontally / vertically |
 | `Ctrl+T` | Rotate and flip options |
-| `Ctrl+E` | Edit panel (crop) |
+| `Ctrl+E` | Edit panel |
+| `Ctrl+R` | Resize |
 | `Enter` | Apply the crop |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo an edit |
 | `Ctrl+S` / `Ctrl+Shift+S` | Save in place / Save As… |
@@ -203,14 +216,21 @@ cargo test
 
 Wanted, but not built:
 
-- Resize and export with a quality slider
-- Convert between formats
+- A quality slider for JPEG and WebP; they are written at the encoder's default
 - Drawing and annotation
 - ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
 - Progressive loading for very large images, so a 100MP TIFF appears in stages
 
 ## Known limitations
+
+- **SVG is not an export format.** A drawing can be written as pixels — open an SVG and
+  export it as a PNG or a JPEG at any size — but pixels cannot be written back as
+  shapes, so there is no photograph-to-SVG direction to offer. Exporting an SVG
+  unchanged is what Save As is for.
+- Exporting an animated GIF or WebP writes the frame you are looking at. A still picture
+  exported *as* a GIF is fine — it is a single-frame GIF — but nothing here creates
+  animation.
 
 - An SVG that falls back to the rasteriser — one using patterns, embedded images, or a
   filter chain beyond a blur or a drop shadow — still takes a moment to reach full

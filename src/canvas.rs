@@ -126,6 +126,19 @@ mod imp {
         /// True while the crop rectangle is being drawn or adjusted, during
         /// which dragging resizes the selection instead of panning.
         pub cropping: Cell<bool>,
+        /// True while the resize handles are on the picture.
+        pub resizing: Cell<bool>,
+        /// The working image's real pixel size. `logical` is what is on screen
+        /// and drifts from this while a resize is pending, which is what makes
+        /// the drag a live preview rather than a number in a box.
+        pub natural: Cell<(f64, f64)>,
+        pub resize_handle: Cell<Option<Handle>>,
+        /// Logical size when the drag started, so the whole gesture measures
+        /// from one place rather than accumulating rounding.
+        pub resize_origin: Cell<(f64, f64)>,
+        pub keep_aspect: Cell<bool>,
+        #[allow(clippy::type_complexity)]
+        pub on_resize_changed: RefCell<Option<Box<dyn Fn(u32, u32)>>>,
         pub freehand: Cell<bool>,
         /// Width divided by height, or 0 for an unconstrained crop.
         pub aspect: Cell<f64>,
@@ -212,6 +225,9 @@ pub enum Handle {
 /// Reach of a handle in screen pixels.
 const HANDLE_GRAB: f64 = 16.0;
 const HANDLE_DRAW: f64 = 12.0;
+/// Nothing may be resized past this on either axis: a stray drag should not
+/// be able to ask for a hundred-gigapixel export.
+const MAX_DIMENSION: f64 = 30_000.0;
 /// Smallest crop, in display units, so it cannot be collapsed to nothing.
 const MIN_CROP: f64 = 8.0;
 
@@ -233,6 +249,9 @@ pub struct Tile {
 /// bools and a float are easy to hand over in the wrong order.
 #[derive(Clone, Copy, Default)]
 pub struct LiveEdits {
+    /// Pixel size to resample to, when the view is showing a size the pixels
+    /// do not have yet.
+    pub resize: Option<(u32, u32)>,
     pub rotation: f64,
     pub flip_h: bool,
     pub flip_v: bool,
@@ -242,7 +261,11 @@ pub struct LiveEdits {
 impl LiveEdits {
     /// Nothing pending, so the working pixels are already what is on screen.
     pub fn is_identity(&self) -> bool {
-        self.rotation.abs() < 0.01 && !self.flip_h && !self.flip_v && self.adjust.is_identity()
+        self.resize.is_none()
+            && self.rotation.abs() < 0.01
+            && !self.flip_h
+            && !self.flip_v
+            && self.adjust.is_identity()
     }
 }
 
@@ -370,6 +393,7 @@ impl ImageCanvas {
         self.set_texture(Some(texture));
         let imp = self.imp();
         imp.logical.set((logical_w, logical_h));
+        imp.natural.set((logical_w, logical_h));
         // Built here rather than on the decoder thread: render nodes may
         // only be created on the main loop.
         imp.scene
@@ -383,6 +407,7 @@ impl ImageCanvas {
     /// What the view is showing on top of the working pixels.
     pub fn live_edits(&self) -> LiveEdits {
         LiveEdits {
+            resize: self.has_resize().then(|| self.target_size()).flatten(),
             rotation: self.rotation(),
             flip_h: self.flip_horizontal(),
             flip_v: self.flip_vertical(),
@@ -421,12 +446,13 @@ impl ImageCanvas {
         if let Some(timer) = imp.resample_timer.take() {
             timer.remove();
         }
-        imp.logical.set(
-            texture
-                .as_ref()
-                .map(|t| (f64::from(t.width()), f64::from(t.height())))
-                .unwrap_or((1.0, 1.0)),
-        );
+        let size = texture
+            .as_ref()
+            .map(|t| (f64::from(t.width()), f64::from(t.height())))
+            .unwrap_or((1.0, 1.0));
+        imp.logical.set(size);
+        imp.natural.set(size);
+        imp.resizing.set(false);
         imp.texture.replace(texture);
         imp.user_zoomed.set(false);
         imp.rotation.set(0.0);
@@ -614,6 +640,201 @@ impl ImageCanvas {
 
     pub fn is_fitted(&self) -> bool {
         (self.imp().target_scale.get() - self.fit_scale()).abs() < 0.001
+    }
+
+    // -- resizing ---------------------------------------------------------
+
+    /// The working image's real pixel size, before any pending resize.
+    pub fn natural_size(&self) -> Option<(u32, u32)> {
+        self.imp().texture.borrow().as_ref()?;
+        let (w, h) = self.imp().natural.get();
+        Some((w.round().max(1.0) as u32, h.round().max(1.0) as u32))
+    }
+
+    /// The size the picture is currently being shown at, which is what an
+    /// export would write.
+    pub fn target_size(&self) -> Option<(u32, u32)> {
+        self.imp().texture.borrow().as_ref()?;
+        let (w, h) = self.imp().logical.get();
+        Some((w.round().max(1.0) as u32, h.round().max(1.0) as u32))
+    }
+
+    /// Whether a resize is pending, i.e. the view is showing a size the pixels
+    /// do not have yet.
+    pub fn has_resize(&self) -> bool {
+        let (lw, lh) = self.imp().logical.get();
+        let (nw, nh) = self.imp().natural.get();
+        (lw - nw).abs() > 0.5 || (lh - nh).abs() > 0.5
+    }
+
+    pub fn is_resizing(&self) -> bool {
+        self.imp().resizing.get()
+    }
+
+    pub fn set_resizing(&self, active: bool) {
+        let imp = self.imp();
+        imp.resizing.set(active);
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    pub fn set_keep_aspect(&self, keep: bool) {
+        self.imp().keep_aspect.set(keep);
+    }
+
+    /// Show the picture at a different pixel size. Nothing is resampled: the
+    /// texture is simply drawn into a different rectangle, so dragging a
+    /// handle costs nothing however large the image.
+    pub fn set_target_size(&self, width: u32, height: u32) {
+        let imp = self.imp();
+        let size = (f64::from(width.max(1)), f64::from(height.max(1)));
+        if imp.logical.get() == size {
+            return;
+        }
+        imp.logical.set(size);
+        // A crop recorded against the old size would now cut the wrong part.
+        imp.crop.replace(None);
+        self.reflow();
+        self.queue_draw();
+        self.notify_resize();
+    }
+
+    pub fn reset_size(&self) {
+        let (w, h) = self.imp().natural.get();
+        self.set_target_size(w.round() as u32, h.round() as u32);
+    }
+
+    /// Called with the target size whenever a drag changes it.
+    pub fn connect_resize_changed(&self, f: impl Fn(u32, u32) + 'static) {
+        self.imp().on_resize_changed.replace(Some(Box::new(f)));
+    }
+
+    fn notify_resize(&self) {
+        let Some((w, h)) = self.target_size() else {
+            return;
+        };
+        if let Some(f) = self.imp().on_resize_changed.borrow().as_ref() {
+            f(w, h);
+        }
+    }
+
+    /// How far the displayed size has been stretched from the real pixels.
+    /// Tiles and vector scenes are laid out in real pixels, so they need it.
+    fn resize_factor(&self) -> (f64, f64) {
+        let (lw, lh) = self.imp().logical.get();
+        let (nw, nh) = self.imp().natural.get();
+        (lw / nw.max(1e-9), lh / nh.max(1e-9))
+    }
+
+    /// Apply a handle drag to the displayed size. `delta` is in widget pixels.
+    fn drag_resize(&self, handle: Handle, delta: (f64, f64)) {
+        let imp = self.imp();
+        let scale = imp.target_scale.get().max(1e-9);
+        let (ow, oh) = imp.resize_origin.get();
+        // Undo the view's rotation and mirroring, so pulling the right edge
+        // widens the picture whichever way round it happens to be shown.
+        let (dx, dy) = self.unrotate(delta);
+        let (dx, dy) = (dx / scale, dy / scale);
+
+        // Opposite edges pull the same way; a corner does both.
+        let (mut width, mut height) = match handle {
+            Handle::East | Handle::NorthEast | Handle::SouthEast => (ow + dx, oh),
+            Handle::West | Handle::NorthWest | Handle::SouthWest => (ow - dx, oh),
+            _ => (ow, oh),
+        };
+        height = match handle {
+            Handle::South | Handle::SouthEast | Handle::SouthWest => oh + dy,
+            Handle::North | Handle::NorthEast | Handle::NorthWest => oh - dy,
+            _ => height,
+        };
+        if matches!(handle, Handle::North | Handle::South) {
+            width = ow;
+        }
+
+        if imp.keep_aspect.get() {
+            // The picture's own proportions, not whatever it has been stretched
+            // to: "keep aspect ratio" means the original one, and ticking the
+            // box should pull a squashed image back rather than preserve the
+            // squash.
+            let (nw, nh) = imp.natural.get();
+            let ratio = nw / nh.max(1e-9);
+            // Follow whichever axis the pointer moved further along, so a
+            // corner drag does not fight itself.
+            if matches!(handle, Handle::North | Handle::South) {
+                width = height * ratio;
+            } else if matches!(handle, Handle::East | Handle::West)
+                || (width - ow).abs() * oh >= (height - oh).abs() * ow
+            {
+                height = width / ratio;
+            } else {
+                width = height * ratio;
+            }
+        }
+
+        self.set_target_size(
+            width.round().clamp(1.0, MAX_DIMENSION) as u32,
+            height.round().clamp(1.0, MAX_DIMENSION) as u32,
+        );
+    }
+
+    /// Turn a widget-space delta back into the image's own axes.
+    fn unrotate(&self, delta: (f64, f64)) -> (f64, f64) {
+        let imp = self.imp();
+        let radians = -imp.target_rotation.get().to_radians();
+        let (sin, cos) = radians.sin_cos();
+        let (x, y) = (
+            delta.0 * cos - delta.1 * sin,
+            delta.0 * sin + delta.1 * cos,
+        );
+        let (fx, fy) = self.flips();
+        (x * fx, y * fy)
+    }
+
+    /// The four corners of the picture in widget space, in the image's own
+    /// order, so the handles hug it however it is turned.
+    fn image_corners(&self) -> Option<[(f64, f64); 4]> {
+        let imp = self.imp();
+        self.imp().texture.borrow().as_ref()?;
+        let (lw, lh) = imp.logical.get();
+        let scale = imp.target_scale.get();
+        let (cx, cy) = imp.target_centre.get();
+        let radians = imp.target_rotation.get().to_radians();
+        let (sin, cos) = radians.sin_cos();
+        let (fx, fy) = self.flips();
+        let place = |x: f64, y: f64| {
+            let (px, py) = ((x - lw / 2.0) * scale * fx, (y - lh / 2.0) * scale * fy);
+            (cx + px * cos - py * sin, cy + px * sin + py * cos)
+        };
+        Some([
+            place(0.0, 0.0),
+            place(lw, 0.0),
+            place(lw, lh),
+            place(0.0, lh),
+        ])
+    }
+
+    /// Which resize handle is under the pointer.
+    fn resize_handle_at(&self, point: (f64, f64)) -> Option<Handle> {
+        let [nw, ne, se, sw] = self.image_corners()?;
+        let mid = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+        let near = |a: (f64, f64)| {
+            (point.0 - a.0).abs() <= HANDLE_GRAB && (point.1 - a.1).abs() <= HANDLE_GRAB
+        };
+        for (spot, handle) in [
+            (nw, Handle::NorthWest),
+            (mid(nw, ne), Handle::North),
+            (ne, Handle::NorthEast),
+            (mid(ne, se), Handle::East),
+            (se, Handle::SouthEast),
+            (mid(se, sw), Handle::South),
+            (sw, Handle::SouthWest),
+            (mid(sw, nw), Handle::West),
+        ] {
+            if near(spot) {
+                return Some(handle);
+            }
+        }
+        None
     }
 
     // -- cropping ---------------------------------------------------------
@@ -1145,9 +1366,13 @@ impl ImageCanvas {
         };
         // A tile is only ever meant to cover the window, so refuse to ask for
         // one much larger than that however odd the region turns out to be.
+        // `visible_region` works in the sizes on screen; the rasteriser wants
+        // the drawing's own, so a pending resize is divided back out.
+        let (rx, ry) = self.resize_factor();
+        let region = (region.0 / rx, region.1 / ry, region.2 / rx, region.3 / ry);
         let budget = (self.width() as f64 * self.height() as f64 * 4.0).max(1.0);
         let area = (region.2 * region.3).max(1e-6);
-        let wanted = imp.target_scale.get().min((budget / area).sqrt());
+        let wanted = (imp.target_scale.get() * rx).min((budget / area).sqrt());
 
         // Skip when the existing tile already covers this view sharply enough.
         if let Some(tile) = imp.tile.borrow().as_ref() {
@@ -1269,6 +1494,25 @@ impl ImageCanvas {
     }
 
     fn update_cursor(&self) {
+        if self.imp().resizing.get() {
+            // Only over a grip: elsewhere the picture still pans, and saying
+            // otherwise would promise something the drag does not do.
+            let name = match self.resize_handle_at(self.imp().pointer.get()) {
+                Some(Handle::NorthWest | Handle::SouthEast) => Some("nwse-resize"),
+                Some(Handle::NorthEast | Handle::SouthWest) => Some("nesw-resize"),
+                Some(Handle::North | Handle::South) => Some("ns-resize"),
+                Some(Handle::East | Handle::West) => Some("ew-resize"),
+                _ => {
+                    if self.is_pannable() {
+                        Some("grab")
+                    } else {
+                        None
+                    }
+                }
+            };
+            self.set_cursor_from_name(name);
+            return;
+        }
         if self.imp().cropping.get() {
             if self.imp().freehand.get() {
                 self.set_cursor_from_name(Some("crosshair"));
@@ -1442,7 +1686,10 @@ impl ImageCanvas {
         if let Some(scene) = imp.scene.borrow().as_ref() {
             snapshot.save();
             snapshot.translate(&graphene::Point::new(base_rect.x(), base_rect.y()));
-            snapshot.scale(scale as f32, scale as f32);
+            // The scene is drawn in the image's real units, so a pending
+            // resize is an extra scale on top of the zoom.
+            let (rx, ry) = self.resize_factor();
+            snapshot.scale((scale * rx) as f32, (scale * ry) as f32);
             snapshot.append_node(scene);
             snapshot.restore();
             snapshot.restore();
@@ -1450,6 +1697,7 @@ impl ImageCanvas {
                 snapshot.pop();
             }
             self.draw_crop(snapshot);
+            self.draw_resize(snapshot);
             return;
         }
 
@@ -1460,10 +1708,15 @@ impl ImageCanvas {
                 // outwards, and those smeared edges show around the crisp ones
                 // as a halo -- which reads as a glow the drawing never had.
                 // So it is only painted in the bands the tile does not cover.
-                let left = tile.x.max(0.0);
-                let top = tile.y.max(0.0);
-                let right = (tile.x + tile.width).min(logical_w);
-                let bottom = (tile.y + tile.height).min(logical_h);
+                // Tiles are addressed in real pixels; the layout below is in
+                // the resized ones.
+                let (rx, ry) = self.resize_factor();
+                let (tx, ty) = (tile.x * rx, tile.y * ry);
+                let (tw, th) = (tile.width * rx, tile.height * ry);
+                let left = tx.max(0.0);
+                let top = ty.max(0.0);
+                let right = (tx + tw).min(logical_w);
+                let bottom = (ty + th).min(logical_h);
 
                 for (x, y, w, h) in [
                     (0.0, 0.0, logical_w, top),
@@ -1481,7 +1734,7 @@ impl ImageCanvas {
                 snapshot.append_scaled_texture(
                     &tile.texture,
                     gsk::ScalingFilter::Linear,
-                    &to_local(tile.x, tile.y, tile.width, tile.height),
+                    &to_local(tx, ty, tw, th),
                 );
             }
             None => snapshot.append_scaled_texture(&texture, filter, &base_rect),
@@ -1491,10 +1744,56 @@ impl ImageCanvas {
             snapshot.pop();
         }
         self.draw_crop(snapshot);
+        self.draw_resize(snapshot);
     }
 
     /// The crop overlay, drawn in widget space so the handles stay a constant
     /// size on screen however far the image is zoomed.
+    /// The resize outline: the picture's own edge, with a grip on each corner
+    /// and each side. Drawn over the image rather than dimming anything —
+    /// nothing is being excluded here, only measured.
+    fn draw_resize(&self, snapshot: &gtk::Snapshot) {
+        let imp = self.imp();
+        if !imp.resizing.get() {
+            return;
+        }
+        let Some([nw, ne, se, sw]) = self.image_corners() else {
+            return;
+        };
+        let line = gdk::RGBA::new(1.0, 1.0, 1.0, 0.9);
+        let shadow = gdk::RGBA::new(0.0, 0.0, 0.0, 0.45);
+        let grip = gdk::RGBA::new(1.0, 1.0, 1.0, 0.95);
+
+        let outline = gsk::PathBuilder::new();
+        outline.move_to(nw.0 as f32, nw.1 as f32);
+        for corner in [ne, se, sw] {
+            outline.line_to(corner.0 as f32, corner.1 as f32);
+        }
+        outline.close();
+        let path = outline.to_path();
+        // A dark stroke under a light one, so the edge reads against a picture
+        // of any brightness.
+        snapshot.append_stroke(&path, &gsk::Stroke::new(4.0), &shadow);
+        snapshot.append_stroke(&path, &gsk::Stroke::new(1.5), &line);
+
+        let mid = |a: (f64, f64), b: (f64, f64)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
+        let half = (HANDLE_DRAW / 2.0) as f32;
+        let square = |spot: (f64, f64), size: f32| {
+            graphene::Rect::new(
+                spot.0 as f32 - size / 2.0,
+                spot.1 as f32 - size / 2.0,
+                size,
+                size,
+            )
+        };
+        for spot in [nw, mid(nw, ne), ne, mid(ne, se), se, mid(se, sw), sw, mid(sw, nw)] {
+            // A dark square a little larger behind each grip, for the same
+            // reason as the double stroke.
+            snapshot.append_color(&shadow, &square(spot, half * 2.0 + 4.0));
+            snapshot.append_color(&grip, &square(spot, half * 2.0));
+        }
+    }
+
     fn draw_crop(&self, snapshot: &gtk::Snapshot) {
         let imp = self.imp();
         if !imp.cropping.get() {
@@ -1612,8 +1911,9 @@ impl ImageCanvas {
             self,
             move |_, x, y| {
                 canvas.imp().pointer.set((x, y));
-                // While cropping, the pointer should say what a drag would do.
-                if canvas.imp().cropping.get() {
+                // While cropping or resizing, the pointer should say what a
+                // drag would do.
+                if canvas.imp().cropping.get() || canvas.imp().resizing.get() {
                     canvas.update_cursor();
                 }
             }
@@ -1655,6 +1955,16 @@ impl ImageCanvas {
                 imp.dragging.set(false);
                 imp.drag_origin.set(imp.centre.get());
 
+                if imp.resizing.get() {
+                    let handle = canvas.resize_handle_at((start_x, start_y));
+                    imp.resize_handle.set(handle);
+                    if handle.is_some() {
+                        imp.resize_origin.set(imp.logical.get());
+                        return;
+                    }
+                    // Missing the grips leaves the drag to pan, as usual.
+                }
+
                 if !imp.cropping.get() {
                     return;
                 }
@@ -1682,6 +1992,13 @@ impl ImageCanvas {
             self,
             move |_, dx, dy| {
                 let imp = canvas.imp();
+
+                if imp.resizing.get() {
+                    if let Some(handle) = imp.resize_handle.get() {
+                        canvas.drag_resize(handle, (dx, dy));
+                        return;
+                    }
+                }
 
                 if imp.cropping.get() {
                     if imp.freehand.get() {

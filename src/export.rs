@@ -17,17 +17,25 @@ use crate::loader;
 
 /// Apply the live edits, and optionally a crop, to an image already in memory.
 ///
-/// Order matters and mirrors what the view does — flip, then rotate, then cut.
-/// That is what puts the crop rectangle, which is recorded in display space,
-/// into the same coordinates as the pixels it is cutting. Tone comes last
-/// because it is per-pixel and commutes with all of it, so it may as well run
-/// on the fewest pixels.
+/// Order matters and mirrors what the view does — resize, flip, rotate, then
+/// cut. Resizing comes first because the crop rectangle is recorded against
+/// the size on screen, which is the resized one; cutting first would take the
+/// wrong part. Tone comes last because it is per-pixel and commutes with all of
+/// it, so it may as well run on the fewest pixels.
 pub fn apply(
     mut image: DynamicImage,
     live: LiveEdits,
     crop: Option<&CropSelection>,
     display: (f64, f64),
 ) -> Result<DynamicImage, String> {
+    if let Some((width, height)) = live.resize {
+        if (width, height) != (image.width(), image.height()) {
+            // Lanczos costs more than the alternatives and is worth it: this
+            // runs once per export, and a cheap filter is visible as softness
+            // on any real downscale.
+            image = image.resize_exact(width, height, image::imageops::FilterType::Lanczos3);
+        }
+    }
     if live.flip_h {
         image = image.fliph();
     }
@@ -40,6 +48,54 @@ pub fn apply(
         image = cut(image, crop, display)?;
     }
     Ok(live.adjust.bake(image))
+}
+
+/// A format an edited image can be written to.
+///
+/// Every entry here is a *raster* format, and that is the whole rule about what
+/// can be exported to what: an image that has been decoded is pixels, and
+/// pixels can be written as any of these. The direction that does not work is
+/// the other one — a photograph cannot become an SVG, because nothing can
+/// recover the shapes it never had. A drawing going the other way is fine and
+/// needs no special case: by the time it reaches here it is pixels like
+/// anything else.
+pub struct Target {
+    pub label: &'static str,
+    pub extension: &'static str,
+    /// Encoders with a size limit of their own. ICO is the only common one.
+    pub max_dimension: Option<u32>,
+    /// Shown beside the name when the format costs the picture something.
+    pub caveat: Option<&'static str>,
+}
+
+/// Ordered by how likely someone is to want them, not alphabetically.
+pub const TARGETS: &[Target] = &[
+    Target { label: "PNG", extension: "png", max_dimension: None, caveat: None },
+    Target { label: "JPEG", extension: "jpg", max_dimension: None,
+             caveat: Some("no transparency") },
+    Target { label: "WebP", extension: "webp", max_dimension: None, caveat: None },
+    Target { label: "TIFF", extension: "tiff", max_dimension: None, caveat: None },
+    Target { label: "BMP", extension: "bmp", max_dimension: None, caveat: None },
+    Target { label: "GIF", extension: "gif", max_dimension: None,
+             caveat: Some("256 colours, one frame") },
+    Target { label: "ICO", extension: "ico", max_dimension: Some(256), caveat: None },
+];
+
+impl Target {
+    /// Why this format cannot take an image of this size, if it cannot.
+    ///
+    /// Checked before the file dialog opens rather than after, so the refusal
+    /// arrives while there is still something to do about it.
+    pub fn refusal(&self, width: u32, height: u32) -> Option<String> {
+        let limit = self.max_dimension?;
+        (width > limit || height > limit).then(|| {
+            format!(
+                "{} cannot hold an image larger than {limit} × {limit}; this one is {width} × {height}. \
+                 Resize it first, or pick another format.",
+                self.label
+            )
+        })
+    }
 }
 
 /// Decode a file into the buffer that editing works on.
@@ -238,5 +294,43 @@ mod tests {
         assert!(contains(&square, 5.0, 5.0));
         assert!(!contains(&square, 15.0, 5.0));
         assert!(!contains(&square, 5.0, -1.0));
+    }
+}
+
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    fn sample(width: u32, height: u32) -> DynamicImage {
+        DynamicImage::ImageRgba8(RgbaImage::from_pixel(width, height, Rgba([200, 80, 80, 128])))
+    }
+
+    /// Offering a format the build cannot actually encode would fail only at
+    /// the moment someone tried to use it, which is the worst time to find out.
+    #[test]
+    fn every_offered_format_can_be_written() {
+        let dir = std::env::temp_dir().join("simple-viewer-format-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        for target in TARGETS {
+            let limit = target.max_dimension.unwrap_or(64).min(64);
+            let path = dir.join(format!("probe.{}", target.extension));
+            let result = write(&sample(limit, limit), &path);
+            assert!(result.is_ok(), "{} failed: {:?}", target.label, result);
+            let written = image::open(&path).expect("what we wrote should read back");
+            assert_eq!((written.width(), written.height()), (limit, limit));
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// ICO is the one format with a size of its own to answer to.
+    #[test]
+    fn a_format_with_a_size_limit_says_so_before_writing() {
+        let ico = TARGETS.iter().find(|t| t.label == "ICO").unwrap();
+        assert!(ico.refusal(256, 256).is_none());
+        let refusal = ico.refusal(512, 300).expect("512 is past the limit");
+        assert!(refusal.contains("512"), "the message should name the size: {refusal}");
+        let png = TARGETS.iter().find(|t| t.label == "PNG").unwrap();
+        assert!(png.refusal(30_000, 30_000).is_none());
     }
 }
