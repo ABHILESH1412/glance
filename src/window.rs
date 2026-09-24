@@ -36,6 +36,19 @@ pub struct Shown {
     subtitle: String,
 }
 
+/// A tool section's header: an icon beside its name, so the panel can be
+/// scanned by shape rather than read line by line.
+fn section_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::new();
+    button.set_child(Some(
+        &adw::ButtonContent::builder()
+            .icon_name(icon)
+            .label(label)
+            .build(),
+    ));
+    button
+}
+
 /// A colour well that lets the alpha channel be set, so "no background" is a
 /// colour you can choose rather than a separate switch.
 fn colour_button(initial: gdk::RGBA) -> gtk::ColorDialogButton {
@@ -44,6 +57,25 @@ fn colour_button(initial: gdk::RGBA) -> gtk::ColorDialogButton {
     let button = gtk::ColorDialogButton::new(Some(dialog));
     button.set_rgba(&initial);
     button
+}
+
+/// Bring an angle into the half turn either side of upright, the way angles
+/// work rather than the way a bounded number works: 400 degrees is 40, -200 is
+/// 160. Half a turn stays at 180 rather than becoming -180, because that is
+/// what someone who typed 180 asked for.
+fn wrap_degrees(degrees: f64) -> f64 {
+    let wrapped = degrees.rem_euclid(360.0);
+    if wrapped > 180.0 {
+        wrapped - 360.0
+    } else {
+        wrapped
+    }
+}
+
+/// True when two angles point the same way, whole turns and the two spellings
+/// of half a turn (180 and -180) included.
+fn same_angle(a: f64, b: f64) -> bool {
+    wrap_degrees(a - b).abs() < 0.01
 }
 
 /// A pixel-dimension entry. Wide range, typed or stepped.
@@ -89,7 +121,6 @@ mod imp {
         pub crop_toggle: gtk::ToggleButton,
         pub crop_options: gtk::Box,
         pub freehand_toggle: gtk::ToggleButton,
-        pub resize_button: gtk::Button,
         pub resize_toggle: gtk::ToggleButton,
         pub resize_options: gtk::Box,
         pub width_spin: gtk::SpinButton,
@@ -161,16 +192,22 @@ mod imp {
         /// Thumbnails already being generated, so a slot that reappears does
         /// not queue the same decode twice.
         pub pending_thumbs: RefCell<HashSet<PathBuf>>,
+        pub transform_toggle: gtk::ToggleButton,
+        /// The rotate and flip controls. Once a bar along the bottom; now a
+        /// section of the edit panel, because everything it does ends up in
+        /// the saved pixels and that is where such things belong.
         pub rotation_bar: gtk::Box,
         pub rotation_scale: gtk::Scale,
-        pub rotation_label: gtk::Label,
+        /// The angle, both shown and typed. An angle is a number the user
+        /// often knows exactly — 90, 7, -3 to straighten a horizon — and
+        /// hunting for it with a slider is no way to enter a number you know.
+        pub rotation_spin: gtk::SpinButton,
         /// Set while pushing the canvas's angle into the slider, so the
         /// slider's own value-changed does not bounce it straight back.
         pub syncing: Cell<bool>,
         pub shown: RefCell<Option<Shown>>,
         /// The other images in the same folder, and where we are in them.
         pub playlist: RefCell<Option<Playlist>>,
-        pub transform_open: Cell<bool>,
         /// Bumped on every open so a slow decode that finishes after a newer one
         /// was started can be recognised and discarded.
         pub generation: Cell<u64>,
@@ -188,11 +225,10 @@ mod imp {
                 copy_button: gtk::Button::from_icon_name("edit-copy-symbolic"),
                 edit_button: gtk::ToggleButton::new(),
                 edit_panel: gtk::Box::new(gtk::Orientation::Vertical, 12),
-                crop_toggle: gtk::ToggleButton::with_label("Crop"),
+                crop_toggle: section_toggle("edit-cut-symbolic", "Crop"),
                 crop_options: gtk::Box::new(gtk::Orientation::Vertical, 8),
                 freehand_toggle: gtk::ToggleButton::with_label("Freehand"),
-                resize_button: gtk::Button::new(),
-                resize_toggle: gtk::ToggleButton::with_label("Resize"),
+                resize_toggle: section_toggle("view-fullscreen-symbolic", "Resize"),
                 resize_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 width_spin: dimension_spin(),
                 height_spin: dimension_spin(),
@@ -204,17 +240,17 @@ mod imp {
                 size_value: gtk::SpinButton::with_range(1.0, 99_999.0, 10.0),
                 size_unit: gtk::DropDown::default(),
                 size_note: gtk::Label::new(None),
-                export_toggle: gtk::ToggleButton::with_label("Export"),
+                export_toggle: section_toggle("document-send-symbolic", "Export"),
                 export_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 quality_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 quality_scale: gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0),
-                draw_toggle: gtk::ToggleButton::with_label("Draw"),
+                draw_toggle: section_toggle("applications-graphics-symbolic", "Draw"),
                 draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_tools: RefCell::new(Vec::new()),
                 draw_colour: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
                 draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),
                 draw_hint: gtk::Label::new(None),
-                text_toggle: gtk::ToggleButton::with_label("Text"),
+                text_toggle: section_toggle("insert-text-symbolic", "Text"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
                 text_size: gtk::SpinButton::with_range(6.0, 2000.0, 1.0),
@@ -225,7 +261,7 @@ mod imp {
                 text_background: colour_button(gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
                 text_font: gtk::FontDialogButton::new(Some(gtk::FontDialog::new())),
                 text_hint: gtk::Label::new(None),
-                adjust_toggle: gtk::ToggleButton::with_label("Adjust"),
+                adjust_toggle: section_toggle("display-brightness-symbolic", "Adjust"),
                 adjust_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 brightness_scale: tone_scale(),
                 contrast_scale: tone_scale(),
@@ -249,18 +285,18 @@ mod imp {
                 flip_v_button: gtk::ToggleButton::new(),
                 strip: FilmStrip::new(),
                 pending_thumbs: RefCell::new(HashSet::new()),
-                rotation_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+                transform_toggle: gtk::ToggleButton::new(),
+                rotation_bar: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 rotation_scale: gtk::Scale::with_range(
                     gtk::Orientation::Horizontal,
                     -180.0,
                     180.0,
                     1.0,
                 ),
-                rotation_label: gtk::Label::new(Some("0°")),
+                rotation_spin: gtk::SpinButton::with_range(-180.0, 180.0, 1.0),
                 syncing: Cell::new(false),
                 shown: RefCell::new(None),
                 playlist: RefCell::new(None),
-                transform_open: Cell::new(false),
                 generation: Cell::new(0),
             }
         }
@@ -351,6 +387,7 @@ impl Window {
 
         let rotate_section = gio::Menu::new();
         rotate_section.append(Some("Rotate and _Flip…"), Some("win.transform-open"));
+        // Everything below is the quick version that does not need the panel.
         rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
         rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
         rotate_section.append(Some("Flip _Horizontally"), Some("win.flip-horizontal"));
@@ -380,8 +417,11 @@ impl Window {
         // Opens the transform options. Nothing to transform until an image is
         // loaded, so it starts switched off.
         let rotate_button = &imp.rotate_button;
-        rotate_button.set_tooltip_text(Some("Rotate and Flip"));
-        rotate_button.set_action_name(Some("win.transform-open"));
+        // A quick quarter turn to look at something sideways. Rotating in
+        // earnest — a free angle, flips, anything that gets saved — lives in
+        // the edit panel.
+        rotate_button.set_tooltip_text(Some("Turn 90° to look (])"));
+        rotate_button.set_action_name(Some("win.rotate-right"));
         rotate_button.set_sensitive(false);
 
         let copy_button = &imp.copy_button;
@@ -403,18 +443,6 @@ impl Window {
         edit_button.set_tooltip_text(Some("Edit this image (Ctrl+E)"));
         edit_button.add_css_class("edit-action");
         edit_button.set_sensitive(false);
-
-        let resize_button = &imp.resize_button;
-        resize_button.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("view-fullscreen-symbolic")
-                .label("Resize")
-                .build(),
-        ));
-        resize_button.set_tooltip_text(Some("Change the pixel size (Ctrl+R)"));
-        resize_button.add_css_class("resize-action");
-        resize_button.set_action_name(Some("win.resize"));
-        resize_button.set_sensitive(false);
 
         let delete_button = &imp.delete_button;
         delete_button.set_child(Some(
@@ -445,36 +473,18 @@ impl Window {
         action_bar.add_css_class("toolbar");
         action_bar.add_css_class("image-actions");
         action_bar.append(edit_button);
-        action_bar.append(resize_button);
         action_bar.append(delete_button);
         // Nothing to act on until something is open.
         action_bar.set_visible(false);
 
-        // While the options are open the header carries nothing but the way
-        // out of them.
-        let close_button = gtk::Button::from_icon_name("window-close-symbolic");
-        close_button.set_tooltip_text(Some("Close Rotation Options (Esc)"));
-        close_button.set_action_name(Some("win.transform-close"));
-
-        let transform_header = adw::HeaderBar::builder()
-            .show_start_title_buttons(false)
-            .show_end_title_buttons(false)
-            .title_widget(&gtk::Label::new(None))
-            .build();
-        transform_header.pack_end(&close_button);
-
         let header_stack = &imp.header_stack;
-        header_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
-        header_stack.set_transition_duration(150);
         header_stack.add_named(&header, Some("normal"));
-        header_stack.add_named(&transform_header, Some("transform"));
         header_stack.set_visible_child_name("normal");
 
         let toolbar = &imp.toolbar;
         toolbar.add_top_bar(header_stack);
         toolbar.add_top_bar(action_bar);
         toolbar.set_content(Some(&imp.toasts));
-        toolbar.add_bottom_bar(self.build_rotation_bar());
         toolbar.add_bottom_bar(&imp.strip);
         self.set_content(Some(toolbar));
 
@@ -1121,6 +1131,28 @@ impl Window {
         history_row.append(&imp.redo_button);
         tools.append(&history_row);
 
+        // -- rotate and flip --
+        let turning = &imp.transform_toggle;
+        turning.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("object-rotate-right-symbolic")
+                .label("Rotate & Flip")
+                .build(),
+        ));
+        turning.set_tooltip_text(Some("Turn or mirror the picture (Ctrl+T)"));
+        turning.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if button.is_active() {
+                    window.close_other_sections(button);
+                }
+                window.imp().rotation_bar.set_visible(button.is_active());
+            }
+        ));
+        tools.append(turning);
+        tools.append(self.build_rotation_bar());
+
         // -- crop tool --
         let crop = &imp.crop_toggle;
         crop.set_tooltip_text(Some("Choose the part of the image to keep"));
@@ -1390,12 +1422,14 @@ impl Window {
         let mut anchor: Option<gtk::ToggleButton> = None;
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
-            button.set_child(Some(
-                &adw::ButtonContent::builder()
-                    .icon_name(tool.icon())
-                    .label(tool.label())
-                    .build(),
-            ));
+            // The icon is the mark the tool makes, drawn by the same code that
+            // draws it on the picture. Adwaita has no line, rectangle, ellipse
+            // or arrow, and the nearest stock icons read as other things.
+            let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            face.set_halign(gtk::Align::Center);
+            face.append(&draw::ToolIcon::new(*tool));
+            face.append(&gtk::Label::new(Some(tool.label())));
+            button.set_child(Some(&face));
             button.set_tooltip_text(Some(tool.label()));
             match &anchor {
                 Some(first) => button.set_group(Some(first)),
@@ -1818,6 +1852,7 @@ impl Window {
     fn close_other_sections(&self, keep: &gtk::ToggleButton) {
         let imp = self.imp();
         for section in [
+            &imp.transform_toggle,
             &imp.crop_toggle,
             &imp.resize_toggle,
             &imp.adjust_toggle,
@@ -2151,18 +2186,13 @@ impl Window {
         }));
     }
 
-    /// The rotation bar: two quarter-turn buttons either side of a free-angle
-    /// slider, with the current angle spelled out between them.
+    /// The rotation controls, in two rows: the angle on its own line at the
+    /// top, then the buttons. Squeezed onto one line the slider had barely a
+    /// centimetre to cover half a turn, which made every angle a fight.
     fn build_rotation_bar(&self) -> &gtk::Box {
         let imp = self.imp();
         let bar = &imp.rotation_bar;
-
-        bar.add_css_class("toolbar");
-        bar.set_margin_top(6);
-        bar.set_margin_bottom(6);
-        bar.set_margin_start(12);
-        bar.set_margin_end(12);
-        // Nothing to rotate until an image is open.
+        // Hidden until its section is opened, like every other tool's options.
         bar.set_visible(false);
 
         let left = gtk::Button::from_icon_name("object-rotate-left-symbolic");
@@ -2188,12 +2218,53 @@ impl Window {
             slider.add_mark(mark, gtk::PositionType::Bottom, None);
         }
 
-        let label = &imp.rotation_label;
+        let spin = &imp.rotation_spin;
         // Fixed width, otherwise the slider shuffles sideways as digits appear.
-        label.set_width_chars(6);
-        label.set_xalign(1.0);
-        label.add_css_class("numeric");
-        label.add_css_class("dim-label");
+        spin.set_width_chars(5);
+        spin.set_max_width_chars(6);
+        spin.set_hexpand(false);
+        spin.set_digits(0);
+        spin.set_tooltip_text(Some("The angle. Type one, or step it a degree at a time"));
+        // Angles wrap rather than stop, so stepping past half a turn comes
+        // round the other side instead of sticking at the end.
+        spin.set_wrap(true);
+        // Not numeric: the box shows a degree sign, and refusing to let the
+        // user type one back would be a trap. What is typed is parsed below.
+        spin.set_numeric(false);
+
+        // Draw the degree sign, so the number is never ambiguous.
+        spin.connect_output(|spin| {
+            spin.set_text(&format!("{:.0}°", spin.value()));
+            glib::Propagation::Stop
+        });
+
+        // Read what was typed. A whole turn is 360 degrees and then it starts
+        // again, so a number past the end is not something to refuse or clamp:
+        // 400 is 40, -200 is 160, 720 is straight.
+        //
+        // Text that is not a number at all puts the old angle back, by handing
+        // it straight back as the answer. GTK's own way of saying "that was not
+        // a number" turns the picture upright instead of leaving it alone,
+        // which loses work over a typo.
+        spin.connect_input(|spin| {
+            let text = spin.text();
+            let typed = text.trim().trim_end_matches('\u{00b0}').trim();
+            Some(Ok(match typed.parse::<f64>() {
+                Ok(degrees) if degrees.is_finite() => wrap_degrees(degrees),
+                _ => spin.value(),
+            }))
+        });
+
+        spin.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |spin| {
+                if window.imp().syncing.get() {
+                    return;
+                }
+                window.imp().view.canvas().set_rotation(spin.value());
+            }
+        ));
 
         let flip_h = &imp.flip_h_button;
         flip_h.set_icon_name("object-flip-horizontal-symbolic");
@@ -2212,14 +2283,33 @@ impl Window {
         reset.set_action_name(Some("win.rotate-reset"));
         reset.add_css_class("flat");
 
-        bar.append(&left);
+        // The slider gets the whole width of the panel to itself. Sharing a
+        // line with four buttons left it a centimetre to cover half a turn,
+        // which is what made every angle a fight.
+        let angle = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let angle_label = gtk::Label::new(Some("Angle"));
+        angle_label.set_xalign(0.0);
+        angle_label.set_hexpand(true);
+        angle_label.add_css_class("dim-label");
+        angle.append(&angle_label);
+        angle.append(spin);
+
+        // ...and the things that jump to a particular angle underneath.
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        buttons.append(&left);
+        buttons.append(&right);
+        buttons.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        buttons.append(flip_h);
+        buttons.append(flip_v);
+        // Pushed to the far end: undoing the lot should not sit a slip away
+        // from the buttons used all the time.
+        reset.set_hexpand(true);
+        reset.set_halign(gtk::Align::End);
+        buttons.append(&reset);
+
         bar.append(slider);
-        bar.append(label);
-        bar.append(&right);
-        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        bar.append(flip_h);
-        bar.append(flip_v);
-        bar.append(&reset);
+        bar.append(&angle);
+        bar.append(&buttons);
 
         slider.connect_value_changed(glib::clone!(
             #[weak(rename_to = window)]
@@ -2254,29 +2344,33 @@ impl Window {
     /// Show or hide the transform options. While they are open the header
     /// carries only the close button, so the controls have the user's full
     /// attention and there is one obvious way back.
+    /// Show the rotate and flip controls, which means opening the edit panel
+    /// at that section.
     fn set_transform_open(&self, open: bool) {
         let imp = self.imp();
-        // Nothing to transform with no image, and Escape must stay harmless
-        // when the options are already closed.
-        if open && !imp.view.canvas().has_image() {
+        if open && !imp.edit_button.is_sensitive() {
             return;
         }
-        imp.transform_open.set(open);
-        imp.rotation_bar.set_visible(open);
-        imp.header_stack
-            .set_visible_child_name(if open { "transform" } else { "normal" });
-        self.update_navigation();
+        if open {
+            imp.edit_button.set_active(true);
+        }
+        imp.transform_toggle.set_active(open);
     }
 
-    /// Push the canvas's angle back into the slider and the readout.
+    /// Push the canvas's angle back into the slider and the typed readout.
     fn show_rotation(&self, degrees: f64) {
         let imp = self.imp();
-        imp.rotation_label.set_text(&format!("{degrees:.0}°"));
-        if (imp.rotation_scale.value() - degrees).abs() > 0.01 {
-            imp.syncing.set(true);
+        imp.syncing.set(true);
+        // Half a turn is the same angle whichever way it is written, so a
+        // readout showing 180 is left alone rather than flipped to -180 under
+        // the user's fingers.
+        if !same_angle(imp.rotation_scale.value(), degrees) {
             imp.rotation_scale.set_value(degrees);
-            imp.syncing.set(false);
         }
+        if !same_angle(imp.rotation_spin.value(), degrees) {
+            imp.rotation_spin.set_value(degrees);
+        }
+        imp.syncing.set(false);
     }
 
     /// Accepts a file dropped anywhere on the window.
@@ -2442,7 +2536,6 @@ impl Window {
                 // trap, so it goes away along with the filmstrip.
                 let has_file = window.imp().current.borrow().is_some();
                 window.imp().delete_button.set_sensitive(!open && has_file);
-                window.imp().resize_button.set_sensitive(has_file);
                 window.update_navigation();
             }
         ));
@@ -2503,7 +2596,7 @@ impl Window {
                     return;
                 }
                 imp.edit_button.set_active(true);
-                imp.resize_toggle.set_active(!imp.resize_toggle.is_active());
+                imp.resize_toggle.set_active(true);
             }
         ));
         self.add_action(&resize);
@@ -2656,8 +2749,6 @@ impl Window {
             move |_, _| {
                 if window.is_fullscreen() {
                     window.unfullscreen();
-                } else if window.imp().transform_open.get() {
-                    window.set_transform_open(false);
                 } else {
                     window.cancel_editing();
                 }
@@ -2673,13 +2764,6 @@ impl Window {
         ));
         self.add_action(&transform_open);
 
-        let transform_close = gio::SimpleAction::new("transform-close", None);
-        transform_close.connect_activate(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_, _| window.set_transform_open(false)
-        ));
-        self.add_action(&transform_close);
 
         let flip_h = gio::SimpleAction::new("flip-horizontal", None);
         flip_h.connect_activate(glib::clone!(
@@ -2895,7 +2979,6 @@ impl Window {
                         window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
                         window.imp().copy_button.set_sensitive(true);
-                        window.imp().resize_button.set_sensitive(true);
                         window.describe_target_size();
                         window.imp().action_bar.set_visible(true);
                         // The canvas drops the old selection, so put the panel
@@ -3133,9 +3216,7 @@ impl Window {
         // Turning the toggle off restores the filmstrip and the arrow keys.
         imp.edit_button.set_active(false);
         imp.edit_button.set_sensitive(false);
-        imp.resize_button.set_sensitive(false);
         imp.action_bar.set_visible(false);
-        self.set_transform_open(false);
         self.update_navigation();
     }
 
@@ -3145,7 +3226,7 @@ impl Window {
     /// or by thumbnail — is switched off and the filmstrip goes with it.
     fn update_navigation(&self) {
         let imp = self.imp();
-        let busy = imp.transform_open.get() || imp.edit_button.is_active();
+        let busy = imp.edit_button.is_active();
         let enabled = imp.playlist.borrow().is_some() && !busy;
         for name in ["next-image", "previous-image"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
@@ -3239,5 +3320,40 @@ impl Window {
             .comments("A small image viewer for GNOME.")
             .build();
         about.present(Some(self));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{same_angle, wrap_degrees};
+
+    #[test]
+    fn a_typed_angle_past_the_end_comes_round_rather_than_sticking() {
+        // Someone typing 400 means 40, not "as far as it goes".
+        assert!((wrap_degrees(400.0) - 40.0).abs() < 1e-9);
+        assert!((wrap_degrees(-200.0) - 160.0).abs() < 1e-9);
+        assert!(wrap_degrees(720.0).abs() < 1e-9);
+        assert!((wrap_degrees(-365.0) - -5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn half_a_turn_stays_the_way_it_was_typed() {
+        assert!((wrap_degrees(180.0) - 180.0).abs() < 1e-9);
+        assert!((wrap_degrees(-180.0) - 180.0).abs() < 1e-9);
+        assert!(same_angle(180.0, -180.0));
+    }
+
+    #[test]
+    fn ordinary_angles_are_left_alone() {
+        for degrees in [-179.0, -90.0, -0.5, 0.0, 1.0, 45.0, 90.0, 179.5] {
+            assert!((wrap_degrees(degrees) - degrees).abs() < 1e-9, "{degrees}");
+        }
+    }
+
+    #[test]
+    fn upside_down_is_not_the_same_as_upright() {
+        assert!(!same_angle(0.0, 180.0));
+        assert!(!same_angle(45.0, -135.0));
+        assert!(same_angle(45.0, 405.0));
     }
 }

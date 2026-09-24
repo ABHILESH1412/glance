@@ -72,10 +72,18 @@ approximated.
 
 ### Transforms
 
-- Rotate 90° either way, or any angle with a slider and a live degree readout
-- Flip horizontally and vertically, applied in the image's own frame so a flip mirrors
-  the picture regardless of how it is rotated
-- All of it lives in a panel opened from the header, so it stays out of the way
+- The header carries one rotate button for a quick quarter turn — for looking at
+  something sideways, not for changing it
+- **Rotate & Flip** in the edit panel for the rest: either quarter turn, any angle,
+  and flips applied in the image's own frame so a flip mirrors the picture regardless
+  of how it is rotated. It is in the panel because everything there ends up in the
+  saved pixels
+- The angle is a slider with the width of the panel to itself and a box you can **type
+  into**, because an angle is often a number you already know — 90, or 2 to straighten
+  a horizon. The two stay in step whichever you move
+- Typed angles wrap rather than stop: 400° is 40°, -200° is 160°, 720° is straight up.
+  A whole turn is 360° and then it starts again, so there is nothing at the end to
+  clamp against. Text that is not an angle at all leaves the picture where it was
 
 ### Editing
 
@@ -119,8 +127,12 @@ approximated.
   restyleable, undoable — and they stack in the order they were made. The preview on
   screen and the pixels that get written go through the same paths and the same render
   nodes, so what you position is what you get
-- The sidebar shows **one section at a time**: opening Crop puts Draw away. Six of them
-  — Crop, Resize, Adjust, Draw, Text, Export — with Cancel and Save always to hand
+- The sidebar shows **one section at a time**: opening Crop puts Draw away. Seven of
+  them — Rotate & Flip, Crop, Resize, Adjust, Draw, Text, Export — each with an icon, and
+  Cancel and Save always to hand
+- The drawing tools show the mark they make rather than a stock icon: the line button
+  draws a line, the ellipse an ellipse, drawn by the same code that puts them on the
+  picture
 - A **quality** dial for the lossy formats, defaulting to 85. It appears only for
   formats that have one — the lossless ones would ignore it — and steps aside when a
   file size is being aimed at, since the search is choosing quality for you; when that
@@ -205,8 +217,8 @@ approximated.
 | `[` `]` | Rotate left / right |
 | `Ctrl+Shift+R` | Reset rotation |
 | `Ctrl+H` / `Ctrl+J` | Flip horizontally / vertically |
-| `Ctrl+T` | Rotate and flip options |
 | `Ctrl+E` | Edit panel |
+| `Ctrl+T` | Rotate and flip |
 | `Ctrl+R` | Resize |
 | `Enter` | Apply the crop |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo an edit |

@@ -7,7 +7,8 @@
 //! of "what this looks like" will drift apart.
 
 use gtk::prelude::*;
-use gtk::{gdk, graphene, gsk};
+use gtk::subclass::prelude::*;
+use gtk::{gdk, glib, graphene, gsk};
 
 use crate::text::Patch;
 
@@ -51,17 +52,6 @@ impl Tool {
             Tool::Arrow => "Arrow",
             Tool::Rectangle => "Rectangle",
             Tool::Ellipse => "Ellipse",
-        }
-    }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Tool::Pen => "document-edit-symbolic",
-            Tool::Highlighter => "format-justify-fill-symbolic",
-            Tool::Line => "format-text-strikethrough-symbolic",
-            Tool::Arrow => "go-next-symbolic",
-            Tool::Rectangle => "view-grid-symbolic",
-            Tool::Ellipse => "circle-outline-thick-symbolic",
         }
     }
 
@@ -367,3 +357,96 @@ mod tests {
         assert_eq!(through.red(), 1.0);
     }
 }
+
+/// A button icon showing the very shape the tool draws.
+///
+/// Adwaita has no line, rectangle, ellipse or arrow icons, and a stand-in from
+/// somewhere else in the set reads as the wrong thing. Drawing each tool's own
+/// mark, with the same code that draws it on the picture, cannot be wrong.
+mod icon {
+    use super::*;
+
+    mod imp {
+        use super::*;
+        use std::cell::Cell;
+
+        #[derive(Default)]
+        pub struct ToolIcon {
+            pub tool: Cell<Option<Tool>>,
+        }
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for ToolIcon {
+            const NAME: &'static str = "GlanceToolIcon";
+            type Type = super::ToolIcon;
+            type ParentType = gtk::Widget;
+        }
+
+        impl ObjectImpl for ToolIcon {}
+
+        impl WidgetImpl for ToolIcon {
+            fn snapshot(&self, snapshot: &gtk::Snapshot) {
+                let Some(tool) = self.tool.get() else {
+                    return;
+                };
+                let widget = self.obj();
+                let (w, h) = (widget.width() as f64, widget.height() as f64);
+                if w < 2.0 || h < 2.0 {
+                    return;
+                }
+                // Follow the label's colour, so the icon dims and highlights
+                // with the button like a real symbolic icon.
+                let ink = widget.color();
+                let sample = super::sample(tool, w, h);
+                let Some(path) = sample.path() else {
+                    return;
+                };
+                snapshot.append_stroke(&path, &sample.stroke(), &ink);
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct ToolIcon(ObjectSubclass<imp::ToolIcon>)
+            @extends gtk::Widget,
+            @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+    }
+
+    impl ToolIcon {
+        pub fn new(tool: Tool) -> Self {
+            let icon: Self = glib::Object::new();
+            icon.imp().tool.set(Some(tool));
+            icon.set_size_request(18, 18);
+            icon.set_valign(gtk::Align::Center);
+            icon
+        }
+    }
+
+    /// A miniature of what the tool makes, inset so the stroke has room.
+    pub(super) fn sample(tool: Tool, w: f64, h: f64) -> Mark {
+        let pad = 3.0;
+        let (x0, y0, x1, y1) = (pad, pad, w - pad, h - pad);
+        let points = match tool {
+            // A squiggle, because that is what a pen leaves.
+            Tool::Pen => vec![
+                (x0, y1),
+                (x0 + (x1 - x0) * 0.3, y0),
+                (x0 + (x1 - x0) * 0.6, y1),
+                (x1, y0),
+            ],
+            // One thick sweep, the way a marker goes down.
+            Tool::Highlighter => vec![(x0, (y0 + y1) / 2.0), (x1, (y0 + y1) / 2.0)],
+            Tool::Line | Tool::Arrow => vec![(x0, y1), (x1, y0)],
+            Tool::Rectangle | Tool::Ellipse => vec![(x0, y0), (x1, y1)],
+        };
+        Mark {
+            tool,
+            points,
+            colour: gdk::RGBA::BLACK,
+            width: if tool == Tool::Highlighter { (h - pad * 2.0).max(2.0) } else { 1.6 },
+            sequence: 0,
+        }
+    }
+}
+
+pub use icon::ToolIcon;
