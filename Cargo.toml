@@ -14,6 +14,9 @@ resvg = "0.48"
 libheif-rs = "3"
 # Camera raw: pure-Rust parsers for ~all common raw formats.
 rawler = "0.8"
+# Colour management. Pure Rust, and `in_place` spares a full copy of a large
+# photograph just to convert it.
+moxcms = { version = "0.8", features = ["in_place"] }
 
 [dependencies.image]
 version = "0.25"

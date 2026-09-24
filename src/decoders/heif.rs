@@ -54,6 +54,12 @@ pub fn decode(path: &Path, avif: bool) -> Result<LoadedImage, String> {
         rgba.extend_from_slice(row);
     }
 
+    // HEIC and AVIF carry a profile like any other photograph; a phone shot in
+    // Display P3 is flat without it.
+    if let Some(profile) = handle.color_profile_raw() {
+        crate::colour::to_srgb(&mut rgba, &profile.data);
+    }
+
     Ok(LoadedImage {
         width,
         height,

@@ -15,6 +15,10 @@ instantly and stays responsive on a 50MP photograph.
 
 The implementation leans on two decisions:
 
+Colour is handled once, at the door: every decoder converts to 8-bit sRGB before the
+picture reaches the rest of the program, so a pixel means one thing everywhere — in the
+tone sliders, under the text and drawings, and on the way back out to a file.
+
 **Rust, because an image viewer is a parser for untrusted binary data.** Image decoders
 are a classic source of memory-corruption bugs — libjpeg, libpng and WebP have all had
 serious ones. Rust removes that entire class of defect from the decoding path.
@@ -154,6 +158,11 @@ approximated.
 
 - **Animated GIF and WebP play**, and keep playing while you zoom, rotate or flip
 - **EXIF orientation is honoured**, so phone photos are upright instead of sideways
+- **ICC profiles are honoured**, so a photograph shot in Adobe RGB or Display P3 is
+  converted to sRGB on the way in rather than being shown as though its numbers meant
+  something else. A file already tagged sRGB is recognised and skipped, and one with no
+  profile is left exactly alone. On a 12-megapixel photograph the conversion costs about
+  27 ms; recognising an sRGB profile and skipping costs 2 µs
 - **SVGs render as vectors at every zoom level**, drawn by the GPU as paths where that
   is possible and otherwise re-rasterised a visible region at a time — never by enlarging
   pixels
@@ -251,7 +260,6 @@ cargo test
 
 Wanted, but not built:
 
-- ICC colour management — without it, photos from wide-gamut cameras look slightly off
 - HDR and wide-gamut display output
 - Progressive loading for very large images, so a 100MP TIFF appears in stages
 

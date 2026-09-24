@@ -2188,6 +2188,7 @@ dependencies = [
  "image",
  "libadwaita",
  "libheif-rs",
+ "moxcms",
  "rawler",
  "resvg",
 ]

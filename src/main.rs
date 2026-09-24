@@ -1,5 +1,6 @@
 mod adjust;
 mod canvas;
+mod colour;
 mod compress;
 mod decoders;
 mod draw;

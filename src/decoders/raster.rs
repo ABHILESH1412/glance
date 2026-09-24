@@ -40,22 +40,29 @@ pub fn decode(path: &Path) -> Result<LoadedImage, String> {
         .into_decoder()
         .map_err(|e| unsupported(path, &e))?;
 
-    // Read this before consuming the decoder; cameras write portrait shots as
-    // landscape plus a rotation tag, and ignoring it shows them sideways.
+    // Both of these have to be read before the decoder is consumed. Cameras
+    // write portrait shots as landscape plus a rotation tag, and ignoring that
+    // shows them sideways; they also say which colour space the numbers are
+    // in, and ignoring that shows an Adobe RGB photograph flat.
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let profile = decoder.icc_profile().ok().flatten();
 
     let mut image = DynamicImage::from_decoder(decoder).map_err(|e| unsupported(path, &e))?;
     image.apply_orientation(orientation);
 
     let rgba = image.into_rgba8();
     let (width, height) = rgba.dimensions();
+    let mut rgba = rgba.into_raw();
+    if let Some(profile) = profile {
+        crate::colour::to_srgb(&mut rgba, &profile);
+    }
 
     Ok(LoadedImage {
         width,
         height,
-        rgba: rgba.into_raw(),
+        rgba,
         premultiplied: false,
         label,
         animation: Vec::new(),
