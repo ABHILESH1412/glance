@@ -179,7 +179,7 @@ mod imp {
     impl Default for Window {
         fn default() -> Self {
             Self {
-                title: adw::WindowTitle::new("Simple Viewer", ""),
+                title: adw::WindowTitle::new("Glance", ""),
                 toasts: adw::ToastOverlay::new(),
                 view: ImageView::new(),
                 toolbar: adw::ToolbarView::new(),
@@ -303,7 +303,7 @@ impl Window {
         let imp = self.imp();
 
         self.set_default_size(900, 620);
-        self.set_title(Some("Simple Viewer"));
+        self.set_title(Some("Glance"));
 
         // The edit panel lives beside the picture rather than over it, so the
         // image never sits behind the controls being used on it.
@@ -358,7 +358,7 @@ impl Window {
         rotate_section.append(Some("Reset Rotation"), Some("win.rotate-reset"));
 
         let about_section = gio::Menu::new();
-        about_section.append(Some("_About Simple Viewer"), Some("win.about"));
+        about_section.append(Some("_About Glance"), Some("win.about"));
 
         let menu = gio::Menu::new();
         menu.append_section(None, &clipboard_section);
@@ -3125,7 +3125,7 @@ impl Window {
         imp.strip.clear();
         imp.view.canvas().set_texture(None);
         imp.view.show_idle();
-        imp.title.set_title("Simple Viewer");
+        imp.title.set_title("Glance");
         imp.title.set_subtitle("");
         imp.rotate_button.set_sensitive(false);
         imp.delete_button.set_sensitive(false);
@@ -3219,7 +3219,7 @@ impl Window {
                 imp.title.set_subtitle(&shown.subtitle);
             }
             None => {
-                imp.title.set_title("Simple Viewer");
+                imp.title.set_title("Glance");
                 imp.title.set_subtitle("");
             }
         }
@@ -3233,7 +3233,7 @@ impl Window {
 
     fn show_about(&self) {
         let about = adw::AboutDialog::builder()
-            .application_name("Simple Viewer")
+            .application_name("Glance")
             .application_icon("image-x-generic-symbolic")
             .version(env!("CARGO_PKG_VERSION"))
             .comments("A small image viewer for GNOME.")

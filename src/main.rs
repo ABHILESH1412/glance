@@ -18,13 +18,13 @@ mod window;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
-const APP_ID: &str = "dev.local.SimpleViewer";
+const APP_ID: &str = "io.github.ABHILESH1412.Glance";
 
 /// Where the chosen theme is remembered. A plain file rather than GSettings:
 /// that would need a schema compiled and installed system-wide, which is a lot
 /// of machinery for one word.
 fn theme_file() -> std::path::PathBuf {
-    glib::user_config_dir().join("simple-viewer").join("theme")
+    glib::user_config_dir().join("glance").join("theme")
 }
 
 fn load_theme() -> String {

@@ -81,7 +81,7 @@ pub fn quietly<T>(f: impl FnOnce() -> T) -> T {
 /// it helps when debugging without being shoved in the user's face.
 pub fn unsupported(path: &Path, detail: impl Display) -> String {
     if !QUIET.with(|quiet| quiet.get()) {
-        eprintln!("simple-viewer: {}: {detail}", path.display());
+        eprintln!("glance: {}: {detail}", path.display());
     }
     format!(
         "“{}” is not a supported image, or the file is damaged.",

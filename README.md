@@ -234,7 +234,7 @@ sudo pacman -S gtk4 libadwaita libheif rust
 
 ```bash
 cargo build --release
-./target/release/simple-viewer path/to/image.jpg
+./target/release/glance path/to/image.jpg
 ```
 
 For development there is a `quick` profile: optimised, but without the fat LTO that makes
@@ -285,5 +285,3 @@ Wanted, but not built:
 - "Move to Bin" needs a filesystem that has one. Deleting from `/tmp` or some removable
   media reports that it is unsupported rather than binning the file; **Delete
   Permanently** still works there.
-- The binary is named `simple-viewer` while the project is Glance. Cosmetic, but they
-  should be reconciled.

@@ -1,5 +1,5 @@
 [package]
-name = "simple-viewer"
+name = "glance"
 version = "0.1.0"
 edition = "2021"
 

@@ -347,7 +347,7 @@ mod format_tests {
     /// the moment someone tried to use it, which is the worst time to find out.
     #[test]
     fn every_offered_format_can_be_written() {
-        let dir = std::env::temp_dir().join("simple-viewer-format-test");
+        let dir = std::env::temp_dir().join("glance-format-test");
         std::fs::create_dir_all(&dir).unwrap();
         for target in TARGETS {
             let limit = target.max_dimension.unwrap_or(64).min(64);
