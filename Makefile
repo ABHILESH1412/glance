@@ -26,7 +26,13 @@ check:
 	desktop-file-validate data/$(APPID).desktop
 	appstreamcli validate --no-net data/$(APPID).metainfo.xml
 
-install: build
+# Deliberately not dependent on `build`: this is the target run under sudo, and
+# cargo run as root builds into root's home and leaves root-owned files behind.
+# Build as yourself, install as root.
+install:
+	@test -x target/release/glance || { \
+		echo "target/release/glance is missing — run 'make' first, as your own user."; \
+		exit 1; }
 	install -Dm755 target/release/glance $(BINDIR)/glance
 	install -Dm644 data/$(APPID).desktop $(DATADIR)/applications/$(APPID).desktop
 	install -Dm644 data/$(APPID).metainfo.xml $(DATADIR)/metainfo/$(APPID).metainfo.xml

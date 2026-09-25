@@ -63,10 +63,24 @@ modules:
       # Flatpak and a plain `make install` cannot drift apart.
       - make install PREFIX=/app
     sources:
-      - type: git
-        url: https://github.com/ABHILESH1412/glance.git
-        tag: v1.0.0
-        # Filled in when the tag is made. Flathub requires a commit hash: a tag
-        # can be moved, a hash cannot, and the build has to be reproducible.
-        commit: 0000000000000000000000000000000000000000
+      # Builds the checkout you are standing in, so cloning and building works
+      # without tagging a release first. `target` and `build-dir` are skipped
+      # because a Rust build directory is gigabytes and none of it is wanted.
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - build-dir
+          - .flatpak-builder
+          - .git
+      #
+      # For a Flathub submission, replace the block above with the release
+      # itself. Flathub needs a commit hash rather than a tag: a tag can be
+      # moved, a hash cannot, and the build has to be reproducible.
+      #
+      #  - type: git
+      #    url: https://github.com/ABHILESH1412/glance.git
+      #    tag: v1.0.0
+      #    commit: <the hash that tag points at>
+      #
       - cargo-sources.json

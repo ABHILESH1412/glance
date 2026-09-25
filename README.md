@@ -156,53 +156,140 @@ language — but stops at crop and rotate.
 
 ## Installing
 
-**Flatpak** — the one that works everywhere, since GTK, libadwaita and libheif come from
-the GNOME runtime:
+Two ways in. **From source** is the short one if your distribution is recent enough;
+**Flatpak** works anywhere, because GTK, libadwaita and libheif come from the GNOME
+runtime instead of from your system.
+
+### From source
+
+**1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
+versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
+AVIF, Rust, and `make`. Everything else is pure Rust and comes in through Cargo.
+
+```bash
+sudo pacman -S gtk4 libadwaita libheif rust make                        # Arch
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel cargo make   # Fedora
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev cargo make   # Debian, Ubuntu
+```
+
+**2. Get the source.**
+
+```bash
+git clone https://github.com/ABHILESH1412/glance.git
+cd glance
+```
+
+**3. Build and install.** The first build takes a few minutes; it is compiling every
+dependency once.
+
+```bash
+make                       # cargo build --release
+sudo make install          # into /usr/local
+```
+
+Use `sudo make install PREFIX=/usr` if you would rather it went where your package
+manager puts things. `make install` also places the desktop entry, the icons and the
+AppStream metainfo — without those the program runs but never appears in a launcher or as
+a handler for a JPEG. Packagers: `DESTDIR` works as usual and the icon and desktop caches
+are left alone when it is set.
+
+**4. Run it.** `glance` is now on your path, and Glance is in your launcher and in the
+"Open With" menu for images.
+
+```bash
+glance path/to/image.jpg
+```
+
+To remove it again:
+
+```bash
+sudo make uninstall
+```
+
+### Flatpak
+
+**1. Install the build tool, and the runtime it builds against.** The runtime is about a
+gigabyte and is shared with every other GNOME Flatpak you have.
+
+```bash
+sudo pacman -S flatpak flatpak-builder                    # Arch
+sudo dnf install flatpak flatpak-builder                  # Fedora
+sudo apt install flatpak flatpak-builder                  # Debian, Ubuntu
+
+flatpak remote-add --if-not-exists --user \
+    flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user flathub \
+    org.gnome.Platform//49 \
+    org.gnome.Sdk//49 \
+    org.freedesktop.Sdk.Extension.rust-stable//25.08
+```
+
+**2. Get the source.**
+
+```bash
+git clone https://github.com/ABHILESH1412/glance.git
+cd glance
+```
+
+**3. Build and install.** This builds the checkout you are standing in, so there is
+nothing to tag or push first.
 
 ```bash
 flatpak-builder --user --install --force-clean build-dir \
     build-aux/io.github.abhilesh1412.Glance.yaml
 ```
 
-**From source:**
+**4. Run it.**
 
 ```bash
-sudo make install          # /usr/local
-sudo make install PREFIX=/usr
-sudo make uninstall
+flatpak run io.github.abhilesh1412.Glance path/to/image.jpg
 ```
 
-`make install` also puts the desktop entry, icons and AppStream metainfo in place; without
-those the program runs but never shows up in a launcher or as a handler for a JPEG.
-`DESTDIR` works as usual for packagers.
-
-## Building
-
-Needs **GTK 4.14** and **libadwaita 1.5** or newer — the versions in Ubuntu 24.04 LTS —
-plus **libheif** for HEIC and AVIF, and a Rust toolchain. Everything else is pure Rust and
-comes in through Cargo.
+To remove it again:
 
 ```bash
-sudo pacman -S gtk4 libadwaita libheif rust                       # Arch
-sudo dnf install gtk4-devel libadwaita-devel libheif-devel cargo  # Fedora
-sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev cargo  # Debian, Ubuntu
-
-cargo build --release
-./target/release/glance path/to/image.jpg
+flatpak uninstall --user io.github.abhilesh1412.Glance
 ```
 
-There is also a `quick` profile — optimised, but without the LTO that makes a release link
-take minutes. Use it for anything involving camera raw or SVG, which are unusably slow in
-a debug build.
+<details>
+<summary>If you change the dependencies</summary>
+
+Flatpak builds with the network switched off, so every crate has to be declared in
+advance. [`build-aux/cargo-sources.json`](build-aux/cargo-sources.json) is that list, and
+it is checked in — you only need to regenerate it if `Cargo.lock` changes:
+
+```bash
+curl -O https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+
+# In a virtual environment, since most distributions now refuse `pip install`
+# into the system Python.
+python3 -m venv /tmp/fcg
+/tmp/fcg/bin/pip install aiohttp PyYAML tomlkit
+/tmp/fcg/bin/python flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json
+```
+
+</details>
+
+## Development
+
+`make` wraps `cargo build --release`, but a release link takes minutes because of LTO.
+There is a `quick` profile for day-to-day work — optimised, without the LTO — which you
+want for anything involving camera raw or SVG, since both are unusably slow in a debug
+build.
 
 ```bash
 cargo run --profile quick -- path/to/image.jpg
 ```
 
-`cargo test` runs the unit tests; `make check` adds the desktop-entry and AppStream
-validation that a distribution will run on the way in. [`testdata/`](testdata/README.md)
-holds fixtures chosen to catch specific mistakes — an EXIF-rotated JPEG, a transparent SVG
-that exposes premultiplied-alpha errors, a corrupt file, and four CC0 camera raws.
+```bash
+cargo test     # unit tests
+make check     # those, plus desktop-entry and AppStream validation
+```
+
+`make check` runs the same validation a distribution or Flathub will run on the way in.
+[`testdata/`](testdata/README.md) holds fixtures chosen to catch specific mistakes — an
+EXIF-rotated JPEG, a transparent SVG that exposes premultiplied-alpha errors, a corrupt
+file, and four CC0 camera raws covering different decode paths.
 
 ## Keyboard shortcuts
 

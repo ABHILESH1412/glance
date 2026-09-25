@@ -3,3 +3,6 @@ testdata/raw/*.CRW
 testdata/raw/*.DNG
 testdata/raw/*.ARW
 testdata/raw/*.CR3
+
+/build-dir
+/.flatpak-builder
