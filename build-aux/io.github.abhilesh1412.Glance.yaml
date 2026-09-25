@@ -1,0 +1,72 @@
+# Flatpak manifest for Glance.
+#
+# This is the build that makes "runs on every major distribution" true: the
+# GNOME runtime supplies GTK, libadwaita and libheif, so the versions on the
+# host stop mattering. A native build needs GTK 4.14 and libadwaita 1.5 or
+# newer; this needs neither.
+#
+# Building it (flatpak-builder, and the runtime and SDK it names):
+#
+#   flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49 \
+#                           org.freedesktop.Sdk.Extension.rust-stable//25.08
+#   python3 flatpak-cargo-generator.py Cargo.lock -o build-aux/cargo-sources.json
+#   flatpak-builder --user --install --force-clean build-dir \
+#                   build-aux/io.github.abhilesh1412.Glance.yaml
+#
+# flatpak-cargo-generator.py comes from flatpak/flatpak-builder-tools. It turns
+# Cargo.lock into a list of every crate and its checksum, because Flathub builds
+# with the network switched off: nothing may be downloaded while building, so
+# every dependency has to be declared up front.
+#
+# cargo-sources.json is generated, not written by hand, and has to be
+# regenerated whenever Cargo.lock changes.
+
+id: io.github.abhilesh1412.Glance
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+command: glance
+
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # For the GPU path. Without it the SVG renderer and the tone preview fall back
+  # to software, which works but is slower.
+  - --device=dri
+  # A picture is never alone: opening one means showing the rest of its folder
+  # along the bottom, stepping through them with the arrow keys, and saving back
+  # over the original. The document portal hands over one file at a time, which
+  # cannot do any of that. This is the same access every folder-browsing image
+  # viewer asks for, and the reason it is asked for.
+  - --filesystem=host
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/glance/cargo
+    # Belt and braces: the build has no network anyway, and this turns a missed
+    # dependency into a clear error rather than a hang.
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  # libheif comes from the runtime (1.20 in GNOME 49), along with dav1d for
+  # AVIF, so HEIC and AVIF need no module here. Should a future runtime drop it,
+  # the fix is a libheif module built before this one rather than a code change.
+  - name: glance
+    buildsystem: simple
+    build-commands:
+      # The Makefile owns the list of what gets installed and where, so the
+      # Flatpak and a plain `make install` cannot drift apart.
+      - make install PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ABHILESH1412/glance.git
+        tag: v1.0.0
+        # Filled in when the tag is made. Flathub requires a commit hash: a tag
+        # can be moved, a hash cannot, and the build has to be reproducible.
+        commit: 0000000000000000000000000000000000000000
+      - cargo-sources.json

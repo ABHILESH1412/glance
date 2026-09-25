@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Turning the pending edits into a file on disk.
 //!
 //! Nothing here touches the image being viewed: the original is decoded afresh

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Walking the images that sit alongside the open one.
 
 use std::cmp::Ordering;

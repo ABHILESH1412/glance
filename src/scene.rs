@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Translating an SVG into GTK render nodes.
 //!
 //! GSK is a GPU vector rasteriser: it has nodes for filled and stroked paths,

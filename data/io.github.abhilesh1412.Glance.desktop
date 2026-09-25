@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Glance
+GenericName=Image Viewer
+Comment=Look at pictures, and make small changes to them
+# %F, not %U: the program opens local files and says so rather than accepting a
+# remote URI and then apologising for it.
+Exec=glance %F
+Icon=io.github.abhilesh1412.Glance
+Terminal=false
+StartupNotify=true
+Categories=Graphics;Viewer;2DGraphics;RasterGraphics;VectorGraphics;GTK;
+Keywords=Photo;Picture;Image;Viewer;Browser;Crop;Resize;Rotate;Compress;Convert;Annotate;
+# Every format the program will open. A viewer that is not offered for a file
+# type it can read is a viewer nobody finds.
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/tiff;image/bmp;image/x-bmp;image/vnd.microsoft.icon;image/x-icon;image/qoi;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-tga;image/heif;image/heic;image/heif-sequence;image/heic-sequence;image/avif;image/svg+xml;image/svg+xml-compressed;image/x-adobe-dng;image/x-canon-cr2;image/x-canon-cr3;image/x-canon-crw;image/x-nikon-nef;image/x-nikon-nrw;image/x-sony-arw;image/x-sony-sr2;image/x-sony-srf;image/x-olympus-orf;image/x-panasonic-rw2;image/x-panasonic-raw;image/x-pentax-pef;image/x-fuji-raf;image/x-samsung-srw;image/x-sigma-x3f;image/x-kodak-dcr;image/x-kodak-kdc;image/x-minolta-mrw;image/x-epson-erf;image/x-hasselblad-3fr;image/x-hasselblad-fff;image/x-phaseone-iiq;image/x-mamiya-mef;image/x-leaf-mos;image/x-leica-rwl;

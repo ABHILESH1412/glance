@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Colour management.
 //!
 //! A photograph carries an ICC profile saying what its numbers mean. Without

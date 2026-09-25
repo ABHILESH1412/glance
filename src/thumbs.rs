@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Small versions of images, for the filmstrip.
 //!
 //! The whole point is to be cheap. Camera raw is the case that makes a naive

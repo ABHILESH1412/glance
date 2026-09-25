@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Deciding which decoder a file belongs to.
 //!
 //! Content sniffing comes first and extensions only break ties, because the

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Drawing and annotation.
 //!
 //! A mark is kept as what it is — a tool, a few points, a colour and a width —

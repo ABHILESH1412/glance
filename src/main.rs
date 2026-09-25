@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 mod adjust;
 mod canvas;
 mod colour;
@@ -18,7 +21,7 @@ mod window;
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 
-const APP_ID: &str = "io.github.ABHILESH1412.Glance";
+pub const APP_ID: &str = "io.github.abhilesh1412.Glance";
 
 /// Where the chosen theme is remembered. A plain file rather than GSettings:
 /// that would need a schema compiled and installed system-wide, which is a lot

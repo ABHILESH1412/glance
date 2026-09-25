@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Hitting a file size.
 //!
 //! The job people go to advertising-funded websites for: "make this 500 KB".

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The body of the window: a stack that swaps between the empty state, a
 //! spinner while decoding runs, and the image itself.
 
@@ -35,7 +38,14 @@ impl ImageView {
             .child(&open_button)
             .build();
 
-        let spinner = adw::Spinner::builder()
+        // GTK's spinner rather than libadwaita's, which would otherwise be the
+        // one thing in the whole program requiring libadwaita 1.6 and so lock
+        // out Ubuntu's current long-term release. It is deprecated in favour of
+        // libadwaita's, but a deprecated spinner that everyone can run beats a
+        // current one that half the distributions cannot.
+        #[allow(deprecated)]
+        let spinner = gtk::Spinner::builder()
+            .spinning(true)
             .width_request(48)
             .height_request(48)
             .halign(gtk::Align::Center)

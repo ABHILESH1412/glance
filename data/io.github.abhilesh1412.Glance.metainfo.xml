@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Abhilesh Singh -->
+<component type="desktop-application">
+  <id>io.github.abhilesh1412.Glance</id>
+
+  <name>Glance</name>
+  <summary>Look at pictures, and make small changes to them</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <developer id="io.github.abhilesh1412">
+    <name>Abhilesh Singh</name>
+  </developer>
+
+  <description>
+    <p>
+      Glance opens an image and gets out of the way. Arrow keys walk through the
+      folder, the scroll wheel zooms, two fingers on a touchpad pan, and the
+      picture is on screen before you have finished letting go of the mouse.
+    </p>
+    <p>
+      When you do need to change something, the editor is one button away and
+      everything in it happens on the picture in front of you rather than in a
+      preview box:
+    </p>
+    <ul>
+      <li>Crop by dragging, with the usual aspect presets for social sizes</li>
+      <li>Resize by handles or by typing the numbers, with the proportions locked if you want them locked</li>
+      <li>Rotate by a quarter turn, or to any angle you type</li>
+      <li>Brightness, contrast and saturation</li>
+      <li>Draw and annotate: pen, highlighter, line, arrow, rectangle, ellipse</li>
+      <li>Add text with a font, a size, a colour and a background, dragged where you want it</li>
+      <li>Convert between formats, and compress or inflate a file to a size you name — so you never have to hand a photograph to a website that sells what you upload</li>
+    </ul>
+    <p>
+      It reads the formats a photographer actually has: PNG, JPEG, WebP, TIFF,
+      GIF, BMP, ICO, QOI, PNM and TGA; HEIC, HEIF and AVIF; SVG; and camera raw
+      from Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax, Leica and
+      the rest. Embedded ICC profiles are honoured, so an Adobe RGB photograph
+      looks the way it should rather than washed out.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.abhilesh1412.Glance.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/ABHILESH1412/glance/main/data/screenshots/viewing.png</image>
+      <caption>A picture open, with the rest of the folder along the bottom</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/ABHILESH1412/glance/main/data/screenshots/editing.png</image>
+      <caption>Brightness, contrast and saturation, applied to the picture as you move them</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/ABHILESH1412/glance/main/data/screenshots/exporting.png</image>
+      <caption>Exporting: pick a format, a quality, or a file size to aim for</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/ABHILESH1412/glance</url>
+  <url type="bugtracker">https://github.com/ABHILESH1412/glance/issues</url>
+  <url type="vcs-browser">https://github.com/ABHILESH1412/glance</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#d7c4f5</color>
+    <color type="primary" scheme_preference="dark">#3a1f6e</color>
+  </branding>
+
+  <categories>
+    <category>Graphics</category>
+    <category>Viewer</category>
+  </categories>
+
+  <keywords>
+    <keyword>photo</keyword>
+    <keyword>picture</keyword>
+    <keyword>image</keyword>
+    <keyword>viewer</keyword>
+    <keyword>crop</keyword>
+    <keyword>resize</keyword>
+    <keyword>compress</keyword>
+    <keyword>convert</keyword>
+    <keyword>annotate</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">640</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.0.0" date="2026-09-24">
+      <description>
+        <p>The first release.</p>
+        <ul>
+          <li>Viewing with zoom, pan, a filmstrip of the folder, and GPU rendering</li>
+          <li>Editing: crop, resize, rotate to any angle, flip, brightness, contrast, saturation, drawing and text</li>
+          <li>Export with a choice of format and quality, or aimed at a file size</li>
+          <li>Colour management, so tagged photographs are shown correctly</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>

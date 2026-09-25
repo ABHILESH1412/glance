@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The zoomable, pannable image surface.
 //!
 //! Zoom is anchored: whatever image pixel sits under the pointer stays under

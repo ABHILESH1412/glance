@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Text laid over the picture.
 //!
 //! A text item is kept as what it is — a string with a font and two colours —

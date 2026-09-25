@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The application window: header bar, actions, and the load pipeline.
 //!
 //! This is a real `GObject` subclass rather than a plain struct behind an `Rc`.
@@ -3315,9 +3318,19 @@ impl Window {
     fn show_about(&self) {
         let about = adw::AboutDialog::builder()
             .application_name("Glance")
-            .application_icon("image-x-generic-symbolic")
+            // The program's own icon, which is installed under the application
+            // ID. Falls back to the stock picture icon when it is not on the
+            // icon path, which is what happens when it is run from the build
+            // directory rather than installed.
+            .application_icon(crate::APP_ID)
             .version(env!("CARGO_PKG_VERSION"))
-            .comments("A small image viewer for GNOME.")
+            .comments("Look at pictures, and make small changes to them.")
+            .developer_name("Abhilesh Singh")
+            .developers(vec!["Abhilesh Singh".to_string()])
+            .copyright("© 2026 Abhilesh Singh")
+            .license_type(gtk::License::Gpl30)
+            .website("https://github.com/ABHILESH1412/glance")
+            .issue_url("https://github.com/ABHILESH1412/glance/issues")
             .build();
         about.present(Some(self));
     }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Loading happens here, off the main thread.
 //!
 //! The result is a plain RGBA8 buffer rather than a GDK type on purpose: GDK

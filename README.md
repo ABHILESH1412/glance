@@ -229,18 +229,53 @@ approximated.
 | `Esc` | Leave fullscreen, close the options panel, or cancel editing |
 | `Ctrl+W` / `Ctrl+Q` | Close window / quit |
 
+## Installing
+
+### Flatpak
+
+The way that works everywhere. GTK, libadwaita and libheif come from the GNOME runtime,
+so whatever the host distribution ships stops mattering:
+
+```bash
+flatpak-builder --user --install --force-clean build-dir build-aux/io.github.abhilesh1412.Glance.yaml
+```
+
+The manifest is [`build-aux/io.github.abhilesh1412.Glance.yaml`](build-aux/io.github.abhilesh1412.Glance.yaml),
+and its comments cover the runtime, the SDK extension, and generating `cargo-sources.json`
+— Flathub builds with the network off, so every crate has to be declared in advance.
+
+### From source
+
+```bash
+sudo make install          # /usr/local by default
+sudo make install PREFIX=/usr
+sudo make uninstall
+```
+
+`make install` puts the binary, the desktop entry, the icons and the AppStream metainfo
+where a desktop expects them. Without those last three the program runs but never appears
+in a launcher, is never offered as a handler for a JPEG, and shows a blank icon.
+
+Packagers: `DESTDIR` works as usual, and the icon and desktop caches are left alone when
+it is set.
+
 ## Building
 
 ### Requirements
 
-System libraries, with the Arch package names:
+- **GTK 4.14** and **libadwaita 1.5** or newer — the versions in Ubuntu 24.04 LTS, so
+  anything that recent will do. Nothing newer is asked for than is actually used
+- **libheif**, for HEIC and AVIF
+- A Rust toolchain
+
+Everything else — PNG, JPEG, SVG, camera raw, colour management — is pure Rust and comes
+in through Cargo.
 
 ```bash
-sudo pacman -S gtk4 libadwaita libheif rust
+sudo pacman -S gtk4 libadwaita libheif rust                     # Arch
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel cargo # Fedora
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev cargo # Debian, Ubuntu
 ```
-
-`libheif` supplies HEIC and AVIF decoding. Everything else — PNG, JPEG, SVG, camera raw
-— is pure Rust and comes in through Cargo.
 
 ### Build and run
 
@@ -267,6 +302,9 @@ four CC0 camera raws covering different decode paths. See
 ```bash
 cargo test
 ```
+
+`make check` runs those and validates the desktop entry and the AppStream metainfo as
+well, which is what a distribution or Flathub will do on the way in.
 
 ## Not yet implemented
 
@@ -297,3 +335,11 @@ Wanted, but not built:
 - "Move to Bin" needs a filesystem that has one. Deleting from `/tmp` or some removable
   media reports that it is unsupported rather than binning the file; **Delete
   Permanently** still works there.
+
+## Licence
+
+GPL-3.0-or-later. The full text is in [LICENSE](LICENSE).
+
+You may use, study, change and share this program. If you distribute a changed version,
+it has to be open under the same terms, so that whoever receives it has the freedoms you
+did.

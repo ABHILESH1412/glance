@@ -2,10 +2,23 @@
 name = "glance"
 version = "1.0.0"
 edition = "2021"
+description = "Look at pictures, and make small changes to them"
+authors = ["Abhilesh Singh <sabhilesh260@gmail.com>"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/ABHILESH1412/glance"
+homepage = "https://github.com/ABHILESH1412/glance"
+readme = "README.md"
+keywords = ["image", "viewer", "gtk", "photo", "editor"]
+categories = ["multimedia::images"]
+exclude = ["data/screenshots/*", "testdata/*"]
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.11", features = ["gnome_50"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_9", "gtk_v4_22"] }
+# Built against the oldest GTK and libadwaita the program actually needs, not
+# the newest this machine happens to have. 4.14 and 1.5 are what Ubuntu's
+# 24.04 long-term release ships, and asking for more than is used would shut
+# out every distribution that has not caught up yet for no gain.
+gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5", "gtk_v4_10"] }
 async-channel = "2"
 
 # SVG: pure-Rust vector rendering.

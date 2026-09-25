@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The strip of neighbouring images along the bottom.
 //!
 //! How many thumbnails fit is decided from the width actually handed to the

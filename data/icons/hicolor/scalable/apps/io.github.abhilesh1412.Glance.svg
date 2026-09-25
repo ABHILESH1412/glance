@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!--
+    Glance. The same two photo cards as the wordmark logo, squared off and with
+    the lettering dropped, because an icon is read at 32 pixels and a word is
+    not legible there. Gradients and geometry are taken from the logo so the
+    two stay the same drawing.
+
+    No filters: a drop shadow renders differently in every icon loader and
+    disappears entirely in some, so the depth is done with a solid white seam
+    between the cards instead, which every renderer draws the same way.
+  -->
+  <defs>
+    <linearGradient id="front" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#0798f2"/>
+      <stop offset="0.55" stop-color="#6941e8"/>
+      <stop offset="1" stop-color="#d84de8"/>
+    </linearGradient>
+    <linearGradient id="back" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#6941e8"/>
+      <stop offset="1" stop-color="#d84de8"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.62"/>
+    </linearGradient>
+    <clipPath id="frame">
+      <rect x="12" y="24" width="92" height="72" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <!-- Both cards lean the way they do in the logo, so the icon is the logo's
+       drawing rather than a tidied-up version of it. -->
+  <g transform="rotate(-5 64 62) scale(1.06) translate(-3.6 -3.5)">
+  <!-- The card behind, leaning out to the right. -->
+  <g transform="rotate(12 76 64)">
+    <rect x="28" y="30" width="88" height="70" rx="14" fill="#ffffff"/>
+    <rect x="31" y="33" width="82" height="64" rx="12" fill="url(#back)"/>
+  </g>
+
+  <!-- The card in front, with the picture in it. -->
+  <rect x="9" y="21" width="98" height="78" rx="17" fill="#ffffff"/>
+  <g clip-path="url(#frame)">
+    <rect x="12" y="24" width="92" height="72" fill="url(#front)"/>
+    <!-- Sun. -->
+    <circle cx="80" cy="45" r="11" fill="url(#sun)"/>
+    <!-- Two ridges, the nearer one lighter, the way the logo has them. -->
+    <path d="M12 96 L46 56 L70 84 L84 68 L104 90 L104 96 Z" fill="#ffffff" opacity="0.30"/>
+    <path d="M52 96 L78 66 L104 96 Z" fill="#ffffff" opacity="0.52"/>
+  </g>
+  <rect x="12.75" y="24.75" width="90.5" height="70.5" rx="13.25"
+        fill="none" stroke="#ffffff" stroke-opacity="0.30" stroke-width="1.5"/>
+  </g>
+</svg>
