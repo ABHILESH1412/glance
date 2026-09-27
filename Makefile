@@ -9,6 +9,10 @@ PREFIX  ?= /usr/local
 DESTDIR ?=
 APPID    = io.github.abhilesh1412.Glance
 CARGO   ?= cargo
+# The distribution's name for the package, which is not always "glance": the
+# AUR and Debian both already have an unrelated one, so their builds pass
+# PKGNAME=glance-image-viewer and the licence lands where their tools look.
+PKGNAME ?= glance
 
 BINDIR   = $(DESTDIR)$(PREFIX)/bin
 DATADIR  = $(DESTDIR)$(PREFIX)/share
@@ -40,7 +44,7 @@ install:
 		$(ICONDIR)/scalable/apps/$(APPID).svg
 	install -Dm644 data/icons/hicolor/symbolic/apps/$(APPID)-symbolic.svg \
 		$(ICONDIR)/symbolic/apps/$(APPID)-symbolic.svg
-	install -Dm644 LICENSE $(DATADIR)/licenses/glance/LICENSE
+	install -Dm644 LICENSE $(DATADIR)/licenses/$(PKGNAME)/LICENSE
 # Only when installing for real. A packaging tool staging into DESTDIR runs
 # these itself, at the right moment, for the whole package at once.
 ifeq ($(DESTDIR),)
@@ -54,7 +58,7 @@ uninstall:
 	rm -f $(DATADIR)/metainfo/$(APPID).metainfo.xml
 	rm -f $(ICONDIR)/scalable/apps/$(APPID).svg
 	rm -f $(ICONDIR)/symbolic/apps/$(APPID)-symbolic.svg
-	rm -f $(DATADIR)/licenses/glance/LICENSE
+	rm -f $(DATADIR)/licenses/$(PKGNAME)/LICENSE
 ifeq ($(DESTDIR),)
 	-gtk-update-icon-cache -qtf $(ICONDIR)
 	-update-desktop-database -q $(DATADIR)/applications

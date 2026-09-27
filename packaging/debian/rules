@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+# Keep Cargo inside the build tree: Debian builders have no network and no
+# writable home.
+export CARGO_HOME = $(CURDIR)/debian/cargo
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked --offline
+
+override_dh_auto_test:
+	cargo test --release --locked --offline
+
+override_dh_auto_install:
+	$(MAKE) install DESTDIR=$(CURDIR)/debian/glance-image-viewer PREFIX=/usr \
+		PKGNAME=glance-image-viewer
+
+override_dh_auto_clean:
+	rm -rf target debian/cargo

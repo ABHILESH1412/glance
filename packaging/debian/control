@@ -1,0 +1,39 @@
+# Debian and Ubuntu already have a `glance`: OpenStack's Image Service. The
+# source and binary package therefore have to be called something else.
+Source: glance-image-viewer
+Section: graphics
+Priority: optional
+Maintainer: Abhilesh Singh <sabhilesh260@gmail.com>
+# libglib2.0-dev is for glib-compile-resources: build.rs uses it to compile the
+# icons into the binary, so the program finds its own icon before installation.
+Build-Depends: debhelper-compat (= 13),
+               cargo,
+               rustc (>= 1.75),
+               libgtk-4-dev (>= 4.14),
+               libadwaita-1-dev (>= 1.5),
+               libheif-dev,
+               pkgconf,
+               make,
+               libglib2.0-dev
+Standards-Version: 4.7.0
+Homepage: https://github.com/ABHILESH1412/glance
+Vcs-Git: https://github.com/ABHILESH1412/glance.git
+Vcs-Browser: https://github.com/ABHILESH1412/glance
+Rules-Requires-Root: no
+
+Package: glance-image-viewer
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: fast, native image viewer for Linux
+ Glance opens an image and gets out of the way. Arrow keys walk through the
+ folder, the scroll wheel zooms, two fingers on a touchpad pan, and the picture
+ is on screen before you have finished letting go of the mouse.
+ .
+ When you do need to change something, the editor is one button away: crop,
+ resize, rotate to any angle, adjust brightness, contrast and saturation, draw
+ and annotate, add text, convert between formats, or compress a file to a size
+ you name.
+ .
+ It reads PNG, JPEG, WebP, TIFF, GIF, BMP, ICO, QOI, PNM and TGA; HEIC, HEIF
+ and AVIF; SVG; and camera raw from most makers. Embedded ICC profiles are
+ honoured, so a photograph shot in Adobe RGB looks the way it should.

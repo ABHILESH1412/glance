@@ -3318,10 +3318,11 @@ impl Window {
     fn show_about(&self) {
         let about = adw::AboutDialog::builder()
             .application_name("Glance")
-            // The program's own icon, which is installed under the application
-            // ID. Falls back to the stock picture icon when it is not on the
-            // icon path, which is what happens when it is run from the build
-            // directory rather than installed.
+            // The program's own icon. It is found either from the installed
+            // icon theme or, when this has not been installed at all, from the
+            // copy compiled into the binary — see data/glance.gresource.xml.
+            // There is no graceful fallback here: an icon name GTK cannot
+            // resolve draws the broken-image placeholder.
             .application_icon(crate::APP_ID)
             .version(env!("CARGO_PKG_VERSION"))
             .comments("Look at pictures, and make small changes to them.")
@@ -3330,7 +3331,14 @@ impl Window {
             .copyright("© 2026 Abhilesh Singh")
             .license_type(gtk::License::Gpl30)
             .website("https://github.com/ABHILESH1412/glance")
-            .issue_url("https://github.com/ABHILESH1412/glance/issues")
+            // A form rather than the issue tracker: most people who hit a bug
+            // in an image viewer do not have a GitHub account and will not make
+            // one to tell you about it.
+            .issue_url(
+                "https://docs.google.com/forms/d/e/\
+                 1FAIpQLScaT101kS47nEdg55rp-HUFi0DprDgKlXr6fPfWthmQAHERrg/viewform\
+                 ?usp=publish-editor",
+            )
             .build();
         about.present(Some(self));
     }

@@ -1,0 +1,53 @@
+# Maintainer: Abhilesh Singh <sabhilesh260@gmail.com>
+
+# The package is called glance-image-viewer, not glance, because the AUR already
+# has a `glance`: an unrelated self-hosted dashboard. It installs /usr/bin/glance
+# too, so the two genuinely cannot share a system — hence the conflicts line.
+pkgname=glance-image-viewer
+_appid=io.github.abhilesh1412.Glance
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="A fast, native image viewer for Linux"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ABHILESH1412/glance"
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libadwaita' 'libheif' 'hicolor-icon-theme')
+makedepends=('cargo' 'make' 'glib2')  # glib2 for glib-compile-resources
+conflicts=('glance')
+# GitHub strips the leading v: the tarball for tag v1.0.0 unpacks to glance-1.0.0/,
+# which is what build() and package() cd into.
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# SKIP is only good enough for testing against a local tarball. Before pushing to
+# the AUR, run `updpkgsums` (from pacman-contrib) to put the real hash here — an
+# unchecked source is a package anyone upstream of you can change.
+sha256sums=('SKIP')
+
+prepare() {
+	cd "glance-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	# Fetch every crate now, so build() can run with the network off — which is
+	# what a clean build chroot does.
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+	cd "glance-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	cargo build --frozen --release
+}
+
+check() {
+	cd "glance-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	cargo test --frozen --release
+}
+
+package() {
+	cd "glance-$pkgver"
+	# The Makefile owns the list of what gets installed and where, so the package
+	# and a plain `make install` cannot drift apart. DESTDIR being set also stops
+	# it touching the icon and desktop caches — pacman hooks do that.
+	make install DESTDIR="$pkgdir" PREFIX=/usr PKGNAME="$pkgname"
+}

@@ -202,6 +202,14 @@ pub fn apply_accels(app: &adw::Application, typing: bool) {
 }
 
 fn main() -> glib::ExitCode {
+    // The icons, compiled into the binary by build.rs. GtkApplication looks for
+    // icons under the resource path it derives from the application ID, so once
+    // this is registered the program finds its own icon whether or not it has
+    // been installed. Without it, an uninstalled build shows the broken-image
+    // placeholder in the About dialog rather than the app's icon.
+    gio::resources_register_include!("glance.gresource")
+        .expect("the icons are compiled into the binary by build.rs");
+
     let app = adw::Application::builder()
         .application_id(APP_ID)
         // Without this, a path on the command line is rejected as an unknown option.

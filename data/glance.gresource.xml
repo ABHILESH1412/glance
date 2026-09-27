@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The program's own icons, compiled into the binary.
+
+  GtkApplication automatically looks for icons under its resource base path,
+  which it derives from the application ID: io.github.abhilesh1412.Glance
+  becomes /io/github/abhilesh1412/Glance, and it searches the "icons"
+  subdirectory of that as if it were part of the hicolor theme.
+
+  Installing the icon files is what puts Glance in a launcher; this is what lets
+  the program find its own icon when it has not been installed at all, which is
+  how anyone running a fresh build sees it.
+-->
+<gresources>
+  <gresource prefix="/io/github/abhilesh1412/Glance/icons/scalable/apps">
+    <file alias="io.github.abhilesh1412.Glance.svg"
+          preprocess="xml-stripblanks">icons/hicolor/scalable/apps/io.github.abhilesh1412.Glance.svg</file>
+    <file alias="io.github.abhilesh1412.Glance-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/apps/io.github.abhilesh1412.Glance-symbolic.svg</file>
+  </gresource>
+</gresources>

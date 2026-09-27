@@ -164,12 +164,16 @@ runtime instead of from your system.
 
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
-AVIF, Rust, and `make`. Everything else is pure Rust and comes in through Cargo.
+AVIF, Rust, `make`, and glib's resource compiler, which the build uses to put the
+icons inside the binary. Everything else is pure Rust and comes in through Cargo.
 
 ```bash
-sudo pacman -S gtk4 libadwaita libheif rust make                        # Arch
-sudo dnf install gtk4-devel libadwaita-devel libheif-devel cargo make   # Fedora
-sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev cargo make   # Debian, Ubuntu
+# Arch
+sudo pacman -S gtk4 libadwaita libheif glib2 rust make
+# Fedora
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel glib2-devel cargo make
+# Debian, Ubuntu
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libglib2.0-dev cargo make
 ```
 
 **2. Get the source.**
@@ -269,6 +273,10 @@ python3 -m venv /tmp/fcg
 ```
 
 </details>
+
+Packaging recipes for the AUR, Fedora and Debian live in
+[`packaging/`](packaging), and [`docs/PUBLISHING.md`](docs/PUBLISHING.md) is the
+step-by-step for getting onto Flathub and into each distribution's archive.
 
 ## Development
 

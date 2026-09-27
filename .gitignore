@@ -6,3 +6,9 @@ testdata/raw/*.CR3
 
 /build-dir
 /.flatpak-builder
+
+# makepkg's working files, when testing the AUR recipe in place
+/packaging/aur/src/
+/packaging/aur/pkg/
+/packaging/aur/*.tar.gz
+/packaging/aur/*.pkg.tar.*
