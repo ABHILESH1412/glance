@@ -20,11 +20,11 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
-use crate::adjust::Adjustments;
-use crate::draw::{Mark, Tool};
-use crate::text::{Patch, TextItem};
-use crate::decoders::svg;
-use crate::loader::VectorSource;
+use crate::images::edit::adjust::Adjustments;
+use crate::images::edit::draw::{Mark, Tool};
+use crate::images::edit::text::{Patch, TextItem};
+use crate::images::decoders::svg;
+use crate::images::loader::VectorSource;
 
 /// Past this, zooming stops being informative.
 const MAX_SCALE: f64 = 32.0;
@@ -429,7 +429,7 @@ impl ImageCanvas {
         // Built here rather than on the decoder thread: render nodes may
         // only be created on the main loop.
         imp.scene
-            .replace(source.tree().and_then(crate::scene::build));
+            .replace(source.tree().and_then(crate::images::scene::build));
         imp.vector.replace(Some(source));
         imp.rendered_scale.set(rendered);
         // The window may already demand far more than the first pass gave.

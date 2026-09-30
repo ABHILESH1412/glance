@@ -787,6 +787,7 @@ dependencies = [
  "libadwaita",
  "libheif-rs",
  "moxcms",
+ "poppler-rs",
  "rawler",
  "resvg",
 ]
@@ -1768,6 +1769,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "50596ddc09eb5ad5f75cacd40209568e66df71baf86e1499a0e99c4cff12a5a6"
 dependencies = [
  "arrayvec",
+]
+
+[[package]]
+name = "poppler-rs"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d93d32751326b83aeba757236c7fd2f14ca65309e7b295ba54973fbba338bc43"
+dependencies = [
+ "cairo-rs",
+ "gio",
+ "glib",
+ "libc",
+ "poppler-sys-rs",
+]
+
+[[package]]
+name = "poppler-sys-rs"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdab38777c8ba413671b744fdc4a9239d440ff301ddd1d54abb550a4364d6a2e"
+dependencies = [
+ "cairo-sys-rs",
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "system-deps 7.0.8",
 ]
 
 [[package]]

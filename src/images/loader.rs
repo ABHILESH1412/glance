@@ -13,10 +13,10 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::decoders;
-use crate::format::{self, Format};
+use crate::images::decoders;
+use crate::images::format::{self, Format};
 
-pub use crate::decoders::svg::VectorSource;
+pub use crate::images::decoders::svg::VectorSource;
 
 /// One frame of an animation, already composed onto the full canvas.
 pub struct Frame {

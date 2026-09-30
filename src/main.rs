@@ -1,22 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-mod adjust;
-mod canvas;
-mod colour;
-mod compress;
-mod decoders;
-mod draw;
-mod export;
-mod filmstrip;
-mod format;
-mod image_view;
-mod loader;
-mod playlist;
-mod scene;
-mod text;
-mod thumbs;
-mod window;
+mod app;
+mod images;
+mod model3d;
+mod pdf;
+
+use app::window::Window;
 
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -192,12 +182,42 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.export", idle: &["<Primary><Shift>s"], typing: &["<Primary><Shift>s"] },
     Accel { action: "win.flip-horizontal", idle: &["<Primary>h"], typing: &[] },
     Accel { action: "win.flip-vertical", idle: &["<Primary>j"], typing: &[] },
+    // Moving through a PDF. No keys of their own: they borrow them from the
+    // folder navigation while a PDF is open, through `PDF_KEYS` below.
+    Accel { action: "win.page-down", idle: &[], typing: &[] },
+    Accel { action: "win.page-up", idle: &[], typing: &[] },
+    Accel { action: "win.line-down", idle: &[], typing: &[] },
+    Accel { action: "win.line-up", idle: &[], typing: &[] },
+    Accel { action: "win.page-first", idle: &[], typing: &[] },
+    Accel { action: "win.page-last", idle: &[], typing: &[] },
 ];
 
-/// Swap the whole set over when focus moves into or out of a text box.
-pub fn apply_accels(app: &adw::Application, typing: bool) {
+/// While a PDF is open, the keys every reader uses to move through a document
+/// go to the document rather than the folder. Left and right still change file,
+/// the same as for images, so one habit works everywhere.
+const PDF_KEYS: &[(&str, &[&str])] = &[
+    ("win.next-image", &["Right"]),
+    ("win.previous-image", &["Left"]),
+    ("win.page-down", &["Page_Down", "space"]),
+    ("win.page-up", &["Page_Up", "BackSpace", "<Shift>space"]),
+    ("win.line-down", &["Down"]),
+    ("win.line-up", &["Up"]),
+    ("win.page-first", &["Home"]),
+    ("win.page-last", &["End"]),
+];
+
+/// Swap the whole set over when focus moves into or out of a text box, or
+/// between an image and a PDF.
+pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool) {
     for accel in ACCELS {
-        app.set_accels_for_action(accel.action, if typing { accel.typing } else { accel.idle });
+        let keys = if typing {
+            accel.typing
+        } else if pdf {
+            PDF_KEYS.iter().find(|(action, _)| *action == accel.action).map_or(accel.idle, |(_, keys)| keys)
+        } else {
+            accel.idle
+        };
+        app.set_accels_for_action(accel.action, keys);
     }
 }
 
@@ -229,15 +249,15 @@ fn main() -> glib::ExitCode {
 
         load_css();
 
-        apply_accels(app, false);
+        apply_accels(app, false, false);
     });
 
     app.connect_activate(|app| {
-        window::Window::new(app).present();
+        Window::new(app).present();
     });
 
     app.connect_open(|app, files, _hint| {
-        let window = window::Window::new(app);
+        let window = Window::new(app);
         if let Some(file) = files.first() {
             window.open_file(file);
         }

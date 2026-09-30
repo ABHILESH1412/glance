@@ -13,7 +13,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
-use crate::text::Patch;
+use crate::images::edit::text::Patch;
 
 /// How see-through a highlighter is. Low enough to read what is under it.
 const HIGHLIGHT_ALPHA: f32 = 0.35;

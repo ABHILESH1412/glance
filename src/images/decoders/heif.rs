@@ -7,7 +7,7 @@ use std::path::Path;
 
 use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
-use crate::loader::{unsupported, LoadedImage};
+use crate::images::loader::{unsupported, LoadedImage};
 
 pub fn decode(path: &Path, avif: bool) -> Result<LoadedImage, String> {
     let path_str = path
@@ -57,7 +57,7 @@ pub fn decode(path: &Path, avif: bool) -> Result<LoadedImage, String> {
     // HEIC and AVIF carry a profile like any other photograph; a phone shot in
     // Display P3 is flat without it.
     if let Some(profile) = handle.color_profile_raw() {
-        crate::colour::to_srgb(&mut rgba, &profile.data);
+        crate::images::colour::to_srgb(&mut rgba, &profile.data);
     }
 
     Ok(LoadedImage {

@@ -18,7 +18,7 @@
 
 use image::DynamicImage;
 
-use crate::export::Target;
+use crate::images::edit::export::Target;
 
 pub const KB: u64 = 1024;
 pub const MB: u64 = 1024 * KB;
@@ -69,7 +69,7 @@ fn encode(image: &DynamicImage, target: &Target, quality: u8) -> Result<Vec<u8>,
     if target.lossy() {
         // JPEG cannot carry transparency, so flatten first for the same
         // reason the ordinary writer does.
-        let rgb = crate::export::flatten(image);
+        let rgb = crate::images::edit::export::flatten(image);
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
             .encode_image(&rgb)
             .map_err(|e| format!("Could not encode: {e}"))?;
@@ -291,10 +291,10 @@ mod tests {
     use super::*;
 
     fn jpeg() -> &'static Target {
-        crate::export::TARGETS.iter().find(|t| t.label == "JPEG").unwrap()
+        crate::images::edit::export::TARGETS.iter().find(|t| t.label == "JPEG").unwrap()
     }
     fn png() -> &'static Target {
-        crate::export::TARGETS.iter().find(|t| t.label == "PNG").unwrap()
+        crate::images::edit::export::TARGETS.iter().find(|t| t.label == "PNG").unwrap()
     }
 
     /// Detailed enough that JPEG cannot trivially crush it, so the search has
@@ -381,7 +381,7 @@ mod guards {
     use super::*;
 
     fn jpeg() -> &'static Target {
-        crate::export::TARGETS.iter().find(|t| t.label == "JPEG").unwrap()
+        crate::images::edit::export::TARGETS.iter().find(|t| t.label == "JPEG").unwrap()
     }
 
     /// An absurd amount of filler means somebody's arithmetic went negative

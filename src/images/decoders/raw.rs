@@ -26,7 +26,7 @@ use rawler::decoders::{Decoder, RawDecodeParams};
 use rawler::imgop::develop::{Intermediate, RawDevelop};
 use rawler::rawsource::RawSource;
 
-use crate::loader::{open_error, unsupported, LoadedImage};
+use crate::images::loader::{open_error, unsupported, LoadedImage};
 
 /// Below this, an embedded preview is too small to be worth showing in place
 /// of the real image — a window on any current display is wider than this.

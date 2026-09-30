@@ -1,0 +1,13 @@
+// SPDX-FileCopyrightText: 2026 Abhilesh Singh
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The window every kind of document is shown in.
+//!
+//! The header bar, the filmstrip, stepping through a folder, opening and
+//! deleting files, and the About dialog. None of it draws a document itself.
+//! Today the window only opens images; `Window::load` is where a PDF or a 3D
+//! model will be handed to its own module instead.
+
+pub mod filmstrip;
+pub mod playlist;
+pub mod window;

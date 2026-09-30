@@ -20,6 +20,8 @@ const EXTENSIONS: &[&str] = &[
     "heic", "heif", "avif", //
     // vector
     "svg", "svgz", //
+    // documents
+    "pdf", //
     // camera raw
     "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos",
     "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",

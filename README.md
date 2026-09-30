@@ -4,7 +4,7 @@
 
 # Glance
 
-**A fast, native image viewer for Linux.**
+**A fast, native image and PDF viewer for Linux.**
 
 It opens a file, shows it properly, and gets out of the way.
 
@@ -15,7 +15,8 @@ It opens a file, shows it properly, and gets out of the way.
 ## What it is
 
 An image viewer first: photographs, screenshots, vector art and camera raw all open in
-the same window, and browsing a folder is a matter of pressing an arrow key.
+the same window, and browsing a folder is a matter of pressing an arrow key. PDFs open
+in the same window too.
 
 When you do need to change something, the editor is one button away — crop, resize,
 rotate, adjust the colour, draw on it, add text, convert it to another format, or squeeze
@@ -51,6 +52,13 @@ Animated GIF and WebP play, and keep playing while you zoom or rotate.
 
 **Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
 and the folder is watched so files added elsewhere show up.
+
+**PDFs** — every page in one scrolling column, fitted to the window's width. Only the
+pages near the screen are drawn and held in memory, so a long document costs about what
+a short one does. Zooming redraws the pages sharp once it stops moving. Page Up, Page
+Down, Space, Home and End move through the document; the wheel scrolls and Ctrl + wheel
+or a pinch zooms. Left and right still move between files, as they do for images.
+Password-protected PDFs are not supported yet.
 
 **Editing** — one panel, one section at a time:
 
@@ -164,16 +172,16 @@ runtime instead of from your system.
 
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
-AVIF, Rust, `make`, and glib's resource compiler, which the build uses to put the
-icons inside the binary. Everything else is pure Rust and comes in through Cargo.
+AVIF, Poppler's GLib library for PDFs, Rust, `make`, and glib's resource compiler, which
+the build uses to put the icons inside the binary. Everything else is pure Rust and comes in through Cargo.
 
 ```bash
 # Arch
-sudo pacman -S gtk4 libadwaita libheif glib2 rust make
+sudo pacman -S gtk4 libadwaita libheif poppler-glib glib2 rust make
 # Fedora
-sudo dnf install gtk4-devel libadwaita-devel libheif-devel glib2-devel cargo make
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel poppler-glib-devel glib2-devel cargo make
 # Debian, Ubuntu
-sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libglib2.0-dev cargo make
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libpoppler-glib-dev libglib2.0-dev cargo make
 ```
 
 **2. Get the source.**
@@ -315,6 +323,8 @@ file, and four CC0 camera raws covering different decode paths.
 | `F11` | Fullscreen |
 | `Delete` | Delete the current image |
 | `Esc` | Leave fullscreen, close the panel, or cancel editing |
+| `Page Up` `Page Down` `Space` | In a PDF: back / forward a screen |
+| `Home` `End` | In a PDF: first / last page |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

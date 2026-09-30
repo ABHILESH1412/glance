@@ -22,6 +22,7 @@ BuildRequires:  glib2-devel
 BuildRequires:  pkgconfig(gtk4) >= 4.14
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
 BuildRequires:  pkgconfig(libheif)
+BuildRequires:  pkgconfig(poppler-glib)
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 

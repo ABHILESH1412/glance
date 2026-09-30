@@ -15,8 +15,8 @@ use std::path::Path;
 
 use image::{DynamicImage, Rgba, RgbaImage};
 
-use crate::canvas::{CropSelection, LiveEdits};
-use crate::loader;
+use crate::images::canvas::{CropSelection, LiveEdits};
+use crate::images::loader;
 
 /// Apply the live edits, and optionally a crop, to an image already in memory.
 ///
@@ -52,7 +52,7 @@ pub fn apply(
 
     if !live.overlays.is_empty() {
         let mut rgba = image.to_rgba8();
-        crate::text::composite(&mut rgba, &live.overlays);
+        crate::images::edit::text::composite(&mut rgba, &live.overlays);
         image = DynamicImage::ImageRgba8(rgba);
     }
 

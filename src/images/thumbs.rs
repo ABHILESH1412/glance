@@ -19,8 +19,8 @@ use image::{DynamicImage, GenericImage, Rgba, RgbaImage};
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
-use crate::format::{self, Format};
-use crate::loader::{self, LoadedImage};
+use crate::images::format::{self, Format};
+use crate::images::loader::{self, LoadedImage};
 
 /// Every thumbnail comes back at exactly `width` x `height`, letterboxed on a
 /// transparent background.

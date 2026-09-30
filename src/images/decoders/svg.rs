@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use resvg::tiny_skia;
 use resvg::usvg;
 
-use crate::loader::{open_error, unsupported, LoadedImage};
+use crate::images::loader::{open_error, unsupported, LoadedImage};
 
 /// Small vector art would open as a postage stamp, so give the first render
 /// some room. Zooming in re-renders anyway.

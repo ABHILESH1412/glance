@@ -6,8 +6,8 @@
 
 use adw::prelude::*;
 
-use crate::canvas::{self, ImageCanvas};
-use crate::loader::LoadedImage;
+use crate::images::canvas::{self, ImageCanvas};
+use crate::images::loader::LoadedImage;
 
 pub struct ImageView {
     stack: gtk::Stack,
@@ -24,7 +24,7 @@ impl ImageView {
         // The button drives the same action as Ctrl+O, so there is only one
         // open path to maintain.
         let open_button = gtk::Button::builder()
-            .label("Open Image…")
+            .label("Open…")
             .halign(gtk::Align::Center)
             .action_name("win.open")
             .build();
@@ -33,8 +33,8 @@ impl ImageView {
 
         let empty = adw::StatusPage::builder()
             .icon_name("image-x-generic-symbolic")
-            .title("No Image Open")
-            .description("Drop an image here, or open one to start viewing.")
+            .title("Nothing Open")
+            .description("Drop an image or a PDF here, or open one to start viewing.")
             .child(&open_button)
             .build();
 

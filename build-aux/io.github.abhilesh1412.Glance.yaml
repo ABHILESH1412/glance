@@ -56,6 +56,47 @@ modules:
   # libheif comes from the runtime (1.20 in GNOME 49), along with dav1d for
   # AVIF, so HEIC and AVIF need no module here. Should a future runtime drop it,
   # the fix is a libheif module built before this one rather than a code change.
+
+  # Poppler, for PDFs, is not in the runtime, so it is built here. Only its GLib
+  # wrapper is needed; everything else is switched off. Boost in particular:
+  # Poppler asks for it by default and stops with an error when it is missing,
+  # which it is from the GNOME runtime.
+  - name: poppler
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DENABLE_GLIB=ON
+      - -DENABLE_BOOST=OFF
+      - -DENABLE_CPP=OFF
+      - -DENABLE_QT5=OFF
+      - -DENABLE_QT6=OFF
+      - -DENABLE_UTILS=OFF
+      - -DENABLE_LIBCURL=OFF
+      - -DENABLE_NSS3=OFF
+      - -DENABLE_GPGME=OFF
+      - -DENABLE_GOBJECT_INTROSPECTION=OFF
+      - -DBUILD_GTK_TESTS=OFF
+      - -DBUILD_CPP_TESTS=OFF
+      - -DBUILD_QT5_TESTS=OFF
+      - -DBUILD_QT6_TESTS=OFF
+      - -DBUILD_MANUAL_TESTS=OFF
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://poppler.freedesktop.org/poppler-26.09.0.tar.xz
+        sha256: 8059eadb6805340768f138c465b57f8164c92b4a0773c37ef031ea6c0d987b2e
+
+  # The character maps Poppler needs for Chinese, Japanese and Korean PDFs
+  # whose fonts are not embedded. Without them those pages come out blank.
+  - name: poppler-data
+    buildsystem: cmake-ninja
+    sources:
+      - type: archive
+        url: https://poppler.freedesktop.org/poppler-data-0.4.12.tar.gz
+        sha256: c835b640a40ce357e1b83666aabd95edffa24ddddd49b8daff63adb851cdab74
+
   - name: glance
     buildsystem: simple
     build-commands:

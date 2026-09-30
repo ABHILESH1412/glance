@@ -9,7 +9,7 @@ use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 
-use crate::loader::{open_error, unsupported, Frame, LoadedImage};
+use crate::images::loader::{open_error, unsupported, Frame, LoadedImage};
 
 /// A very long animation could otherwise hold a lot of decoded frames at once,
 /// so stop collecting past this and show what was gathered.
@@ -56,7 +56,7 @@ pub fn decode(path: &Path) -> Result<LoadedImage, String> {
     let (width, height) = rgba.dimensions();
     let mut rgba = rgba.into_raw();
     if let Some(profile) = profile {
-        crate::colour::to_srgb(&mut rgba, &profile);
+        crate::images::colour::to_srgb(&mut rgba, &profile);
     }
 
     Ok(LoadedImage {

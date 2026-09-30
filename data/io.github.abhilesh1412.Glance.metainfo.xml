@@ -34,6 +34,10 @@
       <li>Convert between formats, and compress or inflate a file to a size you name — so you never have to hand a photograph to a website that sells what you upload</li>
     </ul>
     <p>
+      It opens PDFs too: every page in one scrolling column, fitted to the
+      window, sharp at any zoom.
+    </p>
+    <p>
       It reads the formats a photographer actually has: PNG, JPEG, WebP, TIFF,
       GIF, BMP, ICO, QOI, PNM and TGA; HEIC, HEIF and AVIF; SVG; and camera raw
       from Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax, Leica and
@@ -78,6 +82,8 @@
     <keyword>picture</keyword>
     <keyword>image</keyword>
     <keyword>viewer</keyword>
+    <keyword>pdf</keyword>
+    <keyword>document</keyword>
     <keyword>crop</keyword>
     <keyword>resize</keyword>
     <keyword>compress</keyword>
