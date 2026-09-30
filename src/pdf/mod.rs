@@ -14,6 +14,7 @@
 
 mod document;
 mod layout;
+mod markup;
 mod page;
 mod render;
 mod search;
@@ -21,4 +22,5 @@ mod sidebar;
 mod view;
 
 pub use document::{is_pdf, open, Opened};
-pub use view::{PdfView, SearchStatus, Status};
+pub use markup::Style;
+pub use view::{Marked, PdfView, SearchStatus, Status};

@@ -12,10 +12,10 @@ Tick a box when a feature ships.
 | Area | Glance has | Partial |
 |---|---|---|
 | Images | 25 / 64 | 7 |
-| PDF | 4 / 28 | 3 |
+| PDF | 5 / 28 | 3 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **31 / 122** | **11** |
+| **Total** | **32 / 122** | **11** |
 
 ---
 
@@ -120,7 +120,7 @@ Tick a box when a feature ships.
 ## 7. PDF — text
 
 - [x] Select and copy text
-- [ ] Highlight, underline and strike through text
+- [x] Highlight, underline and strike through text
 - [ ] Notes and speech bubbles
 
 ## 8. PDF — forms and signatures

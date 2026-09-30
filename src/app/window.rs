@@ -350,6 +350,7 @@ impl Window {
             self,
             move |status| window.show_pdf_status(status)
         ));
+        self.build_pdf_context_menu();
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
         imp.toasts.set_child(Some(&body));
@@ -417,6 +418,13 @@ impl Window {
         let text_section = gio::Menu::new();
         text_section.append(Some("_Find…"), Some("win.find"));
         text_section.append(Some("_Copy Selected Text"), Some("win.copy"));
+        let markup_section = gio::Menu::new();
+        markup_section.append(Some("_Highlight"), Some("win.mark-highlight"));
+        markup_section.append(Some("_Underline"), Some("win.mark-underline"));
+        markup_section.append(Some("_Strike Through"), Some("win.mark-strike"));
+        let history_section = gio::Menu::new();
+        history_section.append(Some("_Undo"), Some("win.undo-mark"));
+        history_section.append(Some("_Redo"), Some("win.redo-mark"));
         let pdf_zoom_section = gio::Menu::new();
         pdf_zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
         pdf_zoom_section.append(Some("Zoom _Out"), Some("win.zoom-out"));
@@ -428,6 +436,8 @@ impl Window {
         let pdf_menu = &imp.pdf_menu;
         pdf_menu.append_section(None, &pages_section);
         pdf_menu.append_section(None, &text_section);
+        pdf_menu.append_section(None, &markup_section);
+        pdf_menu.append_section(None, &history_section);
         pdf_menu.append_section(None, &view_section);
         pdf_menu.append_section(None, &pdf_zoom_section);
         pdf_menu.append_section(None, &pdf_rotate_section);
@@ -1087,6 +1097,62 @@ impl Window {
                 if let Some(action) = window.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
                     if action.state().and_then(|state| state.get::<bool>()) != Some(split.shows_sidebar()) {
                         action.change_state(&split.shows_sidebar().to_variant());
+                    }
+                }
+            }
+        ));
+
+        // Marking up a PDF's text. Each is saved into the file at once, and
+        // has its own undo, apart from the image editor's.
+        let styles = [
+            ("mark-highlight", pdf::Style::Highlight, "highlight"),
+            ("mark-underline", pdf::Style::Underline, "underline"),
+            ("mark-strike", pdf::Style::StrikeOut, "strike through"),
+        ];
+        for (name, style, verb) in styles {
+            let action = gio::SimpleAction::new(name, None);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| {
+                    let imp = window.imp();
+                    if !imp.showing_pdf.get() {
+                        return;
+                    }
+                    match imp.pdf_view.mark(style) {
+                        pdf::Marked::Done => {}
+                        pdf::Marked::NothingSelected => {
+                            window.toast(&format!("Select some text to {verb} first."));
+                        }
+                        pdf::Marked::Failed(error) => window.toast(&error),
+                    }
+                }
+            ));
+            self.add_action(&action);
+        }
+        for (name, back) in [("undo-mark", true), ("redo-mark", false)] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(false);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| {
+                    let view = &window.imp().pdf_view;
+                    let done = if back { view.undo() } else { view.redo() };
+                    if let Err(error) = done {
+                        window.toast(&error);
+                    }
+                }
+            ));
+            self.add_action(&action);
+        }
+        self.imp().pdf_view.connect_history(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |can_undo, can_redo| {
+                for (name, enabled) in [("undo-mark", can_undo), ("redo-mark", can_redo)] {
+                    if let Some(action) = window.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                        action.set_enabled(enabled);
                     }
                 }
             }
@@ -1809,6 +1875,45 @@ impl Window {
 
     /// The bar under the header for finding text in a PDF: what to find, how
     /// many there are and which one this is, and buttons to step through them.
+    /// A right-click on a page offers what can be done with the selection.
+    fn build_pdf_context_menu(&self) {
+        let clipboard = gio::Menu::new();
+        clipboard.append(Some("_Copy"), Some("win.copy"));
+        let marks = gio::Menu::new();
+        marks.append(Some("_Highlight"), Some("win.mark-highlight"));
+        marks.append(Some("_Underline"), Some("win.mark-underline"));
+        marks.append(Some("_Strike Through"), Some("win.mark-strike"));
+        let menu = gio::Menu::new();
+        menu.append_section(None, &clipboard);
+        menu.append_section(None, &marks);
+
+        let reader = self.imp().pdf_view.widget();
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(reader);
+        popover.set_has_arrow(false);
+        popover.set_halign(gtk::Align::Start);
+        // Not a child the scrolled window knows about, so it is let go of by
+        // hand, or GTK complains when the window closes.
+        reader.connect_destroy(glib::clone!(
+            #[weak]
+            popover,
+            move |_| popover.unparent()
+        ));
+
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_SECONDARY);
+        click.connect_pressed(glib::clone!(
+            #[weak]
+            popover,
+            move |gesture, _, x, y| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.popup();
+            }
+        ));
+        reader.add_controller(click);
+    }
+
     fn build_search_bar(&self) {
         let imp = self.imp();
         let entry = &imp.search_entry;

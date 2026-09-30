@@ -198,6 +198,13 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.find", idle: &[], typing: &[] },
     Accel { action: "win.find-next", idle: &[], typing: &["F3"] },
     Accel { action: "win.find-previous", idle: &[], typing: &["<Shift>F3"] },
+    // Marking up a PDF's text, and taking it back: keys only while one is
+    // open, through `PDF_KEYS`.
+    Accel { action: "win.mark-highlight", idle: &[], typing: &[] },
+    Accel { action: "win.mark-underline", idle: &[], typing: &[] },
+    Accel { action: "win.mark-strike", idle: &[], typing: &[] },
+    Accel { action: "win.undo-mark", idle: &[], typing: &[] },
+    Accel { action: "win.redo-mark", idle: &[], typing: &[] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document
@@ -223,6 +230,17 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.find", &["<Primary>f"]),
     ("win.find-next", &["F3", "<Primary>g"]),
     ("win.find-previous", &["<Shift>F3", "<Primary><Shift>g"]),
+    // Ctrl+H highlights, as in Preview, rather than flipping a picture that
+    // is not on screen; Ctrl+Z undoes marks, not image edits.
+    ("win.flip-horizontal", &[]),
+    ("win.flip-vertical", &[]),
+    ("win.undo", &[]),
+    ("win.redo", &[]),
+    ("win.mark-highlight", &["<Primary>h"]),
+    ("win.mark-underline", &["<Primary>u"]),
+    ("win.mark-strike", &["<Primary><Shift>x"]),
+    ("win.undo-mark", &["<Primary>z"]),
+    ("win.redo-mark", &["<Primary><Shift>z", "<Primary>y"]),
 ];
 
 /// Swap the whole set over when focus moves into or out of a text box, or

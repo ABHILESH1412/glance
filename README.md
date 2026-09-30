@@ -66,6 +66,11 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   count grows while a long document is still being searched — it never freezes the
   window. Case and accents do not matter, and a phrase broken across two lines is still
   found, as one match. The first match shown is the first from the page you are on
+- **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
+  Ctrl+Shift+X, or from the right-click menu. The marks are ordinary PDF annotations
+  saved straight into the file, so every other PDF reader shows them too. Ctrl+Z and
+  Ctrl+Shift+Z undo and redo; marking text the same way again takes the mark off.
+  A read-only file is left untouched
 - **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
 - The wheel scrolls; Ctrl + wheel or a pinch zooms
 
@@ -330,7 +335,7 @@ file, and four CC0 camera raws covering different decode paths.
 | `[` `]` | Rotate left / right |
 | `Ctrl+E` | Edit panel |
 | `Ctrl+T` `Ctrl+R` | Rotate and flip / Resize |
-| `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit |
+| `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit, or a mark in a PDF |
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |
 | `Ctrl+C` | Copy the image, or a PDF's selected text |
 | `F11` | Fullscreen |
@@ -342,6 +347,7 @@ file, and four CC0 camera raws covering different decode paths.
 | `F9` | In a PDF: show or hide the page sidebar |
 | `Ctrl+F` | In a PDF: find (fullscreen is `F11` there) |
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
+| `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

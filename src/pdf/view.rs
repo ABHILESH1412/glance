@@ -14,16 +14,21 @@
 //! Text is selected by dragging across it: a double-click takes a word, a
 //! triple-click a line. The highlight is drawn over the page rather than into
 //! it, so selecting never waits for a page to be redrawn.
+//!
+//! Selected text can be highlighted, underlined or struck through. Those marks
+//! go into the file itself (see `markup`), the pages they are on are redrawn
+//! from it, and each change can be undone and redone.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 
 use super::document::{self, Opened, Pixels, Spot, Unit};
 use super::layout::{self, Layout, Rotation};
+use super::markup::{self, Mark, Style};
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
@@ -57,6 +62,22 @@ pub struct SearchStatus {
     pub total: usize,
     /// Every page has been searched. Until then the total can still grow.
     pub done: bool,
+}
+
+/// What became of a request to mark the selection.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Marked {
+    Done,
+    /// No text selected, so nothing to mark.
+    NothingSelected,
+    /// The file could not be saved; nothing was changed.
+    Failed(String),
+}
+
+/// One step to undo: marks put on, or taken off, together.
+struct Change {
+    marks: Vec<Mark>,
+    added: bool,
 }
 
 /// A selection: where the drag started, where it is now, and by what unit.
@@ -125,6 +146,12 @@ struct Inner {
     /// Pages showing match marks, so they can be cleared.
     marked: RefCell<Vec<usize>>,
     search_status: RefCell<Option<Box<dyn Fn(SearchStatus)>>>,
+    /// The version of the file on screen, counting changes made here. Pages
+    /// drawn from an older one are out of date.
+    revision: Cell<u64>,
+    history: RefCell<Vec<Change>>,
+    undone: RefCell<Vec<Change>>,
+    on_history: RefCell<Option<Box<dyn Fn(bool, bool)>>>,
 }
 
 impl PdfView {
@@ -174,6 +201,10 @@ impl PdfView {
             search_id: Cell::new(0),
             marked: RefCell::default(),
             search_status: RefCell::default(),
+            revision: Cell::new(0),
+            history: RefCell::default(),
+            undone: RefCell::default(),
+            on_history: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -227,7 +258,7 @@ impl PdfView {
         inner.scroll_to(Some(0.0), Some(0.0));
 
         let (sender, receiver) = async_channel::bounded(4);
-        inner.renderer.replace(Some(Renderer::start(opened.uri, sender)));
+        inner.renderer.replace(Some(Renderer::start(opened.uri, inner.revision.get(), sender)));
         let weak = Rc::downgrade(inner);
         glib::spawn_future_local(async move {
             while let Ok(rendered) = receiver.recv().await {
@@ -354,6 +385,28 @@ impl PdfView {
 
     pub fn connect_search_status(&self, callback: impl Fn(SearchStatus) + 'static) {
         self.inner.search_status.replace(Some(Box::new(callback)));
+    }
+
+    /// Highlight, underline or strike through the selected text, and save it
+    /// into the file. Marking text exactly as it is already marked takes the
+    /// mark off again.
+    pub fn mark(&self, style: Style) -> Marked {
+        self.inner.mark(style)
+    }
+
+    /// Take back the last marking, or put it back. Ok if there was nothing to
+    /// take back.
+    pub fn undo(&self) -> Result<(), String> {
+        self.inner.step_history(true)
+    }
+
+    pub fn redo(&self) -> Result<(), String> {
+        self.inner.step_history(false)
+    }
+
+    /// Called with whether there is anything to undo, and to redo.
+    pub fn connect_history(&self, callback: impl Fn(bool, bool) + 'static) {
+        self.inner.on_history.replace(Some(Box::new(callback)));
     }
 
     /// Copy the selected text to the clipboard. False if nothing is selected.
@@ -678,8 +731,12 @@ impl Inner {
     }
 
     fn on_rendered(&self, rendered: Rendered) {
-        // Drawn for a zoom or a turn that has since changed.
-        if rendered.requested != self.device_scale() || rendered.rotation != self.rotation.get() {
+        // Drawn for a zoom, a turn or a version of the file that has since
+        // changed.
+        if rendered.requested != self.device_scale()
+            || rendered.rotation != self.rotation.get()
+            || rendered.revision != self.revision.get()
+        {
             return;
         }
         let v = self.root.vadjustment();
@@ -961,6 +1018,124 @@ impl Inner {
         }
     }
 
+    fn mark(&self, style: Style) -> Marked {
+        let Some(selection) = self.selection.get() else { return Marked::NothingSelected };
+        let Some(reader) = self.reader() else { return Marked::NothingSelected };
+        let marks: Vec<Mark> = {
+            let pages = self.pages.borrow();
+            document::spans(selection.anchor, selection.head, &pages)
+                .into_iter()
+                .map(|(page, span)| Mark {
+                    page,
+                    style,
+                    lines: markup::selected_lines(&reader, page, span, selection.unit),
+                })
+                .filter(|mark| !mark.lines.is_empty())
+                .collect()
+        };
+        if marks.is_empty() {
+            return Marked::NothingSelected; // Only space between words.
+        }
+        // All of it marked this way already: the same again takes it off,
+        // like bold in a word processor. Otherwise mark what is not yet.
+        let already = marks.iter().all(|mark| markup::exists(&reader, mark));
+        let marks = if already {
+            marks
+        } else {
+            marks.into_iter().filter(|mark| !markup::exists(&reader, mark)).collect()
+        };
+        let change = Change { marks, added: !already };
+        if let Err(error) = self.apply(&reader, &change, true) {
+            return Marked::Failed(error);
+        }
+        self.history.borrow_mut().push(change);
+        self.undone.borrow_mut().clear();
+        // Out of the way, so the mark just made shows.
+        self.set_selection(None);
+        self.emit_history();
+        Marked::Done
+    }
+
+    /// Undo the last change, or redo the last one undone.
+    fn step_history(&self, back: bool) -> Result<(), String> {
+        let (from, to) = if back { (&self.history, &self.undone) } else { (&self.undone, &self.history) };
+        let Some(change) = from.borrow_mut().pop() else { return Ok(()) };
+        let Some(reader) = self.reader() else { return Ok(()) };
+        if let Err(error) = self.apply(&reader, &change, !back) {
+            from.borrow_mut().push(change);
+            return Err(error);
+        }
+        self.reveal_change(&change);
+        to.borrow_mut().push(change);
+        self.emit_history();
+        Ok(())
+    }
+
+    /// Make a change, or take it back, and save the file. If it cannot be
+    /// saved the document is put back as it was, so what is on screen never
+    /// differs from the file.
+    fn apply(&self, reader: &poppler::Document, change: &Change, forwards: bool) -> Result<(), String> {
+        let edit = |adding: bool| {
+            for mark in &change.marks {
+                if adding {
+                    markup::add(reader, mark);
+                } else {
+                    markup::remove(reader, mark);
+                }
+            }
+        };
+        let adding = change.added == forwards;
+        let path = self
+            .uri
+            .borrow()
+            .as_deref()
+            .and_then(|uri| gio::File::for_uri(uri).path())
+            .ok_or_else(|| "Only a file on this computer can be marked up.".to_string())?;
+        edit(adding);
+        if let Err(error) = markup::save(reader, &path) {
+            edit(!adding);
+            return Err(error);
+        }
+
+        let revision = self.revision.get() + 1;
+        self.revision.set(revision);
+        if let Some(renderer) = self.renderer.borrow().as_ref() {
+            renderer.reload(revision);
+        }
+        let pages: Vec<usize> = change.marks.iter().map(|mark| mark.page).collect();
+        {
+            let mut rendered = self.rendered.borrow_mut();
+            for &page in &pages {
+                if let Some(scale) = rendered.get_mut(page) {
+                    *scale = 0.0;
+                }
+            }
+        }
+        // The old drawing stays up until the new one replaces it, so the page
+        // does not blink.
+        self.refresh(true);
+        self.sidebar.reload(&pages, revision);
+        Ok(())
+    }
+
+    /// Bring an undone or redone change into view, if it is off screen.
+    fn reveal_change(&self, change: &Change) {
+        let Some(page) = change.marks.first().map(|mark| mark.page) else { return };
+        let v = self.root.vadjustment();
+        let visible = self.layout.borrow().visible(v.value(), v.value() + v.page_size());
+        if visible.is_some_and(|(first, last)| page < first || page > last) {
+            self.go_to_page(page);
+        }
+    }
+
+    fn emit_history(&self) {
+        let can_undo = !self.history.borrow().is_empty();
+        let can_redo = !self.undone.borrow().is_empty();
+        if let Some(callback) = self.on_history.borrow().as_ref() {
+            callback(can_undo, can_redo);
+        }
+    }
+
     fn selected_text(&self) -> Option<String> {
         let selection = self.selection.get()?;
         let reader = self.reader()?;
@@ -1001,6 +1176,10 @@ impl Inner {
         self.current_match.set(None);
         self.search_done.set(true);
         self.marked.borrow_mut().clear();
+        self.revision.set(0);
+        self.history.borrow_mut().clear();
+        self.undone.borrow_mut().clear();
+        self.emit_history();
         self.sidebar.clear();
     }
 }

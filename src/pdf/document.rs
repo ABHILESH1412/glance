@@ -126,7 +126,7 @@ pub enum Unit {
 }
 
 impl Unit {
-    fn style(self) -> poppler::SelectionStyle {
+    pub(super) fn style(self) -> poppler::SelectionStyle {
         match self {
             Unit::Glyph => poppler::SelectionStyle::Glyph,
             Unit::Word => poppler::SelectionStyle::Word,
@@ -157,7 +157,7 @@ pub fn spans(from: Spot, to: Spot, sizes: &[(f64, f64)]) -> Vec<(usize, [f64; 4]
         .collect()
 }
 
-fn rectangle(span: [f64; 4]) -> poppler::Rectangle {
+pub(super) fn rectangle(span: [f64; 4]) -> poppler::Rectangle {
     let mut r = poppler::Rectangle::new();
     r.set_x1(span[0]);
     r.set_y1(span[1]);

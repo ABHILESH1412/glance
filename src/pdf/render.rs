@@ -8,6 +8,11 @@
 //! it replaces the whole list with what it wants now, most urgent first. A fast
 //! scroll through a long document therefore never leaves a backlog of pages
 //! that have already gone past.
+//!
+//! When the file changes under it — a page marked up — the thread is told to
+//! reopen it. Every page it draws says which version of the file it was drawn
+//! from, so one already under way when the file changed is recognised as out
+//! of date and thrown away.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -29,13 +34,23 @@ pub struct Rendered {
     pub requested: f64,
     /// Drawn turned this far; stale once the view has been turned again.
     pub rotation: Rotation,
+    /// Drawn from this version of the file; see `Renderer::reload`.
+    pub revision: u64,
     pub pixels: Pixels,
 }
 
 #[derive(Default)]
 struct Queue {
     jobs: Vec<Job>,
+    /// Reopen the file before drawing anything more, as this version.
+    reload: Option<u64>,
     quit: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum Work {
+    Reload(u64),
+    Draw(Job),
 }
 
 #[derive(Default)]
@@ -58,12 +73,13 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn start(uri: String, results: async_channel::Sender<Rendered>) -> Self {
+    /// Start drawing from the file as it is now, calling that `revision`.
+    pub fn start(uri: String, revision: u64, results: async_channel::Sender<Rendered>) -> Self {
         let shared = Arc::new(Shared::default());
         let worker = shared.clone();
         std::thread::Builder::new()
             .name("glance-pdf".into())
-            .spawn(move || run(&uri, &worker, &results))
+            .spawn(move || run(&uri, revision, &worker, &results))
             .expect("the system refused to start a thread");
         Renderer { shared }
     }
@@ -71,6 +87,13 @@ impl Renderer {
     /// Replace whatever is still waiting with `jobs`, most urgent first.
     pub fn want(&self, jobs: Vec<Job>) {
         self.shared.lock().jobs = jobs;
+        self.shared.wake.notify_one();
+    }
+
+    /// The file has changed: reopen it before drawing anything else, and
+    /// label what is drawn from now on with `revision`.
+    pub fn reload(&self, revision: u64) {
+        self.shared.lock().reload = Some(revision);
         self.shared.wake.notify_one();
     }
 }
@@ -85,30 +108,46 @@ impl Drop for Renderer {
     }
 }
 
-fn run(uri: &str, shared: &Shared, results: &async_channel::Sender<Rendered>) {
-    let Ok(document) = poppler::Document::from_file(uri, None) else {
+fn run(uri: &str, revision: u64, shared: &Shared, results: &async_channel::Sender<Rendered>) {
+    let Ok(mut document) = poppler::Document::from_file(uri, None) else {
         return; // The window already reported why when it opened the file.
     };
-    while let Some(job) = next(shared) {
+    let mut revision = revision;
+    while let Some(work) = next(shared) {
+        let job = match work {
+            Work::Reload(now) => {
+                // Should the file have gone, keep drawing what is still open.
+                if let Ok(reopened) = poppler::Document::from_file(uri, None) {
+                    document = reopened;
+                }
+                revision = now;
+                continue;
+            }
+            Work::Draw(job) => job,
+        };
         let Some(pixels) = document::render_page(&document, job.page, job.scale, job.rotation) else {
             continue;
         };
-        let rendered = Rendered { page: job.page, requested: job.scale, rotation: job.rotation, pixels };
+        let rendered = Rendered { page: job.page, requested: job.scale, rotation: job.rotation, revision, pixels };
         if results.send_blocking(rendered).is_err() {
             return; // Nobody is listening any more.
         }
     }
 }
 
-/// Wait for work. `None` means stop.
-fn next(shared: &Shared) -> Option<Job> {
+/// Wait for work. `None` means stop. A reload comes before any drawing, so
+/// nothing asked for after the file changed is drawn from the old one.
+fn next(shared: &Shared) -> Option<Work> {
     let mut queue = shared.lock();
     loop {
         if queue.quit {
             return None;
         }
+        if let Some(revision) = queue.reload.take() {
+            return Some(Work::Reload(revision));
+        }
         if !queue.jobs.is_empty() {
-            return Some(queue.jobs.remove(0));
+            return Some(Work::Draw(queue.jobs.remove(0)));
         }
         queue = shared.wake.wait(queue).unwrap_or_else(|poisoned| poisoned.into_inner());
     }
@@ -128,7 +167,16 @@ mod tests {
         shared.lock().jobs = vec![job(1), job(2)];
         // The view has scrolled on: only page 9 matters now.
         shared.lock().jobs = vec![job(9)];
-        assert_eq!(next(&shared), Some(job(9)));
+        assert_eq!(next(&shared), Some(Work::Draw(job(9))));
+    }
+
+    #[test]
+    fn a_changed_file_is_reopened_before_anything_more_is_drawn() {
+        let shared = Shared::default();
+        shared.lock().jobs = vec![job(3)];
+        shared.lock().reload = Some(1);
+        assert_eq!(next(&shared), Some(Work::Reload(1)));
+        assert_eq!(next(&shared), Some(Work::Draw(job(3))));
     }
 
     #[test]

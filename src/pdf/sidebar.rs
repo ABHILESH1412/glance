@@ -42,6 +42,8 @@ struct Inner {
     renderer: RefCell<Option<Renderer>>,
     /// Bumped per document, so thumbnails drawn for the last one are ignored.
     document: Cell<u64>,
+    /// The version of the file being shown; see `Renderer::reload`.
+    revision: Cell<u64>,
     cache: RefCell<HashMap<usize, gdk::Texture>>,
     /// Pages whose rows are built right now, and the widget showing each.
     bound: RefCell<HashMap<usize, Page>>,
@@ -77,6 +79,7 @@ impl Sidebar {
             uri: RefCell::default(),
             renderer: RefCell::default(),
             document: Cell::new(0),
+            revision: Cell::new(0),
             cache: RefCell::default(),
             bound: RefCell::default(),
             asked: Cell::new(false),
@@ -193,6 +196,23 @@ impl Sidebar {
         }
     }
 
+    /// The file has been marked up: redraw these pages from it.
+    pub fn reload(&self, pages: &[usize], revision: u64) {
+        let inner = &self.inner;
+        inner.revision.set(revision);
+        // Not started yet: it opens the file as it is when it does start.
+        match inner.renderer.borrow().as_ref() {
+            Some(renderer) => renderer.reload(revision),
+            None => return,
+        }
+        let mut cache = inner.cache.borrow_mut();
+        for page in pages {
+            cache.remove(page);
+        }
+        drop(cache);
+        inner.ask();
+    }
+
     /// Follow the reader: select the page being read, and bring it into view.
     pub fn set_current(&self, index: usize) {
         let inner = &self.inner;
@@ -244,7 +264,7 @@ impl Inner {
         }
         let Some(uri) = self.uri.borrow().clone() else { return };
         let (sender, receiver) = async_channel::bounded(8);
-        self.renderer.replace(Some(Renderer::start(uri, sender)));
+        self.renderer.replace(Some(Renderer::start(uri, self.revision.get(), sender)));
         let id = self.document.get();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
@@ -287,8 +307,11 @@ impl Inner {
     }
 
     fn on_rendered(&self, rendered: Rendered) {
-        if rendered.rotation != self.rotation.get() || rendered.requested != self.thumb_scale(rendered.page) {
-            return; // Drawn for a turn or a screen that has since changed.
+        if rendered.rotation != self.rotation.get()
+            || rendered.requested != self.thumb_scale(rendered.page)
+            || rendered.revision != self.revision.get()
+        {
+            return; // Drawn for a turn, a screen or a file that has since changed.
         }
         let texture = texture(rendered.pixels);
         if let Some(page) = self.bound.borrow().get(&rendered.page) {
@@ -316,6 +339,7 @@ impl Inner {
         self.bound.borrow_mut().clear();
         self.pages.borrow_mut().clear();
         self.uri.replace(None);
+        self.revision.set(0);
         self.rotation.set(Rotation::default());
         self.syncing.set(true);
         self.model.splice(0, self.model.n_items(), &[]);
