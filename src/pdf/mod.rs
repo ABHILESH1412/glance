@@ -14,8 +14,10 @@
 
 mod document;
 mod layout;
+mod page;
 mod render;
+mod sidebar;
 mod view;
 
-pub use document::{has_pdf_extension, is_pdf, open, thumbnail, Opened};
+pub use document::{is_pdf, open, Opened};
 pub use view::{PdfView, Status};

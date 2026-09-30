@@ -52,6 +52,20 @@ mod imp {
         pub view: ImageView,
         /// The reader for PDFs, beside the image view in `content`.
         pub pdf_view: PdfView,
+        /// Page thumbnails beside the reader, for PDFs.
+        pub split: adw::OverlaySplitView,
+        pub sidebar_button: gtk::ToggleButton,
+        /// The page number box in the header, and "of 20" beside it.
+        pub page_box: gtk::Box,
+        pub page_entry: gtk::Entry,
+        pub page_total: gtk::Label,
+        /// Where the reader is, for putting the page box back after a typo.
+        pub pdf_status: Cell<Option<pdf::Status>>,
+        pub menu_button: gtk::MenuButton,
+        /// The main menu differs by document: an image's has editing and
+        /// flipping in it, a PDF's has its pages.
+        pub image_menu: gio::Menu,
+        pub pdf_menu: gio::Menu,
         /// Holds both views; only one is ever on screen.
         pub content: gtk::Stack,
         /// The document on screen is a PDF, so zoom and paging go to it.
@@ -164,6 +178,15 @@ mod imp {
                 toasts: adw::ToastOverlay::new(),
                 view: ImageView::new(),
                 pdf_view: PdfView::new(),
+                split: adw::OverlaySplitView::new(),
+                sidebar_button: gtk::ToggleButton::new(),
+                page_box: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+                page_entry: gtk::Entry::new(),
+                page_total: gtk::Label::new(None),
+                pdf_status: Cell::new(None),
+                menu_button: gtk::MenuButton::new(),
+                image_menu: gio::Menu::new(),
+                pdf_menu: gio::Menu::new(),
                 content: gtk::Stack::new(),
                 showing_pdf: Cell::new(false),
                 toolbar: adw::ToolbarView::new(),
@@ -299,7 +322,16 @@ impl Window {
         content.add_named(imp.view.widget(), Some("image"));
         content.add_named(imp.pdf_view.widget(), Some("pdf"));
         content.set_visible_child_name("image");
-        body.append(content);
+        // The page sidebar sits over the reader on a narrow window and beside it
+        // on a wide one. Images never show it.
+        let split = &imp.split;
+        split.set_hexpand(true);
+        split.set_sidebar(Some(imp.pdf_view.sidebar()));
+        split.set_content(Some(content));
+        split.set_min_sidebar_width(150.0);
+        split.set_max_sidebar_width(190.0);
+        split.set_show_sidebar(false);
+        body.append(split);
         imp.pdf_view.connect_status(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -354,7 +386,7 @@ impl Window {
         let about_section = gio::Menu::new();
         about_section.append(Some("_About Glance"), Some("win.about"));
 
-        let menu = gio::Menu::new();
+        let menu = &imp.image_menu;
         menu.append_section(None, &clipboard_section);
         menu.append_section(None, &edit_section);
         menu.append_section(None, &file_section);
@@ -364,12 +396,69 @@ impl Window {
         menu.append_section(None, &rotate_section);
         menu.append_section(Some("Appearance"), &theme_section);
         menu.append_section(None, &about_section);
-        let menu_button = gtk::MenuButton::builder()
-            .icon_name("open-menu-symbolic")
-            .tooltip_text("Main Menu")
-            .menu_model(&menu)
-            .primary(true)
-            .build();
+
+        // A PDF's menu: its pages, and nothing about editing or flipping
+        // pictures, which do not apply.
+        let pages_section = gio::Menu::new();
+        pages_section.append(Some("Show _Pages"), Some("win.show-pages"));
+        let text_section = gio::Menu::new();
+        text_section.append(Some("_Copy Selected Text"), Some("win.copy"));
+        let pdf_zoom_section = gio::Menu::new();
+        pdf_zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
+        pdf_zoom_section.append(Some("Zoom _Out"), Some("win.zoom-out"));
+        pdf_zoom_section.append(Some("_Fit Width"), Some("win.zoom-fit"));
+        pdf_zoom_section.append(Some("_Actual Size"), Some("win.zoom-actual"));
+        let pdf_rotate_section = gio::Menu::new();
+        pdf_rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
+        pdf_rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
+        let pdf_menu = &imp.pdf_menu;
+        pdf_menu.append_section(None, &pages_section);
+        pdf_menu.append_section(None, &text_section);
+        pdf_menu.append_section(None, &view_section);
+        pdf_menu.append_section(None, &pdf_zoom_section);
+        pdf_menu.append_section(None, &pdf_rotate_section);
+        pdf_menu.append_section(Some("Appearance"), &theme_section);
+        pdf_menu.append_section(None, &about_section);
+
+        let menu_button = &imp.menu_button;
+        menu_button.set_icon_name("open-menu-symbolic");
+        menu_button.set_tooltip_text(Some("Main Menu"));
+        menu_button.set_menu_model(Some(menu));
+        menu_button.set_primary(true);
+
+        // For PDFs only: the page thumbnails, and the page you are on, which
+        // can be typed over to go somewhere else.
+        let sidebar_button = &imp.sidebar_button;
+        sidebar_button.set_icon_name("sidebar-show-symbolic");
+        sidebar_button.set_tooltip_text(Some("Pages (F9)"));
+        sidebar_button.set_action_name(Some("win.show-pages"));
+        sidebar_button.set_visible(false);
+
+        let page_entry = &imp.page_entry;
+        page_entry.set_width_chars(3);
+        page_entry.set_max_width_chars(5);
+        gtk::prelude::EntryExt::set_alignment(page_entry, 1.0);
+        page_entry.set_input_purpose(gtk::InputPurpose::Digits);
+        page_entry.set_tooltip_text(Some("Go to page"));
+        page_entry.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.go_to_typed_page()
+        ));
+        // Clicking away without pressing Enter puts the real page number back.
+        let focus = gtk::EventControllerFocus::new();
+        focus.connect_leave(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.show_page_number()
+        ));
+        page_entry.add_controller(focus);
+        imp.page_total.add_css_class("dim-label");
+        imp.page_total.add_css_class("numeric");
+        let page_box = &imp.page_box;
+        page_box.append(page_entry);
+        page_box.append(&imp.page_total);
+        page_box.set_visible(false);
 
         // Opens the transform options. Nothing to transform until an image is
         // loaded, so it starts switched off.
@@ -420,8 +509,10 @@ impl Window {
         let header = adw::HeaderBar::builder()
             .title_widget(&imp.title)
             .build();
+        header.pack_start(&imp.sidebar_button);
         header.pack_start(&open_button);
-        header.pack_end(&menu_button);
+        header.pack_start(&imp.page_box);
+        header.pack_end(menu_button);
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
         header.pack_end(copy_button);
@@ -507,15 +598,7 @@ impl Window {
         let (sender, receiver) = async_channel::bounded(1);
         let worker_path = path.clone();
         std::thread::spawn(move || {
-            let (w, h) = (filmstrip::SLOT_W, filmstrip::SLOT_H);
-            // By name, not content: the strip must not open every file in a
-            // folder just to learn what each one is.
-            let thumbnail = if pdf::has_pdf_extension(&worker_path) {
-                pdf::thumbnail(&worker_path, w, h)
-            } else {
-                thumbs::generate(&worker_path, w, h)
-            };
-            let _ = sender.send_blocking(thumbnail);
+            let _ = sender.send_blocking(thumbs::generate(&worker_path, filmstrip::SLOT_W, filmstrip::SLOT_H));
         });
 
         glib::spawn_future_local(glib::clone!(
@@ -686,7 +769,14 @@ impl Window {
             action.connect_activate(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
-                move |_, _| window.imp().view.canvas().rotate_by(degrees)
+                move |_, _| {
+                    let imp = window.imp();
+                    if imp.showing_pdf.get() {
+                        imp.pdf_view.rotate_by(if degrees > 0.0 { 1 } else { -1 });
+                    } else {
+                        imp.view.canvas().rotate_by(degrees);
+                    }
+                }
             ));
             self.add_action(&action);
         }
@@ -744,11 +834,13 @@ impl Window {
 
         // Moving through a PDF. These only have keys while one is open; see
         // `PDF_KEYS` in main.rs.
-        let paging: [(&str, fn(&PdfView)); 6] = [
+        let paging: [(&str, fn(&PdfView)); 8] = [
             ("page-down", |view| view.scroll_pages(1.0)),
             ("page-up", |view| view.scroll_pages(-1.0)),
             ("line-down", |view| view.scroll_lines(1.0)),
             ("line-up", |view| view.scroll_lines(-1.0)),
+            ("scroll-right", |view| view.scroll_across(1.0)),
+            ("scroll-left", |view| view.scroll_across(-1.0)),
             ("page-first", PdfView::scroll_to_start),
             ("page-last", PdfView::scroll_to_end),
         ];
@@ -940,13 +1032,47 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _| {
-                // Copying is of a picture; a PDF page is not one yet.
-                if !window.imp().showing_pdf.get() {
+                let imp = window.imp();
+                if !imp.showing_pdf.get() {
                     window.copy_to_clipboard();
+                } else if imp.pdf_view.copy_selection() {
+                    window.toast("Text copied.");
+                } else {
+                    window.toast("Select some text to copy first.");
                 }
             }
         ));
         self.add_action(&copy);
+
+        // The page sidebar. A stateful action, so the header button and the
+        // menu's check mark stay in step with each other.
+        let show_pages = gio::SimpleAction::new_stateful("show-pages", None, &false.to_variant());
+        show_pages.set_enabled(false);
+        show_pages.connect_change_state(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |action, state| {
+                let Some(show) = state.and_then(|state| state.get::<bool>()) else { return };
+                action.set_state(&show.to_variant());
+                let imp = window.imp();
+                imp.split.set_show_sidebar(show);
+                imp.pdf_view.set_sidebar_active(show);
+            }
+        ));
+        self.add_action(&show_pages);
+        // On a narrow window the sidebar floats over the page, and a click
+        // beside it closes it. Keep the button in step when that happens.
+        self.imp().split.connect_show_sidebar_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |split| {
+                if let Some(action) = window.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
+                    if action.state().and_then(|state| state.get::<bool>()) != Some(split.shows_sidebar()) {
+                        action.change_state(&split.shows_sidebar().to_variant());
+                    }
+                }
+            }
+        ));
 
         let delete = gio::SimpleAction::new("delete", None);
         delete.connect_activate(glib::clone!(
@@ -1179,12 +1305,14 @@ impl Window {
         std::thread::spawn(move || {
             // Both the decode and the directory listing are filesystem work, so
             // they belong on this side of the channel.
-            let decoded = if pdf::is_pdf(&scan_path) {
+            let is_pdf = pdf::is_pdf(&scan_path);
+            let decoded = if is_pdf {
                 pdf::open(&scan_path).map(Loaded::Pdf)
             } else {
                 loader::decode(&scan_path).map(Loaded::Image)
             };
-            let siblings = rescan.then(|| playlist::siblings(&scan_path));
+            // A PDF is read on its own, not browsed with its neighbours.
+            let siblings = (rescan && !is_pdf).then(|| playlist::siblings(&scan_path));
             let _ = sender.send_blocking((decoded, siblings));
         });
 
@@ -1419,6 +1547,11 @@ impl Window {
     /// Fold a fresh directory listing into the view.
     fn apply_listing(&self, files: Vec<PathBuf>, current: &Path) {
         let imp = self.imp();
+        // A PDF is not in the image listing, and must not be mistaken for an
+        // image that has vanished from the folder.
+        if imp.showing_pdf.get() {
+            return;
+        }
         // Ignore a listing for a file we have since navigated away from.
         if imp.current.borrow().as_deref() != Some(current) {
             return;
@@ -1481,7 +1614,7 @@ impl Window {
     fn update_navigation(&self) {
         let imp = self.imp();
         let busy = imp.edit_button.is_active();
-        let enabled = imp.playlist.borrow().is_some() && !busy;
+        let enabled = imp.playlist.borrow().is_some() && !busy && !imp.showing_pdf.get();
         for name in ["next-image", "previous-image"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(enabled);
@@ -1552,19 +1685,42 @@ impl Window {
         // Let go of the last picture: nothing on screen needs it now.
         imp.view.canvas().set_texture(None);
 
+        // Read on its own: no neighbours, no filmstrip, no watching the folder.
+        imp.monitor.replace(None);
+        imp.playlist.replace(None);
+        imp.strip.clear();
+
         let pages = opened.pages.len();
         let subtitle = format!("PDF · {pages} {}", if pages == 1 { "page" } else { "pages" });
         imp.title.set_subtitle(&subtitle);
         imp.shown.replace(Some(Shown { name, subtitle }));
+        imp.page_total.set_text(&format!("of {pages}"));
         imp.showing_pdf.set(true);
         imp.pdf_view.show(opened);
         imp.content.set_visible_child_name("pdf");
 
-        imp.rotate_button.set_sensitive(false);
-        imp.copy_button.set_sensitive(false);
+        imp.rotate_button.set_sensitive(true);
         imp.edit_button.set_sensitive(false);
-        imp.delete_button.set_sensitive(true);
-        imp.action_bar.set_visible(true);
+        self.show_chrome(true);
+    }
+
+    /// The header and bars for the kind of document on screen. Images keep
+    /// the layout they always had; a PDF drops what only makes sense for a
+    /// picture and gains its pages.
+    fn show_chrome(&self, pdf: bool) {
+        let imp = self.imp();
+        imp.action_bar.set_visible(!pdf);
+        imp.copy_button.set_visible(!pdf);
+        imp.sidebar_button.set_visible(pdf);
+        imp.page_box.set_visible(pdf);
+        imp.menu_button.set_menu_model(Some(if pdf { &imp.pdf_menu } else { &imp.image_menu }));
+        if let Some(action) = self.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
+            action.set_enabled(pdf);
+            if !pdf {
+                action.change_state(&false.to_variant());
+            }
+        }
+        self.update_navigation();
         self.refresh_accels();
     }
 
@@ -1573,19 +1729,43 @@ impl Window {
         let imp = self.imp();
         if imp.showing_pdf.replace(false) {
             imp.pdf_view.clear();
-            self.refresh_accels();
+            imp.pdf_status.set(None);
+            self.show_chrome(false);
         }
         imp.content.set_visible_child_name("image");
     }
 
     fn show_pdf_status(&self, status: pdf::Status) {
         let imp = self.imp();
-        if imp.showing_pdf.get() {
-            imp.title.set_subtitle(&format!(
-                "PDF · page {} of {} · {:.0}%",
-                status.page, status.pages, status.percent
-            ));
+        if !imp.showing_pdf.get() {
+            return;
         }
+        imp.pdf_status.set(Some(status));
+        let noun = if status.pages == 1 { "page" } else { "pages" };
+        imp.title.set_subtitle(&format!("PDF · {} {noun} · {:.0}%", status.pages, status.percent));
+        // Not while someone is typing a number into it.
+        if !imp.page_entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
+            self.show_page_number();
+        }
+    }
+
+    /// Put the page being read into the page box.
+    fn show_page_number(&self) {
+        let imp = self.imp();
+        if let Some(status) = imp.pdf_status.get() {
+            imp.page_entry.set_text(&status.page.to_string());
+        }
+    }
+
+    /// Go to the page typed into the header, then hand the keys back to the
+    /// document so Page Down and friends work again straight away.
+    fn go_to_typed_page(&self) {
+        let imp = self.imp();
+        if let (Some(status), Ok(page)) = (imp.pdf_status.get(), imp.page_entry.text().trim().parse::<usize>()) {
+            imp.pdf_view.go_to_page(page.clamp(1, status.pages) - 1);
+        }
+        gtk::prelude::GtkWindowExt::set_focus(self, None::<&gtk::Widget>);
+        self.show_page_number();
     }
 
     /// A window claims its shortcuts before the focused widget sees the key,

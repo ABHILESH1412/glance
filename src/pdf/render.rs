@@ -12,12 +12,14 @@
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use super::document::{self, Pixels};
+use super::layout::Rotation;
 
-/// A page to draw, and at how many device pixels per point.
+/// A page to draw, at how many device pixels per point, turned how far.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Job {
     pub page: usize,
     pub scale: f64,
+    pub rotation: Rotation,
 }
 
 pub struct Rendered {
@@ -25,6 +27,8 @@ pub struct Rendered {
     /// The scale that was asked for. The pixels may be at a lower one, if the
     /// request was over the size limit; the view compares against this.
     pub requested: f64,
+    /// Drawn turned this far; stale once the view has been turned again.
+    pub rotation: Rotation,
     pub pixels: Pixels,
 }
 
@@ -86,10 +90,11 @@ fn run(uri: &str, shared: &Shared, results: &async_channel::Sender<Rendered>) {
         return; // The window already reported why when it opened the file.
     };
     while let Some(job) = next(shared) {
-        let Some(pixels) = document::render_page(&document, job.page, job.scale) else {
+        let Some(pixels) = document::render_page(&document, job.page, job.scale, job.rotation) else {
             continue;
         };
-        if results.send_blocking(Rendered { page: job.page, requested: job.scale, pixels }).is_err() {
+        let rendered = Rendered { page: job.page, requested: job.scale, rotation: job.rotation, pixels };
+        if results.send_blocking(rendered).is_err() {
             return; // Nobody is listening any more.
         }
     }
@@ -113,13 +118,17 @@ fn next(shared: &Shared) -> Option<Job> {
 mod tests {
     use super::*;
 
+    fn job(page: usize) -> Job {
+        Job { page, scale: 1.0, rotation: Rotation::default() }
+    }
+
     #[test]
     fn new_wishes_replace_old_ones_instead_of_queueing_behind_them() {
         let shared = Shared::default();
-        shared.lock().jobs = vec![Job { page: 1, scale: 1.0 }, Job { page: 2, scale: 1.0 }];
+        shared.lock().jobs = vec![job(1), job(2)];
         // The view has scrolled on: only page 9 matters now.
-        shared.lock().jobs = vec![Job { page: 9, scale: 1.0 }];
-        assert_eq!(next(&shared), Some(Job { page: 9, scale: 1.0 }));
+        shared.lock().jobs = vec![job(9)];
+        assert_eq!(next(&shared), Some(job(9)));
     }
 
     #[test]
@@ -127,7 +136,7 @@ mod tests {
         let shared = Shared::default();
         {
             let mut queue = shared.lock();
-            queue.jobs = vec![Job { page: 0, scale: 1.0 }];
+            queue.jobs = vec![job(0)];
             queue.quit = true;
         }
         assert_eq!(next(&shared), None);

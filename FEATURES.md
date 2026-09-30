@@ -12,10 +12,10 @@ Tick a box when a feature ships.
 | Area | Glance has | Partial |
 |---|---|---|
 | Images | 25 / 64 | 7 |
-| PDF | 1 / 28 | 2 |
+| PDF | 3 / 28 | 3 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **28 / 122** | **10** |
+| **Total** | **30 / 122** | **11** |
 
 ---
 
@@ -108,7 +108,7 @@ Tick a box when a feature ships.
 ## 6. PDF — viewing
 
 - [x] Open and render PDFs
-- [ ] Page thumbnails in a sidebar
+- [x] Page thumbnails in a sidebar
 - [ ] Contact sheet (grid of every page)
 - [ ] Table of contents / outline
 - [ ] Continuous scroll, single page, and two-page layouts — *partial:* continuous scroll
@@ -119,7 +119,7 @@ Tick a box when a feature ships.
 
 ## 7. PDF — text
 
-- [ ] Select and copy text
+- [x] Select and copy text
 - [ ] Highlight, underline and strike through text
 - [ ] Notes and speech bubbles
 
@@ -136,7 +136,7 @@ Tick a box when a feature ships.
 - [ ] Combine several PDFs into one
 - [ ] Add, delete and reorder pages
 - [ ] Insert a blank page, or pages from another file
-- [ ] Rotate pages
+- [ ] Rotate pages — *partial:* the view turns a quarter at a time; the file is not changed
 - [ ] Crop pages
 - [ ] Apply effects to a whole document (black and white, sepia, lighter/darker)
 

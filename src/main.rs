@@ -190,20 +190,29 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.line-up", idle: &[], typing: &[] },
     Accel { action: "win.page-first", idle: &[], typing: &[] },
     Accel { action: "win.page-last", idle: &[], typing: &[] },
+    Accel { action: "win.scroll-left", idle: &[], typing: &[] },
+    Accel { action: "win.scroll-right", idle: &[], typing: &[] },
+    Accel { action: "win.show-pages", idle: &["F9"], typing: &["F9"] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document
-/// go to the document rather than the folder. Left and right still change file,
-/// the same as for images, so one habit works everywhere.
+/// go to the document rather than the folder. A PDF is read on its own, so
+/// nothing moves to another file, and Delete does not remove the document
+/// being read. Left and Right scroll sideways: left without a job, GTK would
+/// use them to walk keyboard focus into the page box, after which Space and
+/// Backspace would type into it instead of turning pages.
 const PDF_KEYS: &[(&str, &[&str])] = &[
-    ("win.next-image", &["Right"]),
-    ("win.previous-image", &["Left"]),
+    ("win.next-image", &[]),
+    ("win.previous-image", &[]),
+    ("win.delete", &[]),
     ("win.page-down", &["Page_Down", "space"]),
     ("win.page-up", &["Page_Up", "BackSpace", "<Shift>space"]),
     ("win.line-down", &["Down"]),
     ("win.line-up", &["Up"]),
     ("win.page-first", &["Home"]),
     ("win.page-last", &["End"]),
+    ("win.scroll-left", &["Left"]),
+    ("win.scroll-right", &["Right"]),
 ];
 
 /// Swap the whole set over when focus moves into or out of a text box, or

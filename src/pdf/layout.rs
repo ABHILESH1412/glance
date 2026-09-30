@@ -20,6 +20,54 @@ pub const MAX_ZOOM: f64 = 8.0;
 /// HiDPI screen would otherwise be a few hundred megabytes for a single page.
 pub const MAX_PIXELS: f64 = 16_000_000.0;
 
+/// How far the pages are turned, in quarter turns clockwise. A way of looking,
+/// not a change to the file: nothing about it is ever written back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rotation(u8);
+
+impl Rotation {
+    /// Turned a further `quarters` quarter turns; negative turns the other way.
+    pub fn turned(self, quarters: i32) -> Self {
+        Rotation((i32::from(self.0) + quarters).rem_euclid(4) as u8)
+    }
+
+    /// Quarter turns clockwise, 0 to 3.
+    pub fn quarters(self) -> u8 {
+        self.0
+    }
+
+    pub fn radians(self) -> f64 {
+        f64::from(self.0) * std::f64::consts::FRAC_PI_2
+    }
+
+    /// A page's size once turned: a quarter turn swaps width and height.
+    pub fn size(self, width: f64, height: f64) -> (f64, f64) {
+        if self.0 % 2 == 1 { (height, width) } else { (width, height) }
+    }
+
+    /// Where a point on the page, of size `width` by `height` before turning,
+    /// ends up once the page is turned. Top-left origin, y down.
+    pub fn apply(self, x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
+        match self.0 {
+            1 => (height - y, x),
+            2 => (width - x, height - y),
+            3 => (y, width - x),
+            _ => (x, y),
+        }
+    }
+
+    /// The inverse of `apply`: from a point on the turned page back to the
+    /// page as the PDF describes it.
+    pub fn undo(self, x: f64, y: f64, width: f64, height: f64) -> (f64, f64) {
+        match self.0 {
+            1 => (y, height - x),
+            2 => (width - x, height - y),
+            3 => (width - y, x),
+            _ => (x, y),
+        }
+    }
+}
+
 /// Keep a scale inside the zoom limits.
 pub fn clamp_scale(scale: f64) -> f64 {
     scale.clamp(ACTUAL * MIN_ZOOM, ACTUAL * MAX_ZOOM)
@@ -202,6 +250,38 @@ mod tests {
         // The same spot on the page, after zooming in.
         let moved = large.position(page, fraction);
         assert!((moved - (large.top(1) + 842.0)).abs() < 1e-9, "{moved}");
+    }
+
+    #[test]
+    fn four_quarter_turns_come_back_round() {
+        let r = Rotation::default();
+        assert_eq!(r.turned(4), r);
+        assert_eq!(r.turned(-1), r.turned(3));
+        assert_eq!(r.turned(1).size(595.0, 842.0), (842.0, 595.0));
+        assert_eq!(r.turned(2).size(595.0, 842.0), (595.0, 842.0));
+    }
+
+    #[test]
+    fn turning_a_point_and_back_gets_the_same_point() {
+        let (w, h) = (595.0, 842.0);
+        for quarters in 0..4 {
+            let r = Rotation::default().turned(quarters);
+            let (rw, rh) = r.size(w, h);
+            for &(x, y) in &[(0.0, 0.0), (100.0, 700.0), (595.0, 842.0), (300.0, 20.0)] {
+                let (tx, ty) = r.apply(x, y, w, h);
+                assert!((0.0..=rw).contains(&tx) && (0.0..=rh).contains(&ty), "{quarters}: ({tx}, {ty}) off the page");
+                let (bx, by) = r.undo(tx, ty, w, h);
+                assert!((bx - x).abs() < 1e-9 && (by - y).abs() < 1e-9, "{quarters}: ({x}, {y}) came back as ({bx}, {by})");
+            }
+        }
+    }
+
+    #[test]
+    fn a_quarter_turn_is_clockwise() {
+        // The page's top-left corner ends up top-right, as a page turned
+        // clockwise on a desk would have it.
+        let r = Rotation::default().turned(1);
+        assert_eq!(r.apply(0.0, 0.0, 595.0, 842.0), (842.0, 0.0));
     }
 
     #[test]

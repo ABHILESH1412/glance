@@ -14,8 +14,7 @@ use std::path::{Path, PathBuf};
 use gtk::prelude::*;
 use gtk::{cairo, gio, glib};
 
-use super::layout;
-use crate::images::loader::LoadedImage;
+use super::layout::{self, Rotation};
 
 /// What the window needs to lay out a document before any page is drawn.
 pub struct Opened {
@@ -40,17 +39,10 @@ pub struct Pixels {
 pub fn is_pdf(path: &Path) -> bool {
     let mut head = [0u8; 1024];
     let Ok(mut file) = File::open(path) else {
-        return has_pdf_extension(path);
+        return false;
     };
     let n = file.read(&mut head).unwrap_or(0);
     head[..n].windows(5).any(|w| w == b"%PDF-")
-}
-
-/// The cheap check, for places that must not open every file in a folder.
-pub fn has_pdf_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
 }
 
 pub fn uri(path: &Path) -> String {
@@ -73,11 +65,18 @@ pub fn open(path: &Path) -> Result<Opened, String> {
     Ok(Opened { path: path.to_path_buf(), uri, pages })
 }
 
-/// Draw one page at `scale` device pixels per point, on white. The scale is
-/// lowered if it would make the page larger than `layout::MAX_PIXELS`.
-pub fn render_page(document: &poppler::Document, index: usize, scale: f64) -> Option<Pixels> {
+/// Draw one page at `scale` device pixels per point, turned by `rotation`, on
+/// white. The scale is lowered if it would make the page larger than
+/// `layout::MAX_PIXELS`.
+pub fn render_page(
+    document: &poppler::Document,
+    index: usize,
+    scale: f64,
+    rotation: Rotation,
+) -> Option<Pixels> {
     let page = document.page(i32::try_from(index).ok()?)?;
-    let (width_pt, height_pt) = page.size();
+    let (page_w, page_h) = page.size();
+    let (width_pt, height_pt) = rotation.size(page_w, page_h);
     let scale = layout::render_scale(width_pt, height_pt, scale);
     let width = (width_pt * scale).round().max(1.0) as i32;
     let height = (height_pt * scale).round().max(1.0) as i32;
@@ -91,6 +90,15 @@ pub fn render_page(document: &poppler::Document, index: usize, scale: f64) -> Op
         // Scale by the rounded size rather than `scale`, so the page fills the
         // surface exactly instead of leaving a sliver at one edge.
         cr.scale(f64::from(width) / width_pt, f64::from(height) / height_pt);
+        // Turn about the page's corner, then move it back into view: the same
+        // transform as `Rotation::apply`.
+        match rotation.quarters() {
+            1 => cr.translate(page_h, 0.0),
+            2 => cr.translate(page_w, page_h),
+            3 => cr.translate(0.0, page_w),
+            _ => {}
+        }
+        cr.rotate(rotation.radians());
         page.render(&cr);
     }
     surface.flush();
@@ -99,46 +107,98 @@ pub fn render_page(document: &poppler::Document, index: usize, scale: f64) -> Op
     Some(Pixels { width, height, stride, data })
 }
 
-/// The first page, shrunk to fit a filmstrip slot and centred in it. Returned
-/// in the same form as an image thumbnail so the strip needs no special case.
-pub fn thumbnail(path: &Path, width: u32, height: u32) -> Result<LoadedImage, String> {
-    let document = poppler::Document::from_file(&uri(path), None)
-        .map_err(|e| e.message().to_string())?;
-    let page = document.page(0).ok_or("no first page")?;
-    let (page_w, page_h) = page.size();
-    let scale = (f64::from(width) / page_w).min(f64::from(height) / page_h);
-    let pixels = render_page(&document, 0, scale).ok_or("the first page did not render")?;
-    Ok(LoadedImage {
-        width,
-        height,
-        rgba: letterbox(&pixels, width, height),
-        premultiplied: true,
-        label: "PDF".to_string(),
-        animation: Vec::new(),
-        vector: None,
-    })
+/// A point on a page, in the PDF's own terms: points, top-left origin, before
+/// any turning Glance has done for display.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spot {
+    pub page: usize,
+    pub x: f64,
+    pub y: f64,
 }
 
-/// Copy cairo pixels into the middle of a transparent RGBA canvas.
-fn letterbox(pixels: &Pixels, width: u32, height: u32) -> Vec<u8> {
-    let (width, height) = (width as usize, height as usize);
-    let mut rgba = vec![0u8; width * height * 4];
-    let (w, h) = (pixels.width as usize, pixels.height as usize);
-    let (w, h) = (w.min(width), h.min(height));
-    let (left, top) = ((width - w) / 2, (height - h) / 2);
-    for y in 0..h {
-        for x in 0..w {
-            let at = y * pixels.stride + x * 4;
-            // One native-endian 0xAARRGGBB word, whatever the byte order.
-            let argb = u32::from_ne_bytes(pixels.data[at..at + 4].try_into().unwrap());
-            let out = ((top + y) * width + left + x) * 4;
-            rgba[out] = (argb >> 16) as u8;
-            rgba[out + 1] = (argb >> 8) as u8;
-            rgba[out + 2] = argb as u8;
-            rgba[out + 3] = (argb >> 24) as u8;
+/// How much one press selects: a character at a time while dragging, a word
+/// for a double-click, a line for a triple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    Glyph,
+    Word,
+    Line,
+}
+
+impl Unit {
+    fn style(self) -> poppler::SelectionStyle {
+        match self {
+            Unit::Glyph => poppler::SelectionStyle::Glyph,
+            Unit::Word => poppler::SelectionStyle::Word,
+            Unit::Line => poppler::SelectionStyle::Line,
         }
     }
-    rgba
+}
+
+/// Put two spots in reading order: earlier page first, then higher on the
+/// page, then further left.
+pub fn ordered(a: Spot, b: Spot) -> (Spot, Spot) {
+    let key = |s: &Spot| (s.page, s.y, s.x);
+    if key(&b) < key(&a) { (b, a) } else { (a, b) }
+}
+
+/// What to ask Poppler for on each page a selection covers, as start and end
+/// points. The first page runs from where the drag began to its end, the last
+/// from its start to where the drag is now, and any between are taken whole.
+pub fn spans(from: Spot, to: Spot, sizes: &[(f64, f64)]) -> Vec<(usize, [f64; 4])> {
+    let (a, b) = ordered(from, to);
+    (a.page..=b.page.min(sizes.len().saturating_sub(1)))
+        .map(|page| {
+            let (w, h) = sizes[page];
+            let (x1, y1) = if page == a.page { (a.x, a.y) } else { (0.0, 0.0) };
+            let (x2, y2) = if page == b.page { (b.x, b.y) } else { (w, h) };
+            (page, [x1, y1, x2, y2])
+        })
+        .collect()
+}
+
+fn rectangle(span: [f64; 4]) -> poppler::Rectangle {
+    let mut r = poppler::Rectangle::new();
+    r.set_x1(span[0]);
+    r.set_y1(span[1]);
+    r.set_x2(span[2]);
+    r.set_y2(span[3]);
+    r
+}
+
+/// The areas to highlight for one page's part of a selection, as x, y, width
+/// and height in points. Poppler answers in whole units of whatever scale it
+/// is asked at, so it is asked at four times and divided back down: a quarter
+/// of a point is fine enough not to show at any zoom.
+pub fn highlights(document: &poppler::Document, page: usize, span: [f64; 4], unit: Unit) -> Vec<[f64; 4]> {
+    const FINE: f64 = 4.0;
+    let Some(page) = i32::try_from(page).ok().and_then(|i| document.page(i)) else {
+        return Vec::new();
+    };
+    let Some(region) = page.selected_region(FINE, unit.style(), &mut rectangle(span)) else {
+        return Vec::new();
+    };
+    (0..region.num_rectangles())
+        .map(|i| {
+            let r = region.rectangle(i);
+            [
+                f64::from(r.x()) / FINE,
+                f64::from(r.y()) / FINE,
+                f64::from(r.width()) / FINE,
+                f64::from(r.height()) / FINE,
+            ]
+        })
+        .collect()
+}
+
+/// The text of one page's part of a selection.
+pub fn selected_text(document: &poppler::Document, page: usize, span: [f64; 4], unit: Unit) -> String {
+    i32::try_from(page)
+        .ok()
+        .and_then(|i| document.page(i))
+        .and_then(|page| page.selected_text(unit.style(), &mut rectangle(span)))
+        .map(|text| text.to_string())
+        .unwrap_or_default()
 }
 
 /// A short message for the toast; the detail goes to stderr.
@@ -166,21 +226,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn letterboxing_centres_the_page_and_converts_the_channels() {
-        // A 2x1 page: one opaque red pixel, one opaque blue, in cairo's order.
-        let red = 0xFFFF_0000u32.to_ne_bytes();
-        let blue = 0xFF00_00FFu32.to_ne_bytes();
-        let pixels = Pixels { width: 2, height: 1, stride: 8, data: [red, blue].concat() };
-        let rgba = letterbox(&pixels, 4, 3);
-        let at = |x: usize, y: usize| &rgba[(y * 4 + x) * 4..(y * 4 + x) * 4 + 4];
-        assert_eq!(at(1, 1), [255, 0, 0, 255]);
-        assert_eq!(at(2, 1), [0, 0, 255, 255]);
-        // Everything around it stays transparent.
-        assert_eq!(at(0, 0), [0, 0, 0, 0]);
-        assert_eq!(at(3, 2), [0, 0, 0, 0]);
-    }
-
-    #[test]
     fn the_header_is_found_anywhere_in_the_first_kilobyte() {
         let dir = std::env::temp_dir().join(format!("glance-pdf-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -190,7 +235,42 @@ mod tests {
         std::fs::write(&png, b"\x89PNG\r\n\x1a\n not a pdf at all").unwrap();
         assert!(is_pdf(&late), "a header after leading junk still counts");
         assert!(!is_pdf(&png), "the extension alone does not make a PDF");
-        assert!(has_pdf_extension(&png));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    const A4: (f64, f64) = (595.0, 842.0);
+
+    fn spot(page: usize, x: f64, y: f64) -> Spot {
+        Spot { page, x, y }
+    }
+
+    #[test]
+    fn a_selection_on_one_page_is_just_its_two_ends() {
+        let got = spans(spot(0, 10.0, 20.0), spot(0, 300.0, 40.0), &[A4, A4]);
+        assert_eq!(got, vec![(0, [10.0, 20.0, 300.0, 40.0])]);
+    }
+
+    #[test]
+    fn dragging_backwards_selects_the_same_text_as_dragging_forwards() {
+        let pages = [A4, A4, A4];
+        let forward = spans(spot(0, 50.0, 100.0), spot(2, 80.0, 200.0), &pages);
+        let backward = spans(spot(2, 80.0, 200.0), spot(0, 50.0, 100.0), &pages);
+        assert_eq!(forward, backward);
+        // Up a line on the same page, right to left, is still start to end.
+        let up = spans(spot(0, 400.0, 300.0), spot(0, 60.0, 280.0), &pages);
+        assert_eq!(up, vec![(0, [60.0, 280.0, 400.0, 300.0])]);
+    }
+
+    #[test]
+    fn a_selection_across_pages_takes_the_middle_ones_whole() {
+        let got = spans(spot(0, 50.0, 700.0), spot(2, 80.0, 90.0), &[A4, A4, A4]);
+        assert_eq!(
+            got,
+            vec![
+                (0, [50.0, 700.0, 595.0, 842.0]),
+                (1, [0.0, 0.0, 595.0, 842.0]),
+                (2, [0.0, 0.0, 80.0, 90.0]),
+            ]
+        );
     }
 }

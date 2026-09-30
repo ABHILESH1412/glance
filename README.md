@@ -55,10 +55,19 @@ and the folder is watched so files added elsewhere show up.
 
 **PDFs** — every page in one scrolling column, fitted to the window's width. Only the
 pages near the screen are drawn and held in memory, so a long document costs about what
-a short one does. Zooming redraws the pages sharp once it stops moving. Page Up, Page
-Down, Space, Home and End move through the document; the wheel scrolls and Ctrl + wheel
-or a pinch zooms. Left and right still move between files, as they do for images.
-Password-protected PDFs are not supported yet.
+a short one does. Zooming redraws the pages sharp once it stops moving.
+
+- A **sidebar of page thumbnails** (F9, or the button at the top left), drawn only once
+  it is opened. Click one to go there; it follows along as you scroll
+- A **page number box** in the header: type a number and press Enter to go there
+- **Select text** by dragging, a word with a double-click, a line with a triple-click,
+  across pages if you like, and copy it with Ctrl+C
+- **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
+- The wheel scrolls; Ctrl + wheel or a pinch zooms
+
+A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
+arrow keys do not step to the next file. PDFs do not appear in an image folder's
+filmstrip either. Password-protected PDFs are not supported yet.
 
 **Editing** — one panel, one section at a time:
 
@@ -319,12 +328,14 @@ file, and four CC0 camera raws covering different decode paths.
 | `Ctrl+T` `Ctrl+R` | Rotate and flip / Resize |
 | `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit |
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |
-| `Ctrl+C` | Copy the image to the clipboard |
+| `Ctrl+C` | Copy the image, or a PDF's selected text |
 | `F11` | Fullscreen |
 | `Delete` | Delete the current image |
 | `Esc` | Leave fullscreen, close the panel, or cancel editing |
 | `Page Up` `Page Down` `Space` | In a PDF: back / forward a screen |
 | `Home` `End` | In a PDF: first / last page |
+| `←` `→` | In a PDF: scroll sideways when zoomed in |
+| `F9` | In a PDF: show or hide the page sidebar |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

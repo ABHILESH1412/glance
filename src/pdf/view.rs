@@ -10,17 +10,23 @@
 //! Zooming resizes the pages at once, stretching whatever was already drawn,
 //! and draws them sharp again once the zoom has stopped moving. Drawing every
 //! step of a pinch would mean drawing pages nobody sees.
+//!
+//! Text is selected by dragging across it: a double-click takes a word, a
+//! triple-click a line. The highlight is drawn over the page rather than into
+//! it, so selecting never waits for a page to be redrawn.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
-use super::document::{Opened, Pixels};
-use super::layout::{self, Layout};
+use super::document::{self, Opened, Pixels, Spot, Unit};
+use super::layout::{self, Layout, Rotation};
+use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
+use super::sidebar::Sidebar;
 
 /// Pages drawn ahead of the ones on screen, in each direction.
 const PREFETCH: usize = 1;
@@ -29,6 +35,10 @@ const PREFETCH: usize = 1;
 const KEEP: usize = 3;
 /// How long a zoom has to stay still before pages are redrawn at the new size.
 const SETTLE: Duration = Duration::from_millis(120);
+/// Which page counts as the one being read: the one crossing this line, a
+/// quarter of the way down the window. A page moved to the top of the window
+/// is then the current page, as soon as it gets there.
+const READING_LINE: f64 = 0.25;
 
 /// What the header shows: where you are, and at what size.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +48,14 @@ pub struct Status {
     pub percent: f64,
 }
 
+/// A selection: where the drag started, where it is now, and by what unit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Selection {
+    anchor: Spot,
+    head: Spot,
+    unit: Unit,
+}
+
 pub struct PdfView {
     inner: Rc<Inner>,
 }
@@ -45,27 +63,42 @@ pub struct PdfView {
 struct Inner {
     root: gtk::ScrolledWindow,
     column: gtk::Box,
-    /// Page sizes in points.
+    sidebar: Sidebar,
+    /// Page sizes in points, as the PDF gives them, before any turning.
     pages: RefCell<Vec<(f64, f64)>>,
-    widgets: RefCell<Vec<page::Page>>,
+    widgets: RefCell<Vec<Page>>,
     /// The device scale each page was last drawn at, or 0.0 for not drawn.
     rendered: RefCell<Vec<f64>>,
     layout: RefCell<Layout>,
+    rotation: Cell<Rotation>,
     /// Logical pixels per point.
     scale: Cell<f64>,
     /// Following the window's width, until the user zooms by hand.
     fit: Cell<bool>,
     /// A refit to a new window width is waiting for GTK to finish laying out.
     refit_queued: Cell<bool>,
+    uri: RefCell<Option<String>>,
     renderer: RefCell<Option<Renderer>>,
+    /// The document again, on this thread, for selecting text. Opened the
+    /// first time anything is selected, not before.
+    reader: RefCell<Option<poppler::Document>>,
     /// Bumped for every document, so pages drawn for the last one are ignored.
     document: Cell<u64>,
     settle: RefCell<Option<glib::SourceId>>,
     /// Where a zoom wants the view to end up, per axis, until GTK has laid out
     /// the new sizes and the position can actually be reached.
     pending: Cell<(Option<f64>, Option<f64>)>,
+    /// A page asked for by number, and the scroll position it was shown at.
+    /// Until the view moves, that page is the one reported, even when it is
+    /// too near the end to reach the top of the window.
+    jumped: Cell<Option<(usize, f64)>>,
     pointer: Cell<Option<(f64, f64)>>,
     pinch_from: Cell<f64>,
+    selection: Cell<Option<Selection>>,
+    /// Pages currently showing a highlight, so they can be cleared.
+    highlighted: RefCell<Vec<usize>>,
+    /// Consecutive presses in the same spot, for double and triple clicks.
+    presses: Cell<(u32, Option<(Instant, f64, f64)>)>,
     status: RefCell<Option<Box<dyn Fn(Status)>>>,
     last_status: Cell<Option<Status>>,
 }
@@ -86,19 +119,27 @@ impl PdfView {
         let inner = Rc::new(Inner {
             root,
             column,
+            sidebar: Sidebar::new(),
             pages: RefCell::default(),
             widgets: RefCell::default(),
             rendered: RefCell::default(),
             layout: RefCell::default(),
+            rotation: Cell::new(Rotation::default()),
             scale: Cell::new(layout::ACTUAL),
             fit: Cell::new(true),
             refit_queued: Cell::new(false),
+            uri: RefCell::default(),
             renderer: RefCell::default(),
+            reader: RefCell::default(),
             document: Cell::new(0),
             settle: RefCell::default(),
             pending: Cell::new((None, None)),
+            jumped: Cell::new(None),
             pointer: Cell::new(None),
             pinch_from: Cell::new(layout::ACTUAL),
+            selection: Cell::new(None),
+            highlighted: RefCell::default(),
+            presses: Cell::new((0, None)),
             status: RefCell::default(),
             last_status: Cell::new(None),
         });
@@ -110,6 +151,16 @@ impl PdfView {
         &self.inner.root
     }
 
+    /// The page thumbnails, for the window to put beside the reader.
+    pub fn sidebar(&self) -> &gtk::ScrolledWindow {
+        self.inner.sidebar.widget()
+    }
+
+    /// The sidebar is on screen, or not. It draws nothing while hidden.
+    pub fn set_sidebar_active(&self, active: bool) {
+        self.inner.sidebar.set_active(active);
+    }
+
     /// Lay out a freshly opened document, fitted to the window's width, and
     /// start drawing the first pages.
     pub fn show(&self, opened: Opened) {
@@ -118,21 +169,24 @@ impl PdfView {
         let id = inner.document.get();
 
         let count = opened.pages.len();
-        let widgets: Vec<page::Page> = (0..count)
+        let widgets: Vec<Page> = (0..count)
             .map(|_| {
-                let widget = page::Page::new();
+                let widget = Page::new();
+                widget.set_cursor_from_name(Some("text"));
                 inner.column.append(&widget);
                 widget
             })
             .collect();
+        inner.sidebar.show_document(opened.uri.clone(), opened.pages.clone());
         *inner.pages.borrow_mut() = opened.pages;
         *inner.widgets.borrow_mut() = widgets;
         *inner.rendered.borrow_mut() = vec![0.0; count];
+        inner.uri.replace(Some(opened.uri.clone()));
 
         inner.fit.set(true);
         let width = inner.root.hadjustment().page_size();
         let scale = if width > 0.0 {
-            layout::fit_width(&inner.pages.borrow(), width)
+            layout::fit_width(&inner.turned_pages(), width)
         } else {
             // Not on screen yet; fitted properly once it has a width.
             layout::ACTUAL
@@ -177,7 +231,7 @@ impl PdfView {
         let inner = &self.inner;
         inner.fit.set(true);
         let width = inner.root.hadjustment().page_size();
-        inner.set_scale(layout::fit_width(&inner.pages.borrow(), width), inner.centre());
+        inner.set_scale(layout::fit_width(&inner.turned_pages(), width), inner.centre());
     }
 
     /// Life size: a centimetre on the page is a centimetre on the screen.
@@ -198,6 +252,12 @@ impl PdfView {
         v.set_value(v.value() + direction * v.page_size() * 0.1);
     }
 
+    /// Sideways, for a page zoomed wider than the window.
+    pub fn scroll_across(&self, direction: f64) {
+        let h = self.inner.root.hadjustment();
+        h.set_value(h.value() + direction * h.page_size() * 0.1);
+    }
+
     pub fn scroll_to_start(&self) {
         self.inner.root.vadjustment().set_value(0.0);
     }
@@ -205,6 +265,51 @@ impl PdfView {
     pub fn scroll_to_end(&self) {
         let v = self.inner.root.vadjustment();
         v.set_value(v.upper());
+    }
+
+    /// Bring a page to the top of the window. Counts from zero.
+    pub fn go_to_page(&self, index: usize) {
+        self.inner.go_to_page(index);
+    }
+
+    /// Turn every page a quarter turn per step, clockwise for positive steps.
+    /// Only how they are shown: the file is left as it is.
+    pub fn rotate_by(&self, quarters: i32) {
+        let inner = &self.inner;
+        if inner.pages.borrow().is_empty() {
+            return;
+        }
+        let current = inner.current_page();
+        let rotation = inner.rotation.get().turned(quarters);
+        inner.rotation.set(rotation);
+        // A selection is made of positions on the page; turning moves them.
+        inner.set_selection(None);
+        // Everything drawn so far is the wrong way round now.
+        for (widget, rendered) in inner.widgets.borrow().iter().zip(inner.rendered.borrow_mut().iter_mut()) {
+            widget.set_texture(None);
+            *rendered = 0.0;
+        }
+        let scale = if inner.fit.get() {
+            layout::fit_width(&inner.turned_pages(), inner.root.hadjustment().page_size())
+        } else {
+            inner.scale.get()
+        };
+        inner.apply_scale(scale);
+        let top = inner.layout.borrow().top(current) - layout::SPACING / 2.0;
+        inner.scroll_to(None, Some(top.max(0.0)));
+        inner.settle_then_render();
+        inner.sidebar.set_rotation(rotation);
+        inner.emit_status();
+    }
+
+    /// Copy the selected text to the clipboard. False if nothing is selected.
+    pub fn copy_selection(&self) -> bool {
+        let inner = &self.inner;
+        let Some(text) = inner.selected_text().filter(|text| !text.trim().is_empty()) else {
+            return false;
+        };
+        inner.root.clipboard().set_text(&text);
+        true
     }
 }
 
@@ -214,8 +319,12 @@ impl Inner {
         let h = this.root.hadjustment();
 
         let weak = Rc::downgrade(this);
-        v.connect_value_changed(move |_| {
+        v.connect_value_changed(move |v| {
             if let Some(inner) = weak.upgrade() {
+                // Scrolled away from a page that was asked for by number.
+                if inner.jumped.get().is_some_and(|(_, at)| (v.value() - at).abs() > 0.5) {
+                    inner.jumped.set(None);
+                }
                 // While a zoom settles, pages are resized but not redrawn.
                 let settled = inner.settle.borrow().is_none();
                 inner.refresh(settled);
@@ -249,11 +358,18 @@ impl Inner {
                 inner.refit_queued.set(false);
                 if inner.fit.get() && !inner.pages.borrow().is_empty() {
                     let width = inner.root.hadjustment().page_size();
-                    let scale = layout::fit_width(&inner.pages.borrow(), width);
+                    let scale = layout::fit_width(&inner.turned_pages(), width);
                     // Keep whatever is at the top of the window at the top.
                     inner.set_scale(scale, (0.0, 0.0));
                 }
             });
+        });
+
+        let weak = Rc::downgrade(this);
+        this.sidebar.connect_pick(move |index| {
+            if let Some(inner) = weak.upgrade() {
+                inner.go_to_page(index);
+            }
         });
 
         let motion = gtk::EventControllerMotion::new();
@@ -312,6 +428,46 @@ impl Inner {
             inner.set_scale(inner.pinch_from.get() * delta, anchor);
         });
         this.root.add_controller(pinch);
+
+        // Selecting text. Positions are in the column's own coordinates.
+        let drag = gtk::GestureDrag::new();
+        drag.set_button(gdk::BUTTON_PRIMARY);
+        let weak = Rc::downgrade(this);
+        drag.connect_drag_begin(move |_, x, y| {
+            let Some(inner) = weak.upgrade() else { return };
+            let Some(spot) = inner.hit(x, y) else { return };
+            let unit = inner.count_press(x, y);
+            inner.set_selection(Some(Selection { anchor: spot, head: spot, unit }));
+        });
+        let weak = Rc::downgrade(this);
+        drag.connect_drag_update(move |gesture, dx, dy| {
+            let Some(inner) = weak.upgrade() else { return };
+            let (Some((x, y)), Some(selection)) = (gesture.start_point(), inner.selection.get()) else {
+                return;
+            };
+            if let Some(head) = inner.hit(x + dx, y + dy) {
+                if head != selection.head {
+                    inner.set_selection(Some(Selection { head, ..selection }));
+                }
+            }
+        });
+        let weak = Rc::downgrade(this);
+        drag.connect_drag_end(move |_, _, _| {
+            let Some(inner) = weak.upgrade() else { return };
+            // A plain click with no drag selects nothing: it clears.
+            if let Some(selection) = inner.selection.get() {
+                if selection.unit == Unit::Glyph && selection.anchor == selection.head {
+                    inner.set_selection(None);
+                }
+            }
+        });
+        this.column.add_controller(drag);
+    }
+
+    /// Page sizes as they are shown: turned, if the view has been turned.
+    fn turned_pages(&self) -> Vec<(f64, f64)> {
+        let rotation = self.rotation.get();
+        self.pages.borrow().iter().map(|&(w, h)| rotation.size(w, h)).collect()
     }
 
     fn centre(&self) -> (f64, f64) {
@@ -355,12 +511,32 @@ impl Inner {
 
     fn apply_scale(&self, scale: f64) {
         self.scale.set(scale);
-        let layout = Layout::new(&self.pages.borrow(), scale);
+        let layout = Layout::new(&self.turned_pages(), scale);
         for (i, widget) in self.widgets.borrow().iter().enumerate() {
             let (w, h) = layout.size(i);
             widget.set_page_size(w as i32, h as i32);
         }
         *self.layout.borrow_mut() = layout;
+    }
+
+    fn go_to_page(&self, index: usize) {
+        let top = {
+            let layout = self.layout.borrow();
+            if index >= layout.len() {
+                return;
+            }
+            (layout.top(index) - layout::SPACING / 2.0).max(0.0)
+        };
+        let v = self.root.vadjustment();
+        v.set_value(top);
+        self.jumped.set(Some((index, v.value())));
+        self.emit_status();
+    }
+
+    /// The page being read: the one crossing the reading line.
+    fn current_page(&self) -> usize {
+        let v = self.root.vadjustment();
+        self.layout.borrow().page_at(v.value() + v.page_size() * READING_LINE)
     }
 
     /// Scroll now as far as the current layout allows, and again once GTK has
@@ -438,18 +614,18 @@ impl Inner {
         order.extend((last + 1)..=ahead);
         order.extend((first.saturating_sub(PREFETCH)..first).rev());
 
-        let target = self.device_scale();
+        let (target, rotation) = (self.device_scale(), self.rotation.get());
         let jobs = order
             .into_iter()
             .filter(|&page| rendered[page] != target)
-            .map(|page| Job { page, scale: target })
+            .map(|page| Job { page, scale: target, rotation })
             .collect();
         renderer.want(jobs);
     }
 
     fn on_rendered(&self, rendered: Rendered) {
-        // Drawn for a zoom that has since changed.
-        if rendered.requested != self.device_scale() {
+        // Drawn for a zoom or a turn that has since changed.
+        if rendered.requested != self.device_scale() || rendered.rotation != self.rotation.get() {
             return;
         }
         let v = self.root.vadjustment();
@@ -471,27 +647,144 @@ impl Inner {
             return;
         }
         let v = self.root.vadjustment();
-        let page = if v.value() <= 0.5 {
+        let page = if let Some((page, _)) = self.jumped.get() {
+            page + 1
+        } else if v.value() <= 0.5 {
             1
         } else if v.value() + v.page_size() >= v.upper() - 0.5 {
             pages // Scrolled to the end: the last page, even if it is short.
         } else {
-            self.layout.borrow().page_at(v.value() + v.page_size() / 2.0) + 1
+            self.current_page() + 1
         };
         let status = Status { page, pages, percent: self.scale.get() / layout::ACTUAL * 100.0 };
         if self.last_status.replace(Some(status)) != Some(status) {
+            self.sidebar.set_current(page - 1);
             if let Some(callback) = self.status.borrow().as_ref() {
                 callback(status);
             }
         }
     }
 
+    /// Where a point in the column falls, in the PDF's own page coordinates.
+    /// A point between pages belongs to the end of the page above it.
+    fn hit(&self, x: f64, y: f64) -> Option<Spot> {
+        let page = {
+            let layout = self.layout.borrow();
+            if layout.len() == 0 {
+                return None;
+            }
+            // The column's own coordinates start below its top margin.
+            layout.page_at(y + layout::MARGIN)
+        };
+        let widgets = self.widgets.borrow();
+        let bounds = widgets.get(page)?.compute_bounds(&self.column)?;
+        let (w, h) = (f64::from(bounds.width()), f64::from(bounds.height()));
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let local_x = (x - f64::from(bounds.x())).clamp(0.0, w);
+        let local_y = (y - f64::from(bounds.y())).clamp(0.0, h);
+        let (page_w, page_h) = self.pages.borrow()[page];
+        let rotation = self.rotation.get();
+        let (turned_w, turned_h) = rotation.size(page_w, page_h);
+        let (px, py) = rotation.undo(local_x / w * turned_w, local_y / h * turned_h, page_w, page_h);
+        Some(Spot { page, x: px, y: py })
+    }
+
+    /// Count presses landing close together in time and place, the way the
+    /// desktop's own double-click settings say to.
+    fn count_press(&self, x: f64, y: f64) -> Unit {
+        let settings = gtk::Settings::default();
+        let time = settings.as_ref().map_or(400, |s| s.gtk_double_click_time());
+        let distance = settings.as_ref().map_or(5, |s| s.gtk_double_click_distance());
+        let now = Instant::now();
+        let (count, last) = self.presses.get();
+        let count = match last {
+            Some((at, lx, ly))
+                if now.duration_since(at) <= Duration::from_millis(u64::try_from(time).unwrap_or(400))
+                    && (x - lx).hypot(y - ly) <= f64::from(distance) =>
+            {
+                count + 1
+            }
+            _ => 1,
+        };
+        self.presses.set((count, Some((now, x, y))));
+        match count {
+            1 => Unit::Glyph,
+            2 => Unit::Word,
+            _ => Unit::Line,
+        }
+    }
+
+    /// The document on this thread, opened the first time it is needed.
+    fn reader(&self) -> Option<poppler::Document> {
+        if self.reader.borrow().is_none() {
+            let uri = self.uri.borrow().clone()?;
+            self.reader.replace(poppler::Document::from_file(&uri, None).ok());
+        }
+        self.reader.borrow().clone()
+    }
+
+    fn set_selection(&self, selection: Option<Selection>) {
+        self.selection.set(selection);
+        let mut now = Vec::new();
+        if let (Some(selection), Some(reader)) = (selection, selection.and_then(|_| self.reader())) {
+            let pages = self.pages.borrow();
+            let widgets = self.widgets.borrow();
+            let rotation = self.rotation.get();
+            for (page, span) in document::spans(selection.anchor, selection.head, &pages) {
+                let (w, h) = pages[page];
+                let (turned_w, turned_h) = rotation.size(w, h);
+                // Turn both corners of each area, then take the box around
+                // them, as fractions of the page as it is shown.
+                let areas = document::highlights(&reader, page, span, selection.unit)
+                    .into_iter()
+                    .map(|[x, y, aw, ah]| {
+                        let (x1, y1) = rotation.apply(x, y, w, h);
+                        let (x2, y2) = rotation.apply(x + aw, y + ah, w, h);
+                        [
+                            x1.min(x2) / turned_w,
+                            y1.min(y2) / turned_h,
+                            (x1 - x2).abs() / turned_w,
+                            (y1 - y2).abs() / turned_h,
+                        ]
+                    })
+                    .collect();
+                widgets[page].set_highlights(areas);
+                now.push(page);
+            }
+        }
+        let widgets = self.widgets.borrow();
+        for page in self.highlighted.replace(now.clone()) {
+            if !now.contains(&page) {
+                if let Some(widget) = widgets.get(page) {
+                    widget.set_highlights(Vec::new());
+                }
+            }
+        }
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let selection = self.selection.get()?;
+        let reader = self.reader()?;
+        let pages = self.pages.borrow();
+        let parts: Vec<String> = document::spans(selection.anchor, selection.head, &pages)
+            .into_iter()
+            .map(|(page, span)| document::selected_text(&reader, page, span, selection.unit))
+            .filter(|text| !text.is_empty())
+            .collect();
+        Some(parts.join("\n"))
+    }
+
     fn clear(&self) {
         self.renderer.replace(None);
+        self.reader.replace(None);
         if let Some(source) = self.settle.take() {
             source.remove();
         }
         self.document.set(self.document.get() + 1);
+        self.selection.set(None);
+        self.highlighted.borrow_mut().clear();
         // Taken out first, so nothing is borrowed while GTK removes them.
         let widgets = std::mem::take(&mut *self.widgets.borrow_mut());
         for widget in widgets {
@@ -500,12 +793,16 @@ impl Inner {
         self.pages.borrow_mut().clear();
         self.rendered.borrow_mut().clear();
         *self.layout.borrow_mut() = Layout::default();
+        self.rotation.set(Rotation::default());
+        self.uri.replace(None);
         self.pending.set((None, None));
+        self.jumped.set(None);
         self.last_status.set(None);
+        self.sidebar.clear();
     }
 }
 
-fn texture(pixels: Pixels) -> gdk::Texture {
+pub(super) fn texture(pixels: Pixels) -> gdk::Texture {
     // Cairo's ARGB32 is one native-endian word per pixel.
     #[cfg(target_endian = "little")]
     let format = gdk::MemoryFormat::B8g8r8a8Premultiplied;
@@ -513,88 +810,4 @@ fn texture(pixels: Pixels) -> gdk::Texture {
     let format = gdk::MemoryFormat::A8r8g8b8Premultiplied;
     let bytes = glib::Bytes::from_owned(pixels.data);
     gdk::MemoryTexture::new(pixels.width, pixels.height, format, &bytes, pixels.stride).upcast()
-}
-
-/// One page: exactly the size it is told to be, whatever it is showing, with
-/// the drawn page stretched to fill it.
-///
-/// A `gtk::Picture` would size itself from its texture, and a texture drawn
-/// for a HiDPI screen is twice the size it should appear.
-mod page {
-    use std::cell::{Cell, RefCell};
-
-    use gtk::prelude::*;
-    use gtk::subclass::prelude::*;
-    use gtk::{gdk, glib, graphene, gsk};
-
-    mod imp {
-        use super::*;
-
-        #[derive(Default)]
-        pub struct Page {
-            pub size: Cell<(i32, i32)>,
-            pub texture: RefCell<Option<gdk::Texture>>,
-        }
-
-        #[glib::object_subclass]
-        impl ObjectSubclass for Page {
-            const NAME: &'static str = "GlancePdfPage";
-            type Type = super::Page;
-            type ParentType = gtk::Widget;
-        }
-
-        impl ObjectImpl for Page {}
-
-        impl WidgetImpl for Page {
-            fn measure(&self, orientation: gtk::Orientation, _for_size: i32) -> (i32, i32, i32, i32) {
-                let (w, h) = self.size.get();
-                let size = if orientation == gtk::Orientation::Horizontal { w } else { h };
-                (size, size, -1, -1)
-            }
-
-            fn snapshot(&self, snapshot: &gtk::Snapshot) {
-                let widget = self.obj();
-                let bounds = graphene::Rect::new(0.0, 0.0, widget.width() as f32, widget.height() as f32);
-                // A soft edge, so a white page still reads as paper on a light window.
-                snapshot.append_outset_shadow(
-                    &gsk::RoundedRect::from_rect(bounds, 0.0),
-                    &gdk::RGBA::new(0.0, 0.0, 0.0, 0.3),
-                    0.0,
-                    1.0,
-                    0.0,
-                    4.0,
-                );
-                snapshot.append_color(&gdk::RGBA::WHITE, &bounds);
-                if let Some(texture) = self.texture.borrow().as_ref() {
-                    snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Linear, &bounds);
-                }
-            }
-        }
-    }
-
-    glib::wrapper! {
-        pub struct Page(ObjectSubclass<imp::Page>)
-            @extends gtk::Widget,
-            @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
-    }
-
-    impl Page {
-        pub fn new() -> Self {
-            // Centred, not stretched: a vertical box widens every child to its
-            // widest one, which would squash a portrait page to the width of a
-            // landscape page beside it.
-            glib::Object::builder().property("halign", gtk::Align::Center).build()
-        }
-
-        pub fn set_page_size(&self, width: i32, height: i32) {
-            if self.imp().size.replace((width, height)) != (width, height) {
-                self.queue_resize();
-            }
-        }
-
-        pub fn set_texture(&self, texture: Option<gdk::Texture>) {
-            self.imp().texture.replace(texture);
-            self.queue_draw();
-        }
-    }
 }
