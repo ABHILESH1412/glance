@@ -26,6 +26,7 @@ use super::document::{self, Opened, Pixels, Spot, Unit};
 use super::layout::{self, Layout, Rotation};
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
+use super::search::{Found, Match, Searcher};
 use super::sidebar::Sidebar;
 
 /// Pages drawn ahead of the ones on screen, in each direction.
@@ -46,6 +47,16 @@ pub struct Status {
     pub page: usize,
     pub pages: usize,
     pub percent: f64,
+}
+
+/// Where a search has got to, for the search bar's count.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SearchStatus {
+    /// The match being looked at, counting from one.
+    pub current: Option<usize>,
+    pub total: usize,
+    /// Every page has been searched. Until then the total can still grow.
+    pub done: bool,
 }
 
 /// A selection: where the drag started, where it is now, and by what unit.
@@ -101,6 +112,19 @@ struct Inner {
     presses: Cell<(u32, Option<(Instant, f64, f64)>)>,
     status: RefCell<Option<Box<dyn Fn(Status)>>>,
     last_status: Cell<Option<Status>>,
+    searcher: RefCell<Option<Searcher>>,
+    /// Every match found so far, in page order.
+    matches: RefCell<Vec<Match>>,
+    current_match: Cell<Option<usize>>,
+    search_done: Cell<bool>,
+    /// The page being read when the search began: the first match shown is
+    /// the first one from here on, not the first in the document.
+    search_from: Cell<usize>,
+    /// Bumped per search, so matches from a replaced one are ignored.
+    search_id: Cell<u64>,
+    /// Pages showing match marks, so they can be cleared.
+    marked: RefCell<Vec<usize>>,
+    search_status: RefCell<Option<Box<dyn Fn(SearchStatus)>>>,
 }
 
 impl PdfView {
@@ -142,6 +166,14 @@ impl PdfView {
             presses: Cell::new((0, None)),
             status: RefCell::default(),
             last_status: Cell::new(None),
+            searcher: RefCell::default(),
+            matches: RefCell::default(),
+            current_match: Cell::new(None),
+            search_done: Cell::new(true),
+            search_from: Cell::new(0),
+            search_id: Cell::new(0),
+            marked: RefCell::default(),
+            search_status: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -299,7 +331,29 @@ impl PdfView {
         inner.scroll_to(None, Some(top.max(0.0)));
         inner.settle_then_render();
         inner.sidebar.set_rotation(rotation);
+        // Matches are positions on the page; turning moves where they show.
+        inner.mark_all();
         inner.emit_status();
+    }
+
+    /// Search the document for `query`, replacing any search already running.
+    /// An empty query clears the marks.
+    pub fn search(&self, query: &str) {
+        self.inner.search(query);
+    }
+
+    /// Move to the next match, or the one before, wrapping round the ends.
+    pub fn search_step(&self, forward: bool) {
+        self.inner.search_step(forward);
+    }
+
+    /// Stop searching and take the marks off the pages.
+    pub fn clear_search(&self) {
+        self.inner.search("");
+    }
+
+    pub fn connect_search_status(&self, callback: impl Fn(SearchStatus) + 'static) {
+        self.inner.search_status.replace(Some(Box::new(callback)));
     }
 
     /// Copy the selected text to the clipboard. False if nothing is selected.
@@ -733,22 +787,9 @@ impl Inner {
             let widgets = self.widgets.borrow();
             let rotation = self.rotation.get();
             for (page, span) in document::spans(selection.anchor, selection.head, &pages) {
-                let (w, h) = pages[page];
-                let (turned_w, turned_h) = rotation.size(w, h);
-                // Turn both corners of each area, then take the box around
-                // them, as fractions of the page as it is shown.
                 let areas = document::highlights(&reader, page, span, selection.unit)
                     .into_iter()
-                    .map(|[x, y, aw, ah]| {
-                        let (x1, y1) = rotation.apply(x, y, w, h);
-                        let (x2, y2) = rotation.apply(x + aw, y + ah, w, h);
-                        [
-                            x1.min(x2) / turned_w,
-                            y1.min(y2) / turned_h,
-                            (x1 - x2).abs() / turned_w,
-                            (y1 - y2).abs() / turned_h,
-                        ]
-                    })
+                    .map(|area| shown(area, pages[page], rotation))
                     .collect();
                 widgets[page].set_highlights(areas);
                 now.push(page);
@@ -761,6 +802,162 @@ impl Inner {
                     widget.set_highlights(Vec::new());
                 }
             }
+        }
+    }
+
+    fn search(self: &Rc<Self>, query: &str) {
+        self.searcher.replace(None);
+        self.matches.borrow_mut().clear();
+        self.current_match.set(None);
+        let id = self.search_id.get() + 1;
+        self.search_id.set(id);
+        self.mark_all();
+
+        let query = query.trim();
+        let uri = self.uri.borrow().clone();
+        let (Some(uri), false) = (uri, query.is_empty()) else {
+            self.search_done.set(true);
+            self.emit_search_status();
+            return;
+        };
+        self.search_done.set(false);
+        self.search_from.set(self.current_page());
+        let (sender, receiver) = async_channel::bounded(16);
+        self.searcher.replace(Some(Searcher::start(uri, query.to_string(), sender)));
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            while let Ok(found) = receiver.recv().await {
+                let Some(inner) = weak.upgrade() else { break };
+                if inner.search_id.get() != id {
+                    break;
+                }
+                match found {
+                    Found::Page(matches) => inner.add_matches(matches),
+                    Found::Done => {
+                        inner.search_done.set(true);
+                        // Nothing from where the reader was to the end: wrap
+                        // round to the first match in the document.
+                        if inner.current_match.get().is_none() && !inner.matches.borrow().is_empty() {
+                            inner.current_match.set(Some(0));
+                            inner.mark_page(inner.matches.borrow()[0].page);
+                            inner.reveal_current();
+                        }
+                    }
+                }
+                inner.emit_search_status();
+            }
+        });
+        self.emit_search_status();
+    }
+
+    fn add_matches(&self, found: Vec<Match>) {
+        let Some(page) = found.first().map(|m| m.page) else { return };
+        let first_new = self.matches.borrow().len();
+        self.matches.borrow_mut().extend(found);
+        // The first match from where the reader was: show it straight away,
+        // without waiting for the rest of the document.
+        if self.current_match.get().is_none() && page >= self.search_from.get() {
+            self.current_match.set(Some(first_new));
+            self.mark_page(page);
+            self.reveal_current();
+        } else {
+            self.mark_page(page);
+        }
+    }
+
+    fn search_step(&self, forward: bool) {
+        let total = self.matches.borrow().len();
+        if total == 0 {
+            return;
+        }
+        let old = self.current_match.get();
+        let new = match old {
+            None if forward => 0,
+            None => total - 1,
+            Some(current) if forward => (current + 1) % total,
+            Some(current) => (current + total - 1) % total,
+        };
+        self.current_match.set(Some(new));
+        let page_of = |i: usize| self.matches.borrow()[i].page;
+        if let Some(old) = old {
+            self.mark_page(page_of(old));
+        }
+        self.mark_page(page_of(new));
+        self.reveal_current();
+        self.emit_search_status();
+    }
+
+    /// Mark one page's matches, the current one in its own colour.
+    fn mark_page(&self, page: usize) {
+        let pages = self.pages.borrow();
+        let Some(&size) = pages.get(page) else { return };
+        let rotation = self.rotation.get();
+        let current = self.current_match.get();
+        let (mut all, mut here) = (Vec::new(), Vec::new());
+        for (i, found) in self.matches.borrow().iter().enumerate().filter(|(_, m)| m.page == page) {
+            let areas = found.areas.iter().map(|&area| shown(area, size, rotation));
+            if Some(i) == current {
+                here.extend(areas);
+            } else {
+                all.extend(areas);
+            }
+        }
+        let marked = !all.is_empty() || !here.is_empty();
+        if let Some(widget) = self.widgets.borrow().get(page) {
+            widget.set_matches(all, here);
+        }
+        let mut list = self.marked.borrow_mut();
+        if marked && !list.contains(&page) {
+            list.push(page);
+        }
+    }
+
+    /// Redo every page's marks: after a turn, or to clear them all.
+    fn mark_all(&self) {
+        let mut pages: Vec<usize> = std::mem::take(&mut *self.marked.borrow_mut());
+        pages.extend(self.matches.borrow().iter().map(|m| m.page));
+        pages.sort_unstable();
+        pages.dedup();
+        for page in pages {
+            self.mark_page(page);
+        }
+    }
+
+    /// Scroll the current match into view, a third of the way down the
+    /// window, if it is not already on screen.
+    fn reveal_current(&self) {
+        let Some(current) = self.current_match.get() else { return };
+        let (page, area) = {
+            let matches = self.matches.borrow();
+            let Some(found) = matches.get(current) else { return };
+            let Some(&area) = found.areas.first() else { return };
+            (found.page, area)
+        };
+        let Some(&size) = self.pages.borrow().get(page) else { return };
+        let [fx, fy, fw, fh] = shown(area, size, self.rotation.get());
+        let widgets = self.widgets.borrow();
+        let Some(bounds) = widgets.get(page).and_then(|w| w.compute_bounds(&self.root)) else { return };
+        let (bw, bh) = (f64::from(bounds.width()), f64::from(bounds.height()));
+        // Where the match is now, in the window's own coordinates.
+        let (x, y) = (f64::from(bounds.x()) + fx * bw, f64::from(bounds.y()) + fy * bh);
+        let (w, h) = (fw * bw, fh * bh);
+        let (hadj, vadj) = (self.root.hadjustment(), self.root.vadjustment());
+        if y < 0.0 || y + h > vadj.page_size() {
+            vadj.set_value(vadj.value() + y - vadj.page_size() * 0.3);
+        }
+        if x < 0.0 || x + w > hadj.page_size() {
+            hadj.set_value(hadj.value() + x - hadj.page_size() * 0.3);
+        }
+    }
+
+    fn emit_search_status(&self) {
+        let status = SearchStatus {
+            current: self.current_match.get().map(|i| i + 1),
+            total: self.matches.borrow().len(),
+            done: self.search_done.get(),
+        };
+        if let Some(callback) = self.search_status.borrow().as_ref() {
+            callback(status);
         }
     }
 
@@ -798,8 +995,26 @@ impl Inner {
         self.pending.set((None, None));
         self.jumped.set(None);
         self.last_status.set(None);
+        self.searcher.replace(None);
+        self.search_id.set(self.search_id.get() + 1);
+        self.matches.borrow_mut().clear();
+        self.current_match.set(None);
+        self.search_done.set(true);
+        self.marked.borrow_mut().clear();
         self.sidebar.clear();
     }
+}
+
+/// An area on a page, in points from its top-left corner, as fractions of the
+/// page as it is shown: turned, if the view is turned. Both corners are
+/// turned, then the box around them taken.
+fn shown(area: [f64; 4], size: (f64, f64), rotation: Rotation) -> [f64; 4] {
+    let [x, y, w, h] = area;
+    let (page_w, page_h) = size;
+    let (turned_w, turned_h) = rotation.size(page_w, page_h);
+    let (x1, y1) = rotation.apply(x, y, page_w, page_h);
+    let (x2, y2) = rotation.apply(x + w, y + h, page_w, page_h);
+    [x1.min(x2) / turned_w, y1.min(y2) / turned_h, (x1 - x2).abs() / turned_w, (y1 - y2).abs() / turned_h]
 }
 
 pub(super) fn texture(pixels: Pixels) -> gdk::Texture {

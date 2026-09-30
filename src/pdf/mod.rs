@@ -16,8 +16,9 @@ mod document;
 mod layout;
 mod page;
 mod render;
+mod search;
 mod sidebar;
 mod view;
 
 pub use document::{is_pdf, open, Opened};
-pub use view::{PdfView, Status};
+pub use view::{PdfView, SearchStatus, Status};

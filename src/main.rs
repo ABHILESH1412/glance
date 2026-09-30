@@ -193,6 +193,11 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.scroll-left", idle: &[], typing: &[] },
     Accel { action: "win.scroll-right", idle: &[], typing: &[] },
     Accel { action: "win.show-pages", idle: &["F9"], typing: &["F9"] },
+    // Finding text in a PDF: keys only while one is open, through `PDF_KEYS`;
+    // F3 also works from inside the search box.
+    Accel { action: "win.find", idle: &[], typing: &[] },
+    Accel { action: "win.find-next", idle: &[], typing: &["F3"] },
+    Accel { action: "win.find-previous", idle: &[], typing: &["<Shift>F3"] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document
@@ -213,6 +218,11 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.page-last", &["End"]),
     ("win.scroll-left", &["Left"]),
     ("win.scroll-right", &["Right"]),
+    // Ctrl+F finds, as in every reader and browser; F11 still goes fullscreen.
+    ("win.fullscreen", &["F11"]),
+    ("win.find", &["<Primary>f"]),
+    ("win.find-next", &["F3", "<Primary>g"]),
+    ("win.find-previous", &["<Shift>F3", "<Primary><Shift>g"]),
 ];
 
 /// Swap the whole set over when focus moves into or out of a text box, or

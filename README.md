@@ -62,6 +62,10 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
 - A **page number box** in the header: type a number and press Enter to go there
 - **Select text** by dragging, a word with a double-click, a line with a triple-click,
   across pages if you like, and copy it with Ctrl+C
+- **Search** with Ctrl+F. Every match is marked, the current one in orange, and the
+  count grows while a long document is still being searched — it never freezes the
+  window. Case and accents do not matter, and a phrase broken across two lines is still
+  found, as one match. The first match shown is the first from the page you are on
 - **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
 - The wheel scrolls; Ctrl + wheel or a pinch zooms
 
@@ -336,6 +340,8 @@ file, and four CC0 camera raws covering different decode paths.
 | `Home` `End` | In a PDF: first / last page |
 | `←` `→` | In a PDF: scroll sideways when zoomed in |
 | `F9` | In a PDF: show or hide the page sidebar |
+| `Ctrl+F` | In a PDF: find (fullscreen is `F11` there) |
+| `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

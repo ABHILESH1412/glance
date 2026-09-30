@@ -16,6 +16,11 @@ use gtk::{gdk, glib, graphene, gsk};
 
 /// Selected text: Adwaita's blue, see-through so the text stays readable.
 const SELECTION: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 0.35);
+/// Every search match: a highlighter yellow.
+const MATCH: gdk::RGBA = gdk::RGBA::new(1.0, 0.8, 0.0, 0.35);
+/// The match being looked at: stronger, and orange, so it stands out from the
+/// rest at a glance.
+const CURRENT: gdk::RGBA = gdk::RGBA::new(1.0, 0.45, 0.0, 0.55);
 
 mod imp {
     use super::*;
@@ -27,6 +32,10 @@ mod imp {
         /// Selected areas, as fractions of the page's width and height, so
         /// they stay put however the page is zoomed.
         pub highlights: RefCell<Vec<[f64; 4]>>,
+        /// Search matches on this page, and the current one if it is here, in
+        /// the same fractions.
+        pub matches: RefCell<Vec<[f64; 4]>>,
+        pub current: RefCell<Vec<[f64; 4]>>,
     }
 
     #[glib::object_subclass]
@@ -62,14 +71,22 @@ mod imp {
             if let Some(texture) = self.texture.borrow().as_ref() {
                 snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Linear, &bounds);
             }
-            for [x, y, rw, rh] in self.highlights.borrow().iter() {
-                let area = graphene::Rect::new(
-                    (*x as f32) * w,
-                    (*y as f32) * h,
-                    (*rw as f32) * w,
-                    (*rh as f32) * h,
-                );
-                snapshot.append_color(&SELECTION, &area);
+            // Matches under the selection, so selecting a found word shows as
+            // selected.
+            for (areas, colour) in [
+                (&self.matches, &MATCH),
+                (&self.current, &CURRENT),
+                (&self.highlights, &SELECTION),
+            ] {
+                for [x, y, rw, rh] in areas.borrow().iter() {
+                    let area = graphene::Rect::new(
+                        (*x as f32) * w,
+                        (*y as f32) * h,
+                        (*rw as f32) * w,
+                        (*rh as f32) * h,
+                    );
+                    snapshot.append_color(colour, &area);
+                }
             }
         }
     }
@@ -98,6 +115,18 @@ impl Page {
     pub fn set_texture(&self, texture: Option<gdk::Texture>) {
         self.imp().texture.replace(texture);
         self.queue_draw();
+    }
+
+    /// Search matches to mark, and the current one if it is on this page,
+    /// each x, y, width, height as fractions of the page.
+    pub fn set_matches(&self, matches: Vec<[f64; 4]>, current: Vec<[f64; 4]>) {
+        let imp = self.imp();
+        let had_any = !imp.matches.borrow().is_empty() || !imp.current.borrow().is_empty();
+        if had_any || !matches.is_empty() || !current.is_empty() {
+            imp.matches.replace(matches);
+            imp.current.replace(current);
+            self.queue_draw();
+        }
     }
 
     /// Areas to show as selected, each x, y, width, height as fractions of

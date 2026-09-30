@@ -62,6 +62,13 @@ mod imp {
         /// Where the reader is, for putting the page box back after a typo.
         pub pdf_status: Cell<Option<pdf::Status>>,
         pub menu_button: gtk::MenuButton,
+        /// Finding text in a PDF: the bar under the header, and its parts.
+        pub search_bar: gtk::SearchBar,
+        pub search_entry: gtk::SearchEntry,
+        pub search_count: gtk::Label,
+        pub search_previous: gtk::Button,
+        pub search_next: gtk::Button,
+        pub search_button: gtk::ToggleButton,
         /// The main menu differs by document: an image's has editing and
         /// flipping in it, a PDF's has its pages.
         pub image_menu: gio::Menu,
@@ -185,6 +192,12 @@ mod imp {
                 page_total: gtk::Label::new(None),
                 pdf_status: Cell::new(None),
                 menu_button: gtk::MenuButton::new(),
+                search_bar: gtk::SearchBar::new(),
+                search_entry: gtk::SearchEntry::new(),
+                search_count: gtk::Label::new(None),
+                search_previous: gtk::Button::from_icon_name("go-up-symbolic"),
+                search_next: gtk::Button::from_icon_name("go-down-symbolic"),
+                search_button: gtk::ToggleButton::new(),
                 image_menu: gio::Menu::new(),
                 pdf_menu: gio::Menu::new(),
                 content: gtk::Stack::new(),
@@ -402,6 +415,7 @@ impl Window {
         let pages_section = gio::Menu::new();
         pages_section.append(Some("Show _Pages"), Some("win.show-pages"));
         let text_section = gio::Menu::new();
+        text_section.append(Some("_Find…"), Some("win.find"));
         text_section.append(Some("_Copy Selected Text"), Some("win.copy"));
         let pdf_zoom_section = gio::Menu::new();
         pdf_zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
@@ -455,6 +469,8 @@ impl Window {
         page_entry.add_controller(focus);
         imp.page_total.add_css_class("dim-label");
         imp.page_total.add_css_class("numeric");
+        self.build_search_bar();
+
         let page_box = &imp.page_box;
         page_box.append(page_entry);
         page_box.append(&imp.page_total);
@@ -516,6 +532,7 @@ impl Window {
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
         header.pack_end(copy_button);
+        header.pack_end(&imp.search_button);
 
         let action_bar = &imp.action_bar;
         action_bar.add_css_class("toolbar");
@@ -531,6 +548,7 @@ impl Window {
 
         let toolbar = &imp.toolbar;
         toolbar.add_top_bar(header_stack);
+        toolbar.add_top_bar(&imp.search_bar);
         toolbar.add_top_bar(action_bar);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(&imp.strip);
@@ -1099,12 +1117,45 @@ impl Window {
         // Escape should undo whatever is currently "on top": leaving fullscreen
         // first, then the transform options, then the editor. The editor is
         // last because it is the only one that asks before it goes.
+        // Finding text. `find` opens the bar and puts the cursor in it; the
+        // other two step between matches from anywhere in the window.
+        let find = gio::SimpleAction::new("find", None);
+        find.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                if imp.showing_pdf.get() {
+                    imp.search_bar.set_search_mode(true);
+                    imp.search_entry.grab_focus();
+                    imp.search_entry.select_region(0, -1);
+                }
+            }
+        ));
+        self.add_action(&find);
+        for (name, forward) in [("find-next", true), ("find-previous", false)] {
+            let action = gio::SimpleAction::new(name, None);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| {
+                    if window.imp().showing_pdf.get() {
+                        window.imp().pdf_view.search_step(forward);
+                    }
+                }
+            ));
+            self.add_action(&action);
+        }
+
         let dismiss = gio::SimpleAction::new("dismiss", None);
         dismiss.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
             self,
             move |_, _| {
-                if window.is_fullscreen() {
+                // The search bar first: it is the last thing opened.
+                if window.imp().search_bar.is_search_mode() {
+                    window.imp().search_bar.set_search_mode(false);
+                } else if window.is_fullscreen() {
                     window.unfullscreen();
                 } else {
                     window.cancel_editing();
@@ -1696,6 +1747,9 @@ impl Window {
         imp.shown.replace(Some(Shown { name, subtitle }));
         imp.page_total.set_text(&format!("of {pages}"));
         imp.showing_pdf.set(true);
+        // A new document starts without a search.
+        imp.search_bar.set_search_mode(false);
+        imp.search_entry.set_text("");
         imp.pdf_view.show(opened);
         imp.content.set_visible_child_name("pdf");
 
@@ -1713,6 +1767,10 @@ impl Window {
         imp.copy_button.set_visible(!pdf);
         imp.sidebar_button.set_visible(pdf);
         imp.page_box.set_visible(pdf);
+        imp.search_button.set_visible(pdf);
+        if !pdf {
+            imp.search_bar.set_search_mode(false);
+        }
         imp.menu_button.set_menu_model(Some(if pdf { &imp.pdf_menu } else { &imp.image_menu }));
         if let Some(action) = self.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
             action.set_enabled(pdf);
@@ -1746,6 +1804,123 @@ impl Window {
         // Not while someone is typing a number into it.
         if !imp.page_entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
             self.show_page_number();
+        }
+    }
+
+    /// The bar under the header for finding text in a PDF: what to find, how
+    /// many there are and which one this is, and buttons to step through them.
+    fn build_search_bar(&self) {
+        let imp = self.imp();
+        let entry = &imp.search_entry;
+        entry.set_hexpand(true);
+        entry.set_max_width_chars(40);
+        entry.set_placeholder_text(Some("Find in document"));
+        imp.search_count.add_css_class("dim-label");
+        imp.search_count.add_css_class("numeric");
+        imp.search_previous.set_tooltip_text(Some("Previous Match (Shift+Enter)"));
+        imp.search_next.set_tooltip_text(Some("Next Match (Enter)"));
+        imp.search_previous.set_action_name(Some("win.find-previous"));
+        imp.search_next.set_action_name(Some("win.find-next"));
+        let steps = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        steps.add_css_class("linked");
+        steps.append(&imp.search_previous);
+        steps.append(&imp.search_next);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.append(entry);
+        row.append(&imp.search_count);
+        row.append(&steps);
+        let bar = &imp.search_bar;
+        bar.set_child(Some(&row));
+        bar.connect_entry(entry);
+        bar.set_show_close_button(true);
+
+        let button = &imp.search_button;
+        button.set_icon_name("system-search-symbolic");
+        button.set_tooltip_text(Some("Find (Ctrl+F)"));
+        button.set_visible(false);
+        button.bind_property("active", bar, "search-mode-enabled").bidirectional().sync_create().build();
+
+        entry.connect_search_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |entry| window.imp().pdf_view.search(&entry.text())
+        ));
+        for (forward, signal) in [(true, "activate"), (true, "next-match"), (false, "previous-match")] {
+            entry.connect_local(signal, false, glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                #[upgrade_or]
+                None,
+                move |_| {
+                    window.imp().pdf_view.search_step(forward);
+                    None
+                }
+            ));
+        }
+        // Shift+Enter for the one before, as in a browser.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            #[upgrade_or]
+            glib::Propagation::Proceed,
+            move |_, key, _, modifiers| {
+                let enter = matches!(key, gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter);
+                if enter && modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                    window.imp().pdf_view.search_step(false);
+                    return glib::Propagation::Stop;
+                }
+                glib::Propagation::Proceed
+            }
+        ));
+        entry.add_controller(keys);
+
+        // Closing the bar takes the marks off the pages and hands the keys back
+        // to the document; opening it again searches for whatever it still holds.
+        bar.connect_search_mode_enabled_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |bar| {
+                let imp = window.imp();
+                if bar.is_search_mode() {
+                    imp.pdf_view.search(&imp.search_entry.text());
+                } else {
+                    imp.pdf_view.clear_search();
+                    if imp.search_entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
+                        gtk::prelude::GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+                    }
+                }
+            }
+        ));
+
+        imp.pdf_view.connect_search_status(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |status| window.show_search_status(status)
+        ));
+        self.show_search_status(pdf::SearchStatus { current: None, total: 0, done: true });
+    }
+
+    fn show_search_status(&self, status: pdf::SearchStatus) {
+        let imp = self.imp();
+        let typed = !imp.search_entry.text().trim().is_empty();
+        let more = if status.done { "" } else { "…" };
+        let text = match (status.total, status.current) {
+            (0, _) if !status.done => "Searching…".to_string(),
+            (0, _) if typed => "No matches".to_string(),
+            (0, _) => String::new(),
+            (total, Some(current)) => format!("{current} of {total}{more}"),
+            (total, None) => format!("{total} found{more}"),
+        };
+        imp.search_count.set_text(&text);
+        imp.search_previous.set_sensitive(status.total > 0);
+        imp.search_next.set_sensitive(status.total > 0);
+        // Red, the way a search box says it found nothing.
+        if typed && status.done && status.total == 0 {
+            imp.search_entry.add_css_class("error");
+        } else {
+            imp.search_entry.remove_css_class("error");
         }
     }
 

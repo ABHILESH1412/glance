@@ -12,10 +12,10 @@ Tick a box when a feature ships.
 | Area | Glance has | Partial |
 |---|---|---|
 | Images | 25 / 64 | 7 |
-| PDF | 3 / 28 | 3 |
+| PDF | 4 / 28 | 3 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **30 / 122** | **11** |
+| **Total** | **31 / 122** | **11** |
 
 ---
 
@@ -113,7 +113,7 @@ Tick a box when a feature ships.
 - [ ] Table of contents / outline
 - [ ] Continuous scroll, single page, and two-page layouts — *partial:* continuous scroll
 - [ ] Bookmarks
-- [ ] Search the text
+- [x] Search the text
 - [ ] Present as a slideshow
 - [ ] Document info (title, author, page count, page size) — *partial:* page count, and the current page, in the header
 
