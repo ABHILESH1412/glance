@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 25 / 64 | 9 |
-| PDF | 14 / 28 | 1 |
+| Images | 26 / 64 | 9 |
+| PDF | 15 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
-| Capture and general | 2 / 8 | 1 |
-| **Total** | **41 / 122** | **11** |
+| Capture and general | 3 / 8 | 1 |
+| **Total** | **44 / 122** | **11** |
 
 ---
 
@@ -74,7 +74,7 @@ annotations, so every PDF reader shows them.
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
 - [ ] Signatures
-- [ ] Redact / black out a region
+- [x] Redact / black out a region — marked first, then applied to a copy or the original
 
 ## 4. Colour
 
@@ -147,7 +147,7 @@ annotations, so every PDF reader shows them.
 
 - [x] Password to open — opening protected PDFs, and protecting them with AES-256
 - [x] Permissions (block printing, copying or annotating) — set, and respected when reading
-- [ ] Redact text permanently
+- [x] Redact text permanently — redacted pages are rebuilt, the rest of their words kept searchable
 - [x] Reduce file size — lossless repacking, or photos scaled to 150 or 96 dpi
 - [ ] Lock a file against accidental edits
 
@@ -200,7 +200,7 @@ onward) covers.
 
 - [x] Keyboard shortcuts, all listed in one searchable window (Ctrl+?)
 - [x] Save in place and export a copy
-- [ ] Print
+- [x] Print — pictures and PDFs
 - [ ] Share to other apps
 - [ ] Settings window — *partial:* appearance (light / dark / system) is in the menu
 
@@ -234,7 +234,7 @@ Roughly in order of value for effort:
 
 1. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
    sharpness and levels all fit the existing adjust pipeline.
-2. **EXIF panel and print** (sections 1 and 15) — small, and people expect them.
+2. **EXIF panel** (section 1) — small, and people expect it.
 3. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
    drawn once and placed anywhere, building on the pen the Draw panel already has.
 4. **PDF pages** (section 9) — combining, reordering and deleting pages; the sidebar's

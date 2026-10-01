@@ -90,7 +90,12 @@ pub fn image_menu() -> gio::Menu {
     ));
     menu.append_section(
         None,
-        &section(&[item("_Edit…", "win.edit"), item("_Save", "win.save"), item("_Export…", "win.export")]),
+        &section(&[
+            item("_Edit…", "win.edit"),
+            item("_Save", "win.save"),
+            item("_Export…", "win.export"),
+            item("_Print…", "win.print"),
+        ]),
     );
     menu.append_section(None, &section(&[item("_Copy Image", "win.copy"), item("_Delete Image…", "win.delete")]));
     let turns = section(&[
@@ -145,6 +150,8 @@ pub fn pdf_menu() -> gio::Menu {
             item("_Draw and Write", "win.draw-panel"),
             item("Add _Note", "win.pin::note"),
             item("Add Speech _Bubble", "win.pin::bubble"),
+            item("Mark for _Redaction", "win.mark-redact"),
+            item("Apply Redactions…", "win.apply-redactions"),
         ]),
     );
     menu.append_section(
@@ -159,6 +166,7 @@ pub fn pdf_menu() -> gio::Menu {
     menu.append_section(
         None,
         &section(&[
+            item("_Print…", "win.print"),
             item("_Password and Permissions…", "win.protect"),
             item("_Reduce File Size…", "win.reduce-size"),
         ]),

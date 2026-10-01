@@ -228,7 +228,7 @@ fn create(document: &poppler::Document, style: Style, lines: &[Line], page_heigh
 }
 
 /// Every character on the page, in reading order, with its box.
-fn glyphs(page: &poppler::Page) -> Vec<(char, [f64; 4])> {
+pub(super) fn glyphs(page: &poppler::Page) -> Vec<(char, [f64; 4])> {
     use glib::translate::ToGlibPtr;
 
     let Some(text) = page.text() else { return Vec::new() };

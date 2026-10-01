@@ -35,6 +35,9 @@ pub enum Tool {
     Arrow,
     Rectangle,
     Ellipse,
+    /// Black out an area for good. Shown see-through until it is applied,
+    /// so what is under it can be checked first.
+    Redact,
 }
 
 pub const TOOLS: &[Tool] = &[
@@ -44,7 +47,19 @@ pub const TOOLS: &[Tool] = &[
     Tool::Arrow,
     Tool::Rectangle,
     Tool::Ellipse,
+    Tool::Redact,
 ];
+
+/// How a marked-but-not-yet-applied redaction looks: dark enough to see it
+/// is marked, light enough to read what it covers, edged in red.
+pub const REDACTION_FILL: gdk::RGBA = gdk::RGBA::new(0.0, 0.0, 0.0, 0.55);
+pub const REDACTION_EDGE: gdk::RGBA = gdk::RGBA::new(0.88, 0.11, 0.14, 1.0);
+
+/// Draw a marked redaction over `area`.
+pub fn append_redaction(snapshot: &gtk::Snapshot, area: &graphene::Rect) {
+    snapshot.append_color(&REDACTION_FILL, area);
+    snapshot.append_border(&gsk::RoundedRect::from_rect(*area, 0.0), &[1.5; 4], &[REDACTION_EDGE; 4]);
+}
 
 impl Tool {
     pub fn label(self) -> &'static str {
@@ -55,6 +70,7 @@ impl Tool {
             Tool::Arrow => "Arrow",
             Tool::Rectangle => "Rectangle",
             Tool::Ellipse => "Ellipse",
+            Tool::Redact => "Redact",
         }
     }
 
@@ -162,7 +178,7 @@ impl Mark {
                     }
                 }
             }
-            Tool::Rectangle => {
+            Tool::Rectangle | Tool::Redact => {
                 let (x, y, w, h) = self.rect()?;
                 builder.add_rect(&graphene::Rect::new(x as f32, y as f32, w as f32, h as f32));
             }
@@ -208,7 +224,7 @@ impl Mark {
                 }
                 strokes
             }
-            Tool::Rectangle => {
+            Tool::Rectangle | Tool::Redact => {
                 let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
                 vec![vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]]
             }
@@ -243,7 +259,7 @@ impl Mark {
     }
 
     /// The rectangle a two-point shape spans, however it was dragged.
-    fn rect(&self) -> Option<(f64, f64, f64, f64)> {
+    pub fn rect(&self) -> Option<(f64, f64, f64, f64)> {
         let (from, to) = self.ends()?;
         Some((
             from.0.min(to.0),
@@ -255,6 +271,9 @@ impl Mark {
 
     /// Everything the mark covers, stroke and arrow head included.
     pub fn bounds(&self) -> Option<(f64, f64, f64, f64)> {
+        if self.tool == Tool::Redact {
+            return self.rect();
+        }
         let mut xs: Vec<f64> = self.points.iter().map(|p| p.0).collect();
         let mut ys: Vec<f64> = self.points.iter().map(|p| p.1).collect();
         if xs.is_empty() {
@@ -286,6 +305,12 @@ impl Mark {
 
     /// The mark as render nodes, with its own top-left at the origin.
     pub fn to_node(&self) -> Option<gsk::RenderNode> {
+        if self.tool == Tool::Redact {
+            let (_, _, w, h) = self.rect()?;
+            let snapshot = gtk::Snapshot::new();
+            append_redaction(&snapshot, &graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
+            return snapshot.to_node();
+        }
         let (x, y, _, _) = self.bounds()?;
         let path = self.path()?;
         let snapshot = gtk::Snapshot::new();
@@ -298,6 +323,9 @@ impl Mark {
 
     /// Draw the mark into pixels at image resolution.
     pub fn render(&self, widget: &impl IsA<gtk::Widget>) -> Option<Patch> {
+        if self.tool == Tool::Redact {
+            return self.redaction_patch();
+        }
         let (x, y, width, height) = self.bounds()?;
         let (width, height) = (width.ceil().max(1.0), height.ceil().max(1.0));
         if width > 16384.0 || height > 16384.0 {
@@ -317,9 +345,44 @@ impl Mark {
     }
 }
 
+impl Mark {
+    /// A redaction as pixels: solid, opaque black over every pixel the area
+    /// touches and one more all round, built directly rather than drawn, so
+    /// no soft edge can let a shade of what was under it through.
+    fn redaction_patch(&self) -> Option<Patch> {
+        let (x, y, w, h) = self.rect()?;
+        let left = x.floor() - 1.0;
+        let top = y.floor() - 1.0;
+        let width = ((x + w).ceil() + 1.0 - left).max(1.0);
+        let height = ((y + h).ceil() + 1.0 - top).max(1.0);
+        if width > 65536.0 || height > 65536.0 {
+            return None;
+        }
+        let pixels = image::RgbaImage::from_pixel(width as u32, height as u32, image::Rgba([0, 0, 0, 255]));
+        Some(Patch { pixels, x: left as i64, y: top as i64, sequence: self.sequence })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_redaction_bakes_to_solid_black_past_its_edges() {
+        let redact = mark(Tool::Redact, &[(10.4, 20.6), (30.2, 25.1)]);
+        let patch = redact.redaction_patch().unwrap();
+        assert_eq!((patch.x, patch.y), (9, 19), "rounded out, and a pixel more");
+        assert_eq!(patch.pixels.dimensions(), (23, 8));
+        assert!(patch.pixels.pixels().all(|p| p.0 == [0, 0, 0, 255]));
+        // Laid over a picture, nothing of it shows through.
+        let mut base = image::RgbaImage::from_pixel(64, 64, image::Rgba([200, 150, 100, 255]));
+        crate::images::edit::text::composite(&mut base, &[patch]);
+        for y in 19..27 {
+            for x in 9..32 {
+                assert_eq!(base.get_pixel(x, y).0, [0, 0, 0, 255], "at {x}, {y}");
+            }
+        }
+    }
 
     fn mark(tool: Tool, points: &[(f64, f64)]) -> Mark {
         Mark {
@@ -462,6 +525,13 @@ mod icon {
                 // with the button like a real symbolic icon.
                 let ink = widget.color();
                 let sample = super::sample(tool, w, h);
+                // A solid block: what a redaction leaves.
+                if tool == Tool::Redact {
+                    if let Some((x, y, rw, rh)) = sample.rect() {
+                        snapshot.append_color(&ink, &graphene::Rect::new(x as f32, y as f32 + 2.0, rw as f32, rh as f32 - 4.0));
+                    }
+                    return;
+                }
                 let Some(path) = sample.path() else {
                     return;
                 };
@@ -501,7 +571,7 @@ mod icon {
             // One thick sweep, the way a marker goes down.
             Tool::Highlighter => vec![(x0, (y0 + y1) / 2.0), (x1, (y0 + y1) / 2.0)],
             Tool::Line | Tool::Arrow => vec![(x0, y1), (x1, y0)],
-            Tool::Rectangle | Tool::Ellipse => vec![(x0, y0), (x1, y1)],
+            Tool::Rectangle | Tool::Ellipse | Tool::Redact => vec![(x0, y0), (x1, y1)],
         };
         Mark {
             tool,

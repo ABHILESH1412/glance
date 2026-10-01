@@ -86,6 +86,10 @@ mod imp {
         pub showing_pdf: Cell<bool>,
         /// Asks for a protected PDF's password.
         pub locked: crate::app::locked::LockedPage,
+        /// Says how many areas are marked for redaction, and applies them.
+        pub redaction_banner: adw::Banner,
+        /// A picture's redactions are in its working pixels, not yet saved.
+        pub redactions_baked: Cell<bool>,
         /// The password to try on the next PDF opened, then forgotten.
         pub password: RefCell<Option<String>>,
         /// The page to show when the next PDF opens: the one being read
@@ -220,6 +224,8 @@ mod imp {
                 showing_pdf: Cell::new(false),
                 locked: crate::app::locked::LockedPage::new(),
                 password: RefCell::default(),
+                redaction_banner: adw::Banner::new(""),
+                redactions_baked: Cell::new(false),
                 reopen_at: Cell::new(None),
                 toolbar: adw::ToolbarView::new(),
                 fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
@@ -386,6 +392,11 @@ impl Window {
             self,
             move |error| window.toast(&error)
         ));
+        imp.pdf_view.connect_redactions(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.update_redaction_banner()
+        ));
         imp.pdf_view.connect_bookmarks(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -537,6 +548,15 @@ impl Window {
         toolbar.add_top_bar(header_stack);
         toolbar.add_top_bar(&imp.search_bar);
         toolbar.add_top_bar(action_bar);
+        let banner = &imp.redaction_banner;
+        banner.set_button_label(Some("_Apply…"));
+        banner.set_use_markup(false);
+        banner.connect_button_clicked(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.apply_redactions()
+        ));
+        toolbar.add_top_bar(banner);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(&imp.strip);
         self.set_content(Some(toolbar));
@@ -1126,6 +1146,10 @@ impl Window {
                 self,
                 move |_, _| {
                     let view = &window.imp().pdf_view;
+                    // Marks not yet applied are the newest thing to take back.
+                    if back && view.unmark_last_redaction() {
+                        return;
+                    }
                     let done = if back { view.undo() } else { view.redo() };
                     if let Err(error) = done {
                         window.toast(&error);
@@ -1879,6 +1903,7 @@ impl Window {
         }
         self.update_navigation();
         self.refresh_accels();
+        self.update_redaction_banner();
     }
 
     /// Back to images: stop drawing pages and free them.
@@ -2136,6 +2161,233 @@ impl Window {
             }
         ));
         self.add_action(&reduce);
+
+        let print = gio::SimpleAction::new("print", None);
+        print.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.print()
+        ));
+        self.add_action(&print);
+
+        let mark_redact = gio::SimpleAction::new("mark-redact", None);
+        mark_redact.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                if !imp.showing_pdf.get() {
+                    return;
+                }
+                if !imp.pdf_view.allowed().everything {
+                    window.toast("The author of this document does not allow changing it.");
+                    return;
+                }
+                if let pdf::Marked::NothingSelected = imp.pdf_view.mark_redaction() {
+                    window.toast("Select text to redact, or draw over an area with Redact in Draw and Write.");
+                }
+            }
+        ));
+        self.add_action(&mark_redact);
+        let apply = gio::SimpleAction::new("apply-redactions", None);
+        apply.set_enabled(false);
+        apply.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.apply_redactions()
+        ));
+        self.add_action(&apply);
+        let here = gio::SimpleAction::new("unredact-here", None);
+        here.set_enabled(false);
+        here.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                if !window.imp().pdf_view.unmark_redaction_here() {
+                    window.toast("Right-click inside a marked area to unmark it.");
+                }
+            }
+        ));
+        self.add_action(&here);
+        let all = gio::SimpleAction::new("unredact-all", None);
+        all.set_enabled(false);
+        all.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().pdf_view.clear_redactions()
+        ));
+        self.add_action(&all);
+    }
+
+    /// Print what is on screen: a PDF's pages, or the picture with its edits.
+    fn print(&self) {
+        let imp = self.imp();
+        let Some(path) = imp.current.borrow().clone() else { return };
+        let name = file_name(&path);
+        if imp.showing_pdf.get() {
+            if !imp.pdf_view.allowed().print {
+                self.toast("The author of this document does not allow printing it.");
+                return;
+            }
+            let uri = gio::File::for_path(&path).uri();
+            crate::app::print::print_pdf(self, &uri, imp.pdf_view.password().as_deref(), &name);
+            return;
+        }
+        // Being edited: print the edits too, as they look.
+        if let Some(picture) = self.rendered() {
+            crate::app::print::print_picture(self, picture, &name);
+            return;
+        }
+        let (sender, receiver) = async_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = sender.send_blocking(crate::images::edit::export::open(&path));
+        });
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                match receiver.recv().await {
+                    Ok(Ok(picture)) => crate::app::print::print_picture(&window, picture, &name),
+                    Ok(Err(error)) => window.toast(&format!("Could not print: {error}")),
+                    Err(_) => {}
+                }
+            }
+        ));
+    }
+
+    /// Whether the document on screen has redactions waiting to be applied.
+    pub(crate) fn redactions_pending(&self) -> bool {
+        let imp = self.imp();
+        if imp.showing_pdf.get() {
+            !imp.pdf_view.redactions().is_empty()
+        } else {
+            imp.view.canvas().redaction_count() > 0 || imp.redactions_baked.get()
+        }
+    }
+
+    /// Show or hide the banner, and say what is waiting.
+    pub(crate) fn update_redaction_banner(&self) {
+        let imp = self.imp();
+        let count =
+            if imp.showing_pdf.get() { imp.pdf_view.redactions().len() } else { imp.view.canvas().redaction_count() };
+        let pending = self.redactions_pending();
+        imp.redaction_banner.set_title(&match count {
+            0 => "Redactions not saved yet".to_string(),
+            1 => "1 area marked for redaction".to_string(),
+            n => format!("{n} areas marked for redaction"),
+        });
+        imp.redaction_banner.set_revealed(pending);
+        for (name, enabled) in [("apply-redactions", pending), ("unredact-all", count > 0), ("unredact-here", count > 0)] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(enabled);
+            }
+        }
+        if imp.showing_pdf.get() && count > 0 {
+            if let Some(action) = self.lookup_action("undo-mark").and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(true);
+            }
+        }
+    }
+
+    /// Ask, then apply what is marked for redaction.
+    pub(crate) fn apply_redactions(&self) {
+        let imp = self.imp();
+        if !self.redactions_pending() {
+            return;
+        }
+        let Some(path) = imp.current.borrow().clone() else { return };
+        let pdf = imp.showing_pdf.get();
+        if pdf && !imp.pdf_view.allowed().everything {
+            self.toast("The author of this document does not allow changing it.");
+            return;
+        }
+        let count = if pdf { imp.pdf_view.redactions().len() } else { imp.view.canvas().redaction_count() };
+        let original = path.clone();
+        crate::app::redact::confirm(self, &path, count.max(1), pdf, glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |choice| {
+                if pdf {
+                    window.redact_pdf(&original, choice);
+                } else {
+                    match choice {
+                        crate::app::redact::Choice::Original => window.write_edited(original.clone(), true),
+                        crate::app::redact::Choice::Copy(copy) => window.write_edited(copy, false),
+                    }
+                }
+            }
+        ));
+    }
+
+    /// Redact the PDF on screen into a copy, or in place, in the background.
+    fn redact_pdf(&self, path: &std::path::Path, choice: crate::app::redact::Choice) {
+        use crate::app::redact::Choice;
+        let imp = self.imp();
+        let areas = imp.pdf_view.redactions();
+        let password = imp.pdf_view.password();
+        let temporary = pdf::temporary_beside(path, "redact");
+        let working = adw::Toast::builder().title("Redacting…").timeout(0).build();
+        imp.toasts.add_toast(working.clone());
+        let (sender, receiver) = async_channel::bounded(1);
+        let (source, out, secret) = (path.to_path_buf(), temporary.clone(), password.clone());
+        std::thread::spawn(move || {
+            let result = pdf::redact(&source, secret.as_deref(), &areas, &out);
+            if result.is_err() {
+                let _ = std::fs::remove_file(&out);
+            }
+            let _ = sender.send_blocking(result);
+        });
+        let path = path.to_path_buf();
+        glib::spawn_future_local(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            async move {
+                let result = receiver.recv().await.unwrap_or_else(|_| Err("stopped unexpectedly".into()));
+                working.dismiss();
+                let outcome = match result {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        window.toast(&format!("Could not redact: {error}. Nothing was changed."));
+                        return;
+                    }
+                };
+                let pages = if outcome.pages == 1 { "1 page".to_string() } else { format!("{} pages", outcome.pages) };
+                match choice {
+                    Choice::Original => match pdf::install(&temporary, &path) {
+                        Ok(()) => {
+                            crate::app::redact::forget_thumbnails(&path);
+                            window.toast(&format!("Redacted, on {pages}."));
+                            window.reopen(&path, password.clone());
+                        }
+                        Err(error) => {
+                            let _ = std::fs::remove_file(&temporary);
+                            window.toast(&format!("Could not save the redacted file: {error}. Nothing was changed."));
+                        }
+                    },
+                    Choice::Copy(copy) => match pdf::keep_as(&temporary, &copy) {
+                        Ok(()) => {
+                            let toast = adw::Toast::builder()
+                                .title(format!("Saved a redacted copy, “{}”. The original is unchanged.", file_name(&copy)))
+                                .button_label("_Open")
+                                .build();
+                            toast.connect_button_clicked(glib::clone!(
+                                #[weak]
+                                window,
+                                move |_| {
+                                    window.imp().password.replace(password.clone());
+                                    window.load(copy.clone(), false);
+                                }
+                            ));
+                            window.imp().toasts.add_toast(toast);
+                        }
+                        Err(error) => {
+                            let _ = std::fs::remove_file(&temporary);
+                            window.toast(&format!("Could not save the redacted copy: {error}"));
+                        }
+                    },
+                }
+            }
+        ));
     }
 
     /// Open the document on screen again, after it was rewritten, at the page
@@ -2211,10 +2463,15 @@ impl Window {
         pins.append(Some("Add _Note Here"), Some("win.pin::note-here"));
         pins.append(Some("Add Speech _Bubble Here"), Some("win.pin::bubble-here"));
         pins.append(Some("_Bookmark This Page"), Some("win.bookmark"));
+        marks.append(Some("_Redact"), Some("win.mark-redact"));
+        let unmark = gio::Menu::new();
+        unmark.append(Some("Remove Redaction _Mark"), Some("win.unredact-here"));
+        unmark.append(Some("Unmark _All Redactions"), Some("win.unredact-all"));
         let menu = gio::Menu::new();
         menu.append_section(None, &clipboard);
         menu.append_section(None, &marks);
         menu.append_section(None, &pins);
+        menu.append_section(None, &unmark);
 
         let reader = self.imp().pdf_view.widget();
         let popover = gtk::PopoverMenu::from_model(Some(&menu));

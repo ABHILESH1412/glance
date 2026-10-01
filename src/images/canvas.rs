@@ -886,6 +886,11 @@ impl ImageCanvas {
         true
     }
 
+    /// Areas marked for redaction and not yet baked into the pixels.
+    pub fn redaction_count(&self) -> usize {
+        self.imp().marks.borrow().iter().filter(|m| m.tool == crate::images::edit::draw::Tool::Redact).count()
+    }
+
     pub fn clear_marks(&self) {
         let imp = self.imp();
         imp.marks.borrow_mut().clear();

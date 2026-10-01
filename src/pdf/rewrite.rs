@@ -224,7 +224,7 @@ fn from_raw(raw: Vec<u8>, width: u32, height: u32, channels: u8) -> Option<image
     }
 }
 
-fn encode_jpeg(pixels: &image::DynamicImage, channels: u8, quality: u8) -> Option<Vec<u8>> {
+pub(super) fn encode_jpeg(pixels: &image::DynamicImage, channels: u8, quality: u8) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
     let result = if channels == 1 {
@@ -237,7 +237,7 @@ fn encode_jpeg(pixels: &image::DynamicImage, channels: u8, quality: u8) -> Optio
 
 /// A drawing, chart or screenshot, rather than a photo: few distinct colours
 /// across a sample of its pixels.
-fn looks_drawn(pixels: &image::DynamicImage) -> bool {
+pub(super) fn looks_drawn(pixels: &image::DynamicImage) -> bool {
     let rgb = pixels.to_rgb8();
     let total = rgb.pixels().len();
     let step = (total / 20_000).max(1);

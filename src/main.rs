@@ -211,6 +211,8 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.redo-mark", idle: &[], typing: &[] },
     Accel { action: "win.document-info", idle: &[], typing: &[] },
     Accel { action: "win.bookmark", idle: &[], typing: &[] },
+    Accel { action: "win.mark-redact", idle: &[], typing: &[] },
+    Accel { action: "win.print", idle: &["<Primary>p"], typing: &["<Primary>p"] },
     Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
 ];
 
@@ -251,6 +253,10 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.document-info", &["<Primary>i"]),
     // Ctrl+D bookmarks the page, as in Preview and every browser.
     ("win.bookmark", &["<Primary>d"]),
+    // Ctrl+Shift+R marks the selected text for redaction; a PDF has no
+    // picture rotation to reset.
+    ("win.rotate-reset", &[]),
+    ("win.mark-redact", &["<Primary><Shift>r"]),
 ];
 
 /// An action's keys, while typing or not, with a PDF open or not.

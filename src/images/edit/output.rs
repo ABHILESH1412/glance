@@ -74,6 +74,11 @@ impl Window {
         let Some(source) = self.imp().current.borrow().clone() else {
             return;
         };
+        // Redactions are saved through their own prompt, which offers a copy.
+        if self.redactions_pending() {
+            self.apply_redactions();
+            return;
+        }
         if !self.imp().dirty.get() && !self.has_live_transform() {
             self.toast("No changes to save.");
             return;
@@ -240,7 +245,7 @@ impl Window {
 
     /// `in_place` means this became the file on screen, so the session carries
     /// on from the saved pixels with nothing left pending.
-    fn write_edited(&self, destination: PathBuf, in_place: bool) {
+    pub(crate) fn write_edited(&self, destination: PathBuf, in_place: bool) {
         self.load_working();
         let Some(image) = self.rendered() else {
             self.toast("Nothing to save yet.");
@@ -267,9 +272,12 @@ impl Window {
                             .map(|n| n.to_string_lossy().into_owned())
                             .unwrap_or_default();
                         if in_place {
+                            // Thumbnails of the old picture would outlive it.
+                            crate::app::redact::forget_thumbnails(&destination);
                             // The transforms are on disk now, so fold them into
                             // the working pixels and start clean.
                             let imp = window.imp();
+                            imp.redactions_baked.set(false);
                             imp.working.replace(Some(image));
                             imp.history.borrow_mut().clear();
                             imp.redo.borrow_mut().clear();

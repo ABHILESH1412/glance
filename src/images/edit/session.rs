@@ -47,6 +47,9 @@ impl Window {
         if live.is_identity() && crop.is_none() {
             return;
         }
+        // Redactions baked into the working pixels are still not in the file;
+        // saving them goes through the redaction prompt all the same.
+        let redacting = canvas.redaction_count() > 0;
 
         let (sender, receiver) = async_channel::bounded(1);
         std::thread::spawn(move || {
@@ -63,6 +66,9 @@ impl Window {
             async move {
                 match receiver.recv().await {
                     Ok(Ok((previous, baked))) => {
+                        if redacting {
+                            window.imp().redactions_baked.set(true);
+                        }
                         window.push_history(previous);
                         window.imp().working.replace(Some(baked));
                         window.show_working();
@@ -116,6 +122,7 @@ impl Window {
         imp.history.borrow_mut().clear();
         imp.redo.borrow_mut().clear();
         imp.dirty.set(false);
+        imp.redactions_baked.set(false);
         // Zero the canvas and the sliders together rather than relying on
         // whatever replaces the texture next: a slider still reading -50 over
         // an untouched picture is a lie the next session would inherit.
@@ -149,6 +156,7 @@ impl Window {
             1 => "1 edit. Save to write it back.".to_string(),
             n => format!("{n} edits. Save to write it back."),
         });
+        self.update_redaction_banner();
     }
 
     /// Put an image on screen as the thing being edited.

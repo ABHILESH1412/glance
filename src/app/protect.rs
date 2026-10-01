@@ -517,17 +517,21 @@ fn open_of(choice: &Choice) -> &str {
 /// Ask where to keep a copy, suggesting "name (what).pdf" beside the original.
 pub fn save_copy_as(parent: &impl IsA<gtk::Widget>, original: &Path, what: &str, chosen: impl Fn(PathBuf) + 'static) {
     let stem = original.file_stem().map_or_else(|| "document".into(), |s| s.to_string_lossy().into_owned());
-    let filter = gtk::FileFilter::new();
-    filter.set_name(Some("PDF documents"));
-    filter.add_mime_type("application/pdf");
-    let filters = gio::ListStore::new::<gtk::FileFilter>();
-    filters.append(&filter);
+    // The copy keeps the original's kind: a picture stays the picture it was.
+    let extension = original.extension().map_or_else(|| "pdf".into(), |e| e.to_string_lossy().into_owned());
     let chooser = gtk::FileDialog::builder()
         .title("Save a Copy")
-        .initial_name(format!("{stem} ({what}).pdf"))
-        .filters(&filters)
+        .initial_name(format!("{stem} ({what}).{extension}"))
         .modal(true)
         .build();
+    if extension.eq_ignore_ascii_case("pdf") {
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("PDF documents"));
+        filter.add_mime_type("application/pdf");
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        chooser.set_filters(Some(&filters));
+    }
     if let Some(folder) = original.parent() {
         chooser.set_initial_folder(Some(&gio::File::for_path(folder)));
     }

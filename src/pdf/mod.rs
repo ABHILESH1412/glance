@@ -27,6 +27,7 @@ mod notes;
 mod outline;
 mod page;
 mod qpdf;
+mod redact;
 mod render;
 mod rewrite;
 mod search;
@@ -41,6 +42,7 @@ pub use layout::Mode;
 pub use markup::Style;
 pub use notes::TextStyle;
 pub use qpdf::{Permissions, Protection};
+pub use redact::redact;
 pub use rewrite::{
     install, keep_as, opens_with, permissions as current_permissions, protect, shrink, temporary_beside, Level,
     Report,

@@ -113,6 +113,13 @@ extern "C" {
     fn qpdf_oh_new_integer(qpdf: Data, value: i64) -> Handle;
     fn qpdf_oh_replace_key(qpdf: Data, oh: Handle, key: *const c_char, item: Handle);
     fn qpdf_oh_remove_key(qpdf: Data, oh: Handle, key: *const c_char);
+    fn qpdf_oh_new_stream(qpdf: Data) -> Handle;
+    fn qpdf_oh_new_dictionary(qpdf: Data) -> Handle;
+    fn qpdf_oh_new_array(qpdf: Data) -> Handle;
+    fn qpdf_oh_append_item(qpdf: Data, oh: Handle, item: Handle);
+    fn qpdf_oh_new_real_from_double(qpdf: Data, value: f64, decimal_places: c_int) -> Handle;
+    fn qpdf_make_indirect_object(qpdf: Data, oh: Handle) -> Handle;
+    fn qpdf_get_root(qpdf: Data) -> Handle;
 }
 
 /// Why qpdf could not do something.
@@ -407,6 +414,96 @@ impl Qpdf {
             set("BitsPerComponent", qpdf_oh_new_integer(self.data, 8));
             qpdf_oh_remove_key(self.data, qpdf_oh_get_dict(self.data, image.0), c"/DecodeParms".as_ptr());
         }
+    }
+}
+
+/// A value to put into a new object.
+pub enum Value<'a> {
+    Name(&'a str),
+    Integer(i64),
+    Real(f64),
+    Object(Object),
+    Array(Vec<Value<'a>>),
+}
+
+/// Building new objects, for pages written afresh.
+impl Qpdf {
+    pub fn root(&self) -> Object {
+        // SAFETY: a live handle.
+        Object(unsafe { qpdf_get_root(self.data) })
+    }
+
+    fn value(&self, value: &Value<'_>) -> Handle {
+        // SAFETY: a live handle; every string outlives its call.
+        unsafe {
+            match value {
+                Value::Name(name) => {
+                    let name = CString::new(format!("/{name}")).expect("names have no zero bytes");
+                    qpdf_oh_new_name(self.data, name.as_ptr())
+                }
+                Value::Integer(n) => qpdf_oh_new_integer(self.data, *n),
+                Value::Real(r) => qpdf_oh_new_real_from_double(self.data, *r, 4),
+                Value::Object(object) => object.0,
+                Value::Array(items) => {
+                    let array = qpdf_oh_new_array(self.data);
+                    for item in items {
+                        qpdf_oh_append_item(self.data, array, self.value(item));
+                    }
+                    array
+                }
+            }
+        }
+    }
+
+    /// Set a key of a dictionary, or of a stream's dictionary.
+    pub fn set(&self, object: Object, key: &str, value: Value<'_>) {
+        let key = CString::new(format!("/{key}")).expect("keys have no zero bytes");
+        let value = self.value(&value);
+        // SAFETY: a live handle and object.
+        unsafe {
+            let dict =
+                if qpdf_oh_is_stream(self.data, object.0) != 0 { qpdf_oh_get_dict(self.data, object.0) } else { object.0 };
+            qpdf_oh_replace_key(self.data, dict, key.as_ptr(), value);
+        }
+    }
+
+    pub fn remove(&self, object: Object, key: &str) {
+        let key = CString::new(format!("/{key}")).expect("keys have no zero bytes");
+        // SAFETY: a live handle and object.
+        unsafe {
+            let dict =
+                if qpdf_oh_is_stream(self.data, object.0) != 0 { qpdf_oh_get_dict(self.data, object.0) } else { object.0 };
+            qpdf_oh_remove_key(self.data, dict, key.as_ptr());
+        }
+    }
+
+    /// A new dictionary, written as an object of its own.
+    pub fn new_dictionary(&self, entries: Vec<(&str, Value<'_>)>) -> Object {
+        // SAFETY: a live handle.
+        let dict = Object(unsafe { qpdf_make_indirect_object(self.data, qpdf_oh_new_dictionary(self.data)) });
+        for (key, value) in entries {
+            self.set(dict, key, value);
+        }
+        dict
+    }
+
+    /// A new stream of `data`, stored as given: qpdf compresses it on writing
+    /// unless `filter` says it is already encoded.
+    pub fn new_stream(&self, data: &[u8], filter: Option<&str>, entries: Vec<(&str, Value<'_>)>) -> Object {
+        // SAFETY: a live handle; qpdf copies the data.
+        let stream = unsafe {
+            let stream = qpdf_oh_new_stream(self.data);
+            let filter = match filter {
+                Some(name) => self.value(&Value::Name(name)),
+                None => qpdf_oh_new_null(self.data),
+            };
+            qpdf_oh_replace_stream_data(self.data, stream, data.as_ptr(), data.len(), filter, qpdf_oh_new_null(self.data));
+            Object(stream)
+        };
+        for (key, value) in entries {
+            self.set(stream, key, value);
+        }
+        stream
     }
 }
 

@@ -65,6 +65,8 @@ mod imp {
         /// is redrawn with it saved.
         pub sketch: RefCell<Option<crate::images::edit::draw::Mark>>,
         pub night: Cell<bool>,
+        /// Areas marked for redaction, as fractions of the page.
+        pub redactions: RefCell<Vec<[f64; 4]>>,
     }
 
     #[glib::object_subclass]
@@ -106,7 +108,9 @@ mod imp {
                 snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Linear, &bounds);
             }
             // Part of the page it is drawn on, so turned dark with it at night.
-            if let Some(mark) = self.sketch.borrow().as_ref() {
+            let sketch = self.sketch.borrow();
+            let redacting = sketch.as_ref().filter(|mark| mark.tool == crate::images::edit::draw::Tool::Redact);
+            if let Some(mark) = sketch.as_ref().filter(|_| redacting.is_none()) {
                 if let Some(path) = mark.path() {
                     snapshot.append_stroke(&path, &mark.stroke(), &mark.paint());
                 }
@@ -114,6 +118,18 @@ mod imp {
             if night {
                 snapshot.pop();
             }
+            // Marked for redaction, over everything, the same by day and night.
+            let scale = |[x, y, rw, rh]: [f64; 4]| {
+                graphene::Rect::new((x as f32) * w, (y as f32) * h, (rw as f32) * w, (rh as f32) * h)
+            };
+            for area in self.redactions.borrow().iter() {
+                crate::images::edit::draw::append_redaction(snapshot, &scale(*area));
+            }
+            if let Some((x, y, rw, rh)) = redacting.and_then(|mark| mark.rect()) {
+                let area = graphene::Rect::new(x as f32, y as f32, rw as f32, rh as f32);
+                crate::images::edit::draw::append_redaction(snapshot, &area);
+            }
+            drop(sketch);
             // Matches under the selection, so selecting a found word shows as
             // selected.
             for (areas, colour) in [
@@ -215,6 +231,14 @@ impl Page {
 
     /// Areas to show as selected, each x, y, width, height as fractions of
     /// the page.
+    pub fn set_redactions(&self, areas: Vec<[f64; 4]>) {
+        if *self.imp().redactions.borrow() == areas {
+            return;
+        }
+        self.imp().redactions.replace(areas);
+        self.queue_draw();
+    }
+
     pub fn set_highlights(&self, highlights: Vec<[f64; 4]>) {
         let had_any = !self.imp().highlights.borrow().is_empty();
         if had_any || !highlights.is_empty() {

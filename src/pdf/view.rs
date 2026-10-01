@@ -50,6 +50,7 @@ use super::markup::{self, Mark, Style};
 use super::ink::{self, Drawing};
 use super::notes::{self, Note, TextBox, TextStyle};
 use super::outline::{self, Heading};
+use super::redact::Area as RedactArea;
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
@@ -273,6 +274,10 @@ struct Inner {
     bookmark_key: RefCell<Option<bookmarks::Key>>,
     on_bookmarks: RefCell<Option<Box<dyn Fn(BookmarkEvent)>>>,
     on_sidebar_view: RefCell<Option<Box<dyn Fn(SidebarView)>>>,
+    /// Areas marked for redaction, not yet applied: nothing in the file
+    /// changes until they are.
+    redactions: RefCell<Vec<RedactArea>>,
+    on_redactions: RefCell<Option<Box<dyn Fn(usize)>>>,
 }
 
 impl PdfView {
@@ -348,6 +353,8 @@ impl PdfView {
             bookmark_key: RefCell::default(),
             on_bookmarks: RefCell::default(),
             on_sidebar_view: RefCell::default(),
+            redactions: RefCell::default(),
+            on_redactions: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -416,6 +423,67 @@ impl PdfView {
     /// The file on screen.
     pub fn path(&self) -> Option<PathBuf> {
         self.inner.path()
+    }
+
+    /// Mark the selected text for redaction. Nothing is changed yet.
+    pub fn mark_redaction(&self) -> Marked {
+        let inner = &self.inner;
+        let Some(selection) = inner.selection.get() else { return Marked::NothingSelected };
+        let Some(reader) = inner.reader() else { return Marked::NothingSelected };
+        let spans = document::spans(selection.anchor, selection.head, &inner.pages.borrow());
+        let areas: Vec<RedactArea> = spans
+            .into_iter()
+            .flat_map(|(page, span)| {
+                document::highlights(&reader, page, span, selection.unit)
+                    .into_iter()
+                    .map(move |rect| RedactArea { page, rect })
+            })
+            .collect();
+        if areas.is_empty() {
+            return Marked::NothingSelected;
+        }
+        inner.set_selection(None);
+        inner.add_redactions(areas);
+        Marked::Done
+    }
+
+    /// The areas marked for redaction.
+    pub fn redactions(&self) -> Vec<RedactArea> {
+        self.inner.redactions.borrow().clone()
+    }
+
+    /// Unmark everything.
+    pub fn clear_redactions(&self) {
+        self.inner.set_redactions(Vec::new());
+    }
+
+    /// Unmark the most recent area. False if there was none.
+    pub fn unmark_last_redaction(&self) -> bool {
+        let mut areas = self.inner.redactions.borrow().clone();
+        let removed = areas.pop().is_some();
+        self.inner.set_redactions(areas);
+        removed
+    }
+
+    /// Unmark the areas where the context menu was opened. False if it was
+    /// opened on none.
+    pub fn unmark_redaction_here(&self) -> bool {
+        let inner = &self.inner;
+        let Some(spot) = inner.menu_spot() else { return false };
+        let mut areas = inner.redactions.borrow().clone();
+        let before = areas.len();
+        areas.retain(|area| {
+            let [x, y, w, h] = area.rect;
+            !(area.page == spot.page && spot.x >= x && spot.x <= x + w && spot.y >= y && spot.y <= y + h)
+        });
+        let removed = areas.len() != before;
+        inner.set_redactions(areas);
+        removed
+    }
+
+    /// Called with how many areas are marked, whenever that changes.
+    pub fn connect_redactions(&self, callback: impl Fn(usize) + 'static) {
+        self.inner.on_redactions.replace(Some(Box::new(callback)));
     }
 
     /// What the document's author allows.
@@ -600,6 +668,10 @@ impl PdfView {
         inner.sidebar.set_rotation(rotation);
         // Matches are positions on the page; turning moves where they show.
         inner.mark_all();
+        let marked: Vec<usize> = inner.redactions.borrow().iter().map(|a| a.page).collect();
+        for page in marked {
+            inner.show_redactions(page);
+        }
         inner.emit_status();
     }
 
@@ -1894,17 +1966,58 @@ impl Inner {
         });
     }
 
+    /// Where on a page the context menu was opened.
+    fn menu_spot(&self) -> Option<Spot> {
+        self.menu_point.get().and_then(|(x, y)| {
+            let point = self.root.compute_point(&self.column, &graphene::Point::new(x as f32, y as f32))?;
+            self.hit(f64::from(point.x()), f64::from(point.y()))
+        })
+    }
+
+    fn add_redactions(&self, more: Vec<RedactArea>) {
+        let mut areas = self.redactions.borrow().clone();
+        areas.extend(more);
+        self.set_redactions(areas);
+    }
+
+    /// Keep and show a new set of marked areas.
+    fn set_redactions(&self, areas: Vec<RedactArea>) {
+        let mut pages: Vec<usize> = self.redactions.borrow().iter().chain(&areas).map(|a| a.page).collect();
+        pages.sort_unstable();
+        pages.dedup();
+        let count = areas.len();
+        let changed = *self.redactions.borrow() != areas;
+        self.redactions.replace(areas);
+        for page in pages {
+            self.show_redactions(page);
+        }
+        if changed {
+            if let Some(callback) = self.on_redactions.borrow().as_ref() {
+                callback(count);
+            }
+        }
+    }
+
+    /// Show a page's marked areas, the way the page is turned.
+    fn show_redactions(&self, page: usize) {
+        let Some(&size) = self.pages.borrow().get(page) else { return };
+        let rotation = self.rotation.get();
+        let areas = self
+            .redactions
+            .borrow()
+            .iter()
+            .filter(|area| area.page == page)
+            .map(|area| shown(area.rect, size, rotation))
+            .collect();
+        if let Some(widget) = self.widgets.borrow().get(page) {
+            widget.set_redactions(areas);
+        }
+    }
+
     /// Open a new note or bubble for writing, and put it on the page once
     /// something is written.
     fn pin(self: &Rc<Self>, kind: Pinned, here: bool) {
-        let spot = if here {
-            self.menu_point.get().and_then(|(x, y)| {
-                let point = self.root.compute_point(&self.column, &graphene::Point::new(x as f32, y as f32))?;
-                self.hit(f64::from(point.x()), f64::from(point.y()))
-            })
-        } else {
-            None
-        };
+        let spot = if here { self.menu_spot() } else { None };
         // Otherwise just after the selected text, or near the top of the page
         // being read.
         let spot = spot.or_else(|| self.selection_end()).or_else(|| {
@@ -1961,7 +2074,8 @@ impl Inner {
 
     /// Start a drawing where the pointer went down.
     fn start_sketch(&self, spot: Spot, tool: draw::Tool) {
-        if !ink::available() {
+        // A redaction is not ink, and needs nothing newer from Poppler.
+        if tool != draw::Tool::Redact && !ink::available() {
             self.report("Drawing on a PDF needs Poppler 25.06 or newer.".to_string());
             return;
         }
@@ -2016,6 +2130,16 @@ impl Inner {
     /// page has been redrawn with it, so it never blinks out.
     fn finish_sketch(&self) {
         let Some((page, mark)) = self.sketch.take() else { return };
+        // Marked, not applied: it joins the list waiting to be applied.
+        if mark.tool == draw::Tool::Redact {
+            if let Some(widget) = self.widgets.borrow().get(page) {
+                widget.set_sketch(None);
+            }
+            if let (true, Some((x, y, w, h))) = (mark.is_worth_keeping(), mark.rect()) {
+                self.add_redactions(vec![RedactArea { page, rect: [x, y, w, h] }]);
+            }
+            return;
+        }
         let saved = match Drawing::from_mark(page, &mark) {
             Some(drawing) => match self.commit(Change { removed: Vec::new(), added: vec![Annotation::Ink(drawing)] }) {
                 Ok(()) => true,
@@ -2225,6 +2349,7 @@ impl Inner {
         self.sidebar.clear();
         self.outline.borrow_mut().clear();
         self.bookmarks.borrow_mut().clear();
+        self.set_redactions(Vec::new());
         self.bookmark_key.replace(None);
     }
 }

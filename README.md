@@ -120,6 +120,44 @@ it, and a read-only file is left untouched.
 Both save over the file or as a copy beside it, and Glance reopens the document at the
 page you were on.
 
+## Redacting
+
+A black box drawn over a document hides nothing. The words under it are still in the
+file, and any program can copy them out or lift the box off. Glance's redaction removes
+what is under the box for good, in pictures and PDFs alike.
+
+It happens in two steps, so nothing goes by accident:
+
+1. **Mark** what should go: select text and press Ctrl+Shift+R (or right-click → Redact),
+   or drag over any area with **Redact** in the Draw panel. Marked areas show dark but
+   see-through, edged in red, so you can check what each one covers. Undo, or right-click
+   → Remove Redaction Mark, takes one back. Nothing has changed yet.
+2. **Apply**: a bar says how many areas are marked, and its Apply button asks what to do.
+   **Save Redacted Copy…** (the default) leaves the original as it was; **Redact
+   Original** changes the file itself. Saving an edited picture with marked areas asks the
+   same question.
+
+How it is made unrecoverable:
+
+- **Pictures**: the marked pixels are replaced with solid black before the file is
+  written, one pixel past the edge all round. Glance writes only pixels, so no embedded
+  thumbnail or metadata keeps a copy of the original.
+- **PDFs**: every page with a redaction is replaced with a picture of itself, the boxes
+  painted in, so none of its text, fonts, drawings, hidden layers, annotations or form
+  values survive. The words outside the boxes go back as invisible text, so the page can
+  still be searched and copied from; a word touched anywhere by a box goes whole. The
+  file is then written afresh, which drops earlier versions of the page that incremental
+  saves keep. Finally Glance opens the result and checks that no text it removed is left.
+- Either way, the thumbnails desktop programs keep of the file are thrown away, so they
+  do not go on showing the original.
+
+## Printing
+
+Ctrl+P, or Print in the menu, for pictures and PDFs alike, through the system's print
+dialog. A PDF prints page by page, each page fitted to the paper and turned to match it.
+A picture prints as it is on screen, edits included, at a natural size, shrunk to fit
+the paper when it is larger. A PDF whose author does not allow printing is not printed.
+
 A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
 arrow keys do not step to the next file. PDFs do not appear in an image folder's
 filmstrip either.
@@ -410,6 +448,8 @@ search box. The most used:
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |
 | `Ctrl+I` | In a PDF: document info |
+| `Ctrl+Shift+R` | In a PDF: mark the selected text for redaction |
+| `Ctrl+P` | Print |
 | `Ctrl+Enter` | Finish writing a note or speech bubble |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 | `Ctrl+?` | All keyboard shortcuts |
@@ -427,7 +467,11 @@ search box. The most used:
   can be undone but not moved. A PDF text box has no underline.
 - A text box in a font of your choosing carries that font inside the file — a few
   hundred kilobytes, once per font per document — so it looks the same everywhere.
-- Glance cannot print yet, so the permission about printing is for other programs.
+- Redacting a PDF page turns it into a picture: it prints and reads the same, but it is
+  larger than the text it replaces. Redaction covers what is on the pages; the document's
+  title, outline and other details are shown in Document Info and the sidebar, to check.
+- Once a file is redacted in place, the old one is gone as far as Glance or any program can
+  tell. Backups, snapshots and copies elsewhere are beyond its reach.
 
 Wanted, but not built yet: HDR and wide-gamut output, and progressive loading so a 100 MP
 TIFF appears in stages.
