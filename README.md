@@ -63,8 +63,17 @@ buttons and a row of highlight colours.
 
 *Reading*
 
-- A **sidebar of page thumbnails** (F9, or the button at the top left), drawn only once
-  it is opened. Click one to go there; it follows along as you scroll
+- A **sidebar** (F9, or the button at the top left) with three tabs, and it remembers
+  the last one you used:
+  - **Pages**: every page as a thumbnail, drawn only while it can be seen. Click one to
+    go there; it follows along as you scroll
+  - **Contents**: the document's own table of contents, opened as far as its author
+    left it. Clicking a heading takes you to the heading itself, not just the top of its
+    page, and the section you are reading is picked out as you go
+  - **Bookmarks**: pages you marked to come back to, with Ctrl+D or from the menu. Each
+    is named after the section it is in, and can be renamed or removed from its row's
+    menu; a removal can be undone. Bookmarks are kept with Glance's settings, not
+    written into the PDF, and they follow a file that is moved or renamed
 - A **page number box** in the header: type a number and press Enter to go there
 - **Search** with Ctrl+F. Every match is marked, the current one in orange, and the
   count grows while a long document is still being searched — it never freezes the
@@ -378,7 +387,8 @@ search box. The most used:
 | `Page Up` `Page Down` `Space` | In a PDF: back / forward a screen |
 | `Home` `End` | In a PDF: first / last page |
 | `←` `→` | In a PDF: scroll sideways when zoomed in |
-| `F9` | In a PDF: show or hide the page sidebar |
+| `F9` | In a PDF: show or hide the sidebar (pages, contents, bookmarks) |
+| `Ctrl+D` | In a PDF: bookmark the page, or remove its bookmark |
 | `Ctrl+F` | In a PDF: find (fullscreen is `F11` there) |
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |

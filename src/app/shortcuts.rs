@@ -130,7 +130,8 @@ pub const PAGES: &[Page] = &[
                     key("Scroll sideways", "Left Right"),
                     key("First page", "Home"),
                     key("Last page", "End"),
-                    key("Page thumbnails", "F9"),
+                    key("Sidebar: pages, contents and bookmarks", "F9"),
+                    key("Bookmark this page", "<Primary>d"),
                 ],
             },
             Group {

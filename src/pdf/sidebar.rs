@@ -1,359 +1,233 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The page sidebar: every page small, with its number, for finding your way
-//! around a long document.
+//! The sidebar beside a PDF: three ways round the document, one tab each.
 //!
-//! It costs nothing until it is opened: no thread, no thumbnails. Once open,
-//! only the thumbnails on screen are drawn — a list view only builds rows for
-//! what is visible — and they are drawn on a thread of their own, so the pages
-//! being read are never kept waiting behind them.
+//! - **Pages**, every page small;
+//! - **Contents**, the author's table of contents;
+//! - **Bookmarks**, the pages the reader has marked.
+//!
+//! Only what is on screen does any work: the thumbnails draw nothing while
+//! another tab is showing, or the sidebar is closed.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gdk, glib};
 
+use super::bookmark_list::{BookmarkList, Request};
+use super::bookmarks::Bookmark;
+use super::contents::Contents;
 use super::layout::Rotation;
-use super::page::Page;
-use super::render::{Job, Rendered, Renderer};
-use super::view::texture;
+use super::outline::Heading;
+use super::thumbnails::Thumbnails;
 
-/// How wide each thumbnail is drawn, in logical pixels.
-const WIDTH: f64 = 120.0;
-/// Thumbnails kept once they have scrolled out of sight, so scrolling back is
-/// instant. Beyond this only the ones on screen are kept.
-const CACHE: usize = 200;
+/// Which tab the sidebar shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum View {
+    #[default]
+    Pages,
+    Contents,
+    Bookmarks,
+}
+
+impl View {
+    pub fn name(self) -> &'static str {
+        match self {
+            View::Pages => "pages",
+            View::Contents => "contents",
+            View::Bookmarks => "bookmarks",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<View> {
+        match name {
+            "pages" => Some(View::Pages),
+            "contents" => Some(View::Contents),
+            "bookmarks" => Some(View::Bookmarks),
+            _ => None,
+        }
+    }
+}
+
+/// What the reader did in the sidebar.
+pub enum Event {
+    /// Go to a page, and so far down it, in points.
+    Go(usize, Option<f64>),
+    Bookmarks(Request),
+    Switched(View),
+}
 
 pub struct Sidebar {
     inner: Rc<Inner>,
 }
 
 struct Inner {
-    root: gtk::ScrolledWindow,
-    list: gtk::ListView,
-    model: gtk::StringList,
-    selection: gtk::SingleSelection,
-    pages: RefCell<Vec<(f64, f64)>>,
-    rotation: Cell<Rotation>,
-    uri: RefCell<Option<String>>,
-    renderer: RefCell<Option<Renderer>>,
-    /// Bumped per document, so thumbnails drawn for the last one are ignored.
-    document: Cell<u64>,
-    /// The version of the file being shown; see `Renderer::reload`.
-    revision: Cell<u64>,
-    cache: RefCell<HashMap<usize, gdk::Texture>>,
-    /// Pages whose rows are built right now, and the widget showing each.
-    bound: RefCell<HashMap<usize, Page>>,
-    asked: Cell<bool>,
-    /// Set while the reader moves the selection, so it is not mistaken for a
-    /// click asking to go somewhere.
+    root: gtk::Box,
+    stack: adw::ViewStack,
+    thumbnails: Thumbnails,
+    contents: Contents,
+    bookmarks: BookmarkList,
+    /// On screen at all.
+    shown: Cell<bool>,
+    /// Set while the tab is changed from outside, so it is not reported back.
     syncing: Cell<bool>,
-    /// On screen. Nothing is drawn until it is.
-    active: Cell<bool>,
-    night: Cell<bool>,
-    on_pick: RefCell<Option<Box<dyn Fn(usize)>>>,
+    on_event: RefCell<Option<Rc<dyn Fn(Event)>>>,
 }
 
 impl Sidebar {
     pub fn new() -> Self {
-        let model = gtk::StringList::new(&[]);
-        let selection = gtk::SingleSelection::new(Some(model.clone()));
-        selection.set_can_unselect(false);
-        let factory = gtk::SignalListItemFactory::new();
-        let list = gtk::ListView::new(Some(selection.clone()), Some(factory.clone()));
-        list.add_css_class("navigation-sidebar");
-        let root = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&list)
-            .build();
+        let thumbnails = Thumbnails::new();
+        let contents = Contents::new();
+        let bookmarks = BookmarkList::new();
+
+        let stack = adw::ViewStack::new();
+        stack.set_vexpand(true);
+        stack.add_titled_with_icon(thumbnails.widget(), Some("pages"), "Pages", "view-paged-symbolic");
+        stack.add_titled_with_icon(contents.widget(), Some("contents"), "Contents", "view-list-bullet-symbolic");
+        stack.add_titled_with_icon(bookmarks.widget(), Some("bookmarks"), "Bookmarks", "user-bookmarks-symbolic");
+
+        let switcher = adw::ViewSwitcher::builder().stack(&stack).policy(adw::ViewSwitcherPolicy::Narrow).build();
+        switcher.add_css_class("sidebar-switcher");
+        switcher.set_margin_top(6);
+        switcher.set_margin_bottom(6);
+        switcher.set_margin_start(6);
+        switcher.set_margin_end(6);
+
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        root.append(&switcher);
+        root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+        root.append(&stack);
 
         let inner = Rc::new(Inner {
             root,
-            list,
-            model,
-            selection,
-            pages: RefCell::default(),
-            rotation: Cell::new(Rotation::default()),
-            uri: RefCell::default(),
-            renderer: RefCell::default(),
-            document: Cell::new(0),
-            revision: Cell::new(0),
-            cache: RefCell::default(),
-            bound: RefCell::default(),
-            asked: Cell::new(false),
+            stack,
+            thumbnails,
+            contents,
+            bookmarks,
+            shown: Cell::new(false),
             syncing: Cell::new(false),
-            active: Cell::new(false),
-            night: Cell::new(false),
-            on_pick: RefCell::default(),
-        });
-
-        factory.connect_setup(|_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else { return };
-            let cell = gtk::Box::new(gtk::Orientation::Vertical, 6);
-            cell.set_margin_top(6);
-            cell.set_margin_bottom(6);
-            cell.append(&Page::new());
-            let number = gtk::Label::new(None);
-            number.add_css_class("caption");
-            number.add_css_class("numeric");
-            cell.append(&number);
-            item.set_child(Some(&cell));
+            on_event: RefCell::default(),
         });
 
         let weak = Rc::downgrade(&inner);
-        factory.connect_bind(move |_, item| {
-            let Some(inner) = weak.upgrade() else { return };
-            let Some((index, page, number)) = parts(item) else { return };
-            number.set_text(&(index + 1).to_string());
-            let (w, h) = inner.thumb_size(index);
-            page.set_page_size(w, h);
-            page.set_night(inner.night.get());
-            page.set_texture(inner.cache.borrow().get(&index).cloned());
-            inner.bound.borrow_mut().insert(index, page);
-            inner.ask();
-        });
-
-        let weak = Rc::downgrade(&inner);
-        factory.connect_unbind(move |_, item| {
-            let Some(inner) = weak.upgrade() else { return };
-            let Some((index, page, _)) = parts(item) else { return };
-            let mut bound = inner.bound.borrow_mut();
-            if bound.get(&index) == Some(&page) {
-                bound.remove(&index);
+        inner.thumbnails.connect_pick(move |page| {
+            if let Some(inner) = weak.upgrade() {
+                inner.emit(Event::Go(page, None));
             }
-            page.set_texture(None);
         });
-
         let weak = Rc::downgrade(&inner);
-        inner.selection.connect_selected_notify(move |selection| {
-            let Some(inner) = weak.upgrade() else { return };
-            if inner.syncing.get() {
-                return;
+        inner.contents.connect_pick(move |page, y| {
+            if let Some(inner) = weak.upgrade() {
+                inner.emit(Event::Go(page, y));
             }
-            let Ok(index) = usize::try_from(selection.selected()) else { return };
-            let pick = inner.on_pick.borrow();
-            if let Some(pick) = pick.as_ref() {
-                pick(index);
+        });
+        let weak = Rc::downgrade(&inner);
+        inner.bookmarks.connect_request(move |request| {
+            if let Some(inner) = weak.upgrade() {
+                inner.emit(Event::Bookmarks(request));
+            }
+        });
+        let weak = Rc::downgrade(&inner);
+        inner.stack.connect_visible_child_name_notify(move |_| {
+            let Some(inner) = weak.upgrade() else { return };
+            inner.wake();
+            if !inner.syncing.get() {
+                inner.emit(Event::Switched(inner.view()));
             }
         });
 
         Sidebar { inner }
     }
 
-    pub fn widget(&self) -> &gtk::ScrolledWindow {
+    pub fn widget(&self) -> &gtk::Box {
         &self.inner.root
     }
 
-    /// Called with a page index when the user picks a thumbnail.
-    pub fn connect_pick(&self, pick: impl Fn(usize) + 'static) {
-        self.inner.on_pick.replace(Some(Box::new(pick)));
+    pub fn connect_event(&self, f: impl Fn(Event) + 'static) {
+        self.inner.on_event.replace(Some(Rc::new(f)));
     }
 
-    pub fn show_document(&self, uri: String, pages: Vec<(f64, f64)>) {
+    pub fn view(&self) -> View {
+        self.inner.view()
+    }
+
+    pub fn set_view(&self, view: View) {
         let inner = &self.inner;
-        inner.clear();
-        let count = pages.len();
-        *inner.pages.borrow_mut() = pages;
-        inner.uri.replace(Some(uri));
-        let numbers: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
-        let numbers: Vec<&str> = numbers.iter().map(String::as_str).collect();
         inner.syncing.set(true);
-        inner.model.splice(0, 0, &numbers);
-        inner.selection.set_selected(0);
+        inner.stack.set_visible_child_name(view.name());
         inner.syncing.set(false);
-        if inner.active.get() {
-            inner.start();
-        }
+    }
+
+    /// Whether the bookmarks are on screen right now.
+    pub fn showing_bookmarks(&self) -> bool {
+        self.inner.shown.get() && self.view() == View::Bookmarks
+    }
+
+    pub fn show_document(&self, uri: String, pages: Vec<(f64, f64)>, outline: &[Heading]) {
+        let inner = &self.inner;
+        inner.thumbnails.show_document(uri, pages);
+        inner.contents.show(outline);
+        inner.bookmarks.show(&[], 0);
+        inner.wake();
     }
 
     pub fn clear(&self) {
-        self.inner.clear();
-    }
-
-    /// Pages turned in the reader are turned here too.
-    pub fn set_rotation(&self, rotation: Rotation) {
         let inner = &self.inner;
-        if inner.rotation.replace(rotation) == rotation {
-            return;
-        }
-        inner.cache.borrow_mut().clear();
-        for (&index, page) in inner.bound.borrow().iter() {
-            let (w, h) = inner.thumb_size(index);
-            page.set_page_size(w, h);
-            page.set_texture(None);
-        }
-        inner.ask();
+        inner.thumbnails.clear();
+        inner.contents.clear();
+        inner.bookmarks.show(&[], 0);
     }
 
-    /// Light and dark swapped, as on the pages being read.
-    pub fn set_night(&self, night: bool) {
-        self.inner.night.set(night);
-        for page in self.inner.bound.borrow().values() {
-            page.set_night(night);
-        }
+    pub fn set_bookmarks(&self, marks: &[Bookmark], current: usize) {
+        let inner = &self.inner;
+        inner.bookmarks.show(marks, current);
+        inner.thumbnails.set_bookmarked(marks.iter().map(|m| m.page).collect::<HashSet<_>>());
     }
 
-    /// Shown or hidden. Showing it for the first time is what starts it
-    /// drawing anything at all.
+    /// Shown or hidden. Nothing is drawn while hidden.
     pub fn set_active(&self, active: bool) {
-        let inner = &self.inner;
-        inner.active.set(active);
-        if active {
-            inner.start();
-            inner.scroll_to_selected();
-        }
+        self.inner.shown.set(active);
+        self.inner.wake();
     }
 
-    /// The file has been marked up: redraw these pages from it.
+    /// Follow the reader, on every tab.
+    pub fn set_current(&self, page: usize) {
+        let inner = &self.inner;
+        inner.thumbnails.set_current(page);
+        inner.contents.set_current(page);
+        inner.bookmarks.set_current(page);
+    }
+
+    pub fn set_rotation(&self, rotation: Rotation) {
+        self.inner.thumbnails.set_rotation(rotation);
+    }
+
+    pub fn set_night(&self, night: bool) {
+        self.inner.thumbnails.set_night(night);
+    }
+
+    /// The file has been marked up: redraw these pages' thumbnails.
     pub fn reload(&self, pages: &[usize], revision: u64) {
-        let inner = &self.inner;
-        inner.revision.set(revision);
-        // Not started yet: it opens the file as it is when it does start.
-        match inner.renderer.borrow().as_ref() {
-            Some(renderer) => renderer.reload(revision),
-            None => return,
-        }
-        let mut cache = inner.cache.borrow_mut();
-        for page in pages {
-            cache.remove(page);
-        }
-        drop(cache);
-        inner.ask();
+        self.inner.thumbnails.reload(pages, revision);
     }
-
-    /// Follow the reader: select the page being read, and bring it into view.
-    pub fn set_current(&self, index: usize) {
-        let inner = &self.inner;
-        let Ok(position) = u32::try_from(index) else { return };
-        if inner.selection.selected() == position {
-            return;
-        }
-        inner.syncing.set(true);
-        inner.selection.set_selected(position);
-        inner.syncing.set(false);
-        if inner.active.get() {
-            inner.scroll_to_selected();
-        }
-    }
-}
-
-/// The page number, thumbnail and label of a list row.
-fn parts(item: &glib::Object) -> Option<(usize, Page, gtk::Label)> {
-    let item = item.downcast_ref::<gtk::ListItem>()?;
-    let cell = item.child()?;
-    let page = cell.first_child()?.downcast::<Page>().ok()?;
-    let number = cell.last_child()?.downcast::<gtk::Label>().ok()?;
-    Some((usize::try_from(item.position()).ok()?, page, number))
 }
 
 impl Inner {
-    fn thumb_size(&self, index: usize) -> (i32, i32) {
-        let (w, h) = self.pages.borrow().get(index).copied().unwrap_or((1.0, 1.0));
-        let (w, h) = self.rotation.get().size(w, h);
-        (WIDTH as i32, (WIDTH * h / w.max(1.0)).round().max(1.0) as i32)
+    fn view(&self) -> View {
+        self.stack.visible_child_name().and_then(|name| View::from_name(&name)).unwrap_or_default()
     }
 
-    /// Device pixels per point for a page's thumbnail.
-    fn thumb_scale(&self, index: usize) -> f64 {
-        let (w, h) = self.pages.borrow().get(index).copied().unwrap_or((1.0, 1.0));
-        let (w, _) = self.rotation.get().size(w, h);
-        let screen = self
-            .root
-            .native()
-            .and_then(|native| native.surface())
-            .map_or_else(|| f64::from(self.root.scale_factor()), |surface| surface.scale());
-        WIDTH / w.max(1.0) * screen.max(1.0)
+    /// The thumbnails draw only while they can be seen.
+    fn wake(&self) {
+        self.thumbnails.set_active(self.shown.get() && self.view() == View::Pages);
     }
 
-    /// Start the drawing thread, the first time it is needed.
-    fn start(self: &Rc<Self>) {
-        if self.renderer.borrow().is_some() {
-            return;
+    fn emit(&self, event: Event) {
+        let callback = self.on_event.borrow().clone();
+        if let Some(callback) = callback {
+            callback(event);
         }
-        let Some(uri) = self.uri.borrow().clone() else { return };
-        let (sender, receiver) = async_channel::bounded(8);
-        self.renderer.replace(Some(Renderer::start(uri, self.revision.get(), sender)));
-        let id = self.document.get();
-        let weak = Rc::downgrade(self);
-        glib::spawn_future_local(async move {
-            while let Ok(rendered) = receiver.recv().await {
-                let Some(inner) = weak.upgrade() else { break };
-                if inner.document.get() != id {
-                    break;
-                }
-                inner.on_rendered(rendered);
-            }
-        });
-        self.ask();
-    }
-
-    /// Ask for the thumbnails on screen that are missing. Rows bind one at a
-    /// time as the list scrolls, so this waits until they have all bound and
-    /// asks once.
-    fn ask(self: &Rc<Self>) {
-        if !self.active.get() || self.asked.replace(true) {
-            return;
-        }
-        let weak = Rc::downgrade(self);
-        glib::idle_add_local_once(move || {
-            let Some(inner) = weak.upgrade() else { return };
-            inner.asked.set(false);
-            let renderer = inner.renderer.borrow();
-            let Some(renderer) = renderer.as_ref() else { return };
-            let cache = inner.cache.borrow();
-            let mut wanted: Vec<usize> =
-                inner.bound.borrow().keys().copied().filter(|index| !cache.contains_key(index)).collect();
-            wanted.sort_unstable();
-            let rotation = inner.rotation.get();
-            renderer.want(
-                wanted
-                    .into_iter()
-                    .map(|page| Job { page, scale: inner.thumb_scale(page), rotation })
-                    .collect(),
-            );
-        });
-    }
-
-    fn on_rendered(&self, rendered: Rendered) {
-        if rendered.rotation != self.rotation.get()
-            || rendered.requested != self.thumb_scale(rendered.page)
-            || rendered.revision != self.revision.get()
-        {
-            return; // Drawn for a turn, a screen or a file that has since changed.
-        }
-        let texture = texture(rendered.pixels);
-        if let Some(page) = self.bound.borrow().get(&rendered.page) {
-            page.set_texture(Some(texture.clone()));
-        }
-        let mut cache = self.cache.borrow_mut();
-        cache.insert(rendered.page, texture);
-        if cache.len() > CACHE {
-            let bound = self.bound.borrow();
-            cache.retain(|index, _| bound.contains_key(index));
-        }
-    }
-
-    fn scroll_to_selected(&self) {
-        let selected = self.selection.selected();
-        if selected != gtk::INVALID_LIST_POSITION {
-            self.list.scroll_to(selected, gtk::ListScrollFlags::NONE, None);
-        }
-    }
-
-    fn clear(&self) {
-        self.renderer.replace(None);
-        self.document.set(self.document.get() + 1);
-        self.cache.borrow_mut().clear();
-        self.bound.borrow_mut().clear();
-        self.pages.borrow_mut().clear();
-        self.uri.replace(None);
-        self.revision.set(0);
-        self.rotation.set(Rotation::default());
-        self.syncing.set(true);
-        self.model.splice(0, self.model.n_items(), &[]);
-        self.syncing.set(false);
     }
 }

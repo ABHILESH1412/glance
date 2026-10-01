@@ -348,8 +348,9 @@ impl Window {
         split.set_hexpand(true);
         split.set_sidebar(Some(imp.pdf_view.sidebar()));
         split.set_content(Some(content));
-        split.set_min_sidebar_width(150.0);
-        split.set_max_sidebar_width(190.0);
+        // Wide enough for a heading in the table of contents to be read.
+        split.set_min_sidebar_width(200.0);
+        split.set_max_sidebar_width(260.0);
         split.set_show_sidebar(false);
         body.append(split);
         imp.pdf_view.connect_status(glib::clone!(
@@ -363,10 +364,21 @@ impl Window {
             self,
             move |error| window.toast(&error)
         ));
+        imp.pdf_view.connect_bookmarks(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |event| window.on_bookmark(event)
+        ));
         // As the reader was last left.
         let reader = imp.reader_prefs.get();
         imp.pdf_view.set_mode(reader.mode);
         imp.pdf_view.set_night(reader.night);
+        imp.pdf_view.set_sidebar_view(reader.sidebar);
+        imp.pdf_view.connect_sidebar_view(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |view| window.update_prefs(|prefs| prefs.sidebar = view)
+        ));
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
         let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
@@ -393,11 +405,11 @@ impl Window {
         menu_button.set_menu_model(Some(menu));
         menu_button.set_primary(true);
 
-        // For PDFs only: the page thumbnails, and the page you are on, which
-        // can be typed over to go somewhere else.
+        // For PDFs only: the sidebar of pages, contents and bookmarks, and the
+        // page you are on, which can be typed over to go somewhere else.
         let sidebar_button = &imp.sidebar_button;
         sidebar_button.set_icon_name("sidebar-show-symbolic");
-        sidebar_button.set_tooltip_text(Some("Pages (F9)"));
+        sidebar_button.set_tooltip_text(Some("Sidebar (F9)"));
         sidebar_button.set_action_name(Some("win.show-pages"));
         sidebar_button.set_visible(false);
 
@@ -1802,6 +1814,9 @@ impl Window {
                 action.change_state(&false.to_variant());
             }
         }
+        if let Some(action) = self.lookup_action("bookmark").and_downcast::<gio::SimpleAction>() {
+            action.set_enabled(pdf);
+        }
         self.update_navigation();
         self.refresh_accels();
     }
@@ -1823,6 +1838,7 @@ impl Window {
             return;
         }
         imp.pdf_status.set(Some(status));
+        self.sync_bookmark();
         let noun = if status.pages == 1 { "page" } else { "pages" };
         imp.title.set_subtitle(&format!("PDF · {} {noun} · {:.0}%", status.pages, status.percent));
         // Not while someone is typing a number into it.
@@ -1909,6 +1925,22 @@ impl Window {
         ));
         self.add_action(&night);
 
+        // The page being read, bookmarked or not: a check in the menu.
+        let bookmark = gio::SimpleAction::new_stateful("bookmark", None, &false.to_variant());
+        bookmark.set_enabled(false);
+        bookmark.connect_change_state(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                if imp.showing_pdf.get() {
+                    imp.pdf_view.toggle_bookmark();
+                }
+                window.sync_bookmark();
+            }
+        ));
+        self.add_action(&bookmark);
+
         let pin = gio::SimpleAction::new("pin", Some(glib::VariantTy::STRING));
         pin.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -1972,6 +2004,42 @@ impl Window {
         self.add_action(&info);
     }
 
+    /// The menu's check follows the page being read.
+    fn sync_bookmark(&self) {
+        let imp = self.imp();
+        let on = imp.showing_pdf.get() && imp.pdf_view.is_bookmarked();
+        if let Some(action) = self.lookup_action("bookmark").and_downcast::<gio::SimpleAction>() {
+            if action.state().and_then(|state| state.get::<bool>()) != Some(on) {
+                action.set_state(&on.to_variant());
+            }
+        }
+    }
+
+    fn on_bookmark(&self, event: pdf::BookmarkEvent) {
+        self.sync_bookmark();
+        match event {
+            // In the list, a new bookmark shows for itself.
+            pdf::BookmarkEvent::Added { seen: true, .. } => {}
+            pdf::BookmarkEvent::Added { page, seen: false } => self.toast(&format!("Bookmarked page {}.", page + 1)),
+            pdf::BookmarkEvent::Removed(mark) => {
+                let toast = adw::Toast::builder()
+                    .title(format!("Removed the bookmark on page {}.", mark.page + 1))
+                    .button_label("_Undo")
+                    .build();
+                toast.connect_button_clicked(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_| {
+                        window.imp().pdf_view.restore_bookmark(mark.clone());
+                        window.sync_bookmark();
+                    }
+                ));
+                self.imp().toasts.add_toast(toast);
+            }
+            pdf::BookmarkEvent::Failed(error) => self.toast(&error),
+        }
+    }
+
     fn update_prefs(&self, change: impl FnOnce(&mut prefs::Reader)) {
         let imp = self.imp();
         let mut prefs = imp.reader_prefs.get();
@@ -1999,6 +2067,7 @@ impl Window {
         let pins = gio::Menu::new();
         pins.append(Some("Add _Note Here"), Some("win.pin::note-here"));
         pins.append(Some("Add Speech _Bubble Here"), Some("win.pin::bubble-here"));
+        pins.append(Some("_Bookmark This Page"), Some("win.bookmark"));
         let menu = gio::Menu::new();
         menu.append_section(None, &clipboard);
         menu.append_section(None, &marks);

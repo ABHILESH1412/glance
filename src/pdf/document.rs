@@ -15,6 +15,7 @@ use gtk::prelude::*;
 use gtk::{cairo, gio, glib};
 
 use super::layout::{self, Rotation};
+use super::outline::{self, Heading};
 
 /// What the window needs to lay out a document before any page is drawn.
 pub struct Opened {
@@ -23,6 +24,10 @@ pub struct Opened {
     pub uri: String,
     /// Every page's size in points, with its rotation already applied.
     pub pages: Vec<(f64, f64)>,
+    /// The table of contents, if it has one.
+    pub outline: Vec<Heading>,
+    /// The document's permanent identifier, if it has one.
+    pub id: Option<String>,
 }
 
 /// One rendered page: cairo's ARGB32, premultiplied, in native byte order.
@@ -61,8 +66,30 @@ pub fn open(path: &Path) -> Result<Opened, String> {
         // A page Poppler cannot read is laid out at US Letter rather than
         // dropped, so the page numbers after it stay right.
         .map(|i| document.page(i).map_or((612.0, 792.0), |page| page.size()))
-        .collect();
-    Ok(Opened { path: path.to_path_buf(), uri, pages })
+        .collect::<Vec<_>>();
+    let outline = outline::read(&document, &pages);
+    Ok(Opened { path: path.to_path_buf(), uri, outline, id: permanent_id(&document), pages })
+}
+
+/// The first half of the document's `/ID`, which stays the same through
+/// every edit: Poppler gives it as 32 hex digits. Read through C, as the
+/// bindings take it for a NUL-terminated string, which it is not.
+fn permanent_id(document: &poppler::Document) -> Option<String> {
+    use glib::translate::ToGlibPtr;
+    let mut permanent: *mut std::ffi::c_char = std::ptr::null_mut();
+    let mut update: *mut std::ffi::c_char = std::ptr::null_mut();
+    // SAFETY: on success both are 32-byte allocations of Poppler's, read
+    // within their length and freed here.
+    unsafe {
+        let found = poppler::ffi::poppler_document_get_id(document.to_glib_none().0, &mut permanent, &mut update);
+        let id = (found != 0 && !permanent.is_null())
+            .then(|| std::slice::from_raw_parts(permanent.cast::<u8>(), 32))
+            .filter(|bytes| bytes.iter().all(u8::is_ascii_hexdigit))
+            .map(|bytes| String::from_utf8_lossy(bytes).to_ascii_lowercase());
+        glib::ffi::g_free(permanent.cast());
+        glib::ffi::g_free(update.cast());
+        id
+    }
 }
 
 /// Draw one page at `scale` device pixels per point, turned by `rotation`, on

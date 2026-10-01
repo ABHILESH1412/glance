@@ -13,6 +13,9 @@
 //! and text tools in `images::edit` are the obvious ones for annotating a page.
 
 mod annots;
+mod bookmark_list;
+mod bookmarks;
+mod contents;
 mod document;
 mod editor;
 mod info;
@@ -21,10 +24,12 @@ mod layout;
 mod markup;
 mod newer;
 mod notes;
+mod outline;
 mod page;
 mod render;
 mod search;
 mod sidebar;
+mod thumbnails;
 mod view;
 
 pub use document::{is_pdf, open, Opened};
@@ -33,7 +38,8 @@ pub use info::{gather as document_info, Info};
 pub use layout::Mode;
 pub use markup::Style;
 pub use notes::TextStyle;
-pub use view::{Marked, PdfView, Pinned, SearchStatus, Status, Tool};
+pub use sidebar::View as SidebarView;
+pub use view::{BookmarkEvent, Marked, PdfView, Pinned, SearchStatus, Status, Tool};
 
 /// Whether this Poppler can draw on pages: ink needs 25.06.
 pub fn can_draw() -> bool {

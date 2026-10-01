@@ -118,6 +118,10 @@ fn load_css() {
         button.text-bold label { font-weight: bold; }
         button.text-italic label { font-style: italic; }
         button.text-underline label { text-decoration-line: underline; }
+        /* The heading being read, and the bookmark for the page being read. */
+        .contents-current .contents-title { font-weight: bold; color: @accent_color; }
+        .bookmark-current label:not(.dim-label) { font-weight: bold; }
+        .bookmark-current > box > image { color: @accent_color; }
         .image-actions button:disabled {
             color: alpha(@window_fg_color, 0.35);
             background: alpha(@window_fg_color, 0.06);
@@ -206,6 +210,7 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.undo-mark", idle: &[], typing: &[] },
     Accel { action: "win.redo-mark", idle: &[], typing: &[] },
     Accel { action: "win.document-info", idle: &[], typing: &[] },
+    Accel { action: "win.bookmark", idle: &[], typing: &[] },
     Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
 ];
 
@@ -244,6 +249,8 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.undo-mark", &["<Primary>z"]),
     ("win.redo-mark", &["<Primary><Shift>z", "<Primary>y"]),
     ("win.document-info", &["<Primary>i"]),
+    // Ctrl+D bookmarks the page, as in Preview and every browser.
+    ("win.bookmark", &["<Primary>d"]),
 ];
 
 /// An action's keys, while typing or not, with a PDF open or not.

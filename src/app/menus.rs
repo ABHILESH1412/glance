@@ -138,16 +138,24 @@ pub fn pdf_menu() -> gio::Menu {
     colours.append_item(&icon("Other Colour…", "win.pick-highlight-colour", "list-add-symbolic"));
     menu.append_item(&as_row(&colours, Some("Highlight Colour")));
 
+    // Marking the document up, then finding the way round it.
     menu.append_section(
         None,
         &section(&[
             item("_Draw and Write", "win.draw-panel"),
+            item("Add _Note", "win.pin::note"),
+            item("Add Speech _Bubble", "win.pin::bubble"),
+        ]),
+    );
+    menu.append_section(
+        None,
+        &section(&[
             item("_Find…", "win.find"),
-            item("Show _Pages", "win.show-pages"),
+            item("Show _Sidebar", "win.show-pages"),
+            item("Book_mark This Page", "win.bookmark"),
             item("Document _Info", "win.document-info"),
         ]),
     );
-    menu.append_section(None, &section(&[item("Add _Note", "win.pin::note"), item("Add Speech _Bubble", "win.pin::bubble")]));
 
     let layouts = gio::Menu::new();
     layouts.append_item(&item("_Continuous Scroll", "win.pdf-layout::continuous"));

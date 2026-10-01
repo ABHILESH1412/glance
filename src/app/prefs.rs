@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! How the reader was last set up — highlight colour, night mode, page
-//! layout — remembered between runs.
+//! layout, the sidebar's tab — remembered between runs.
 //!
 //! A plain file of `key=value` lines, like the theme's, rather than GSettings,
 //! which would need a schema installed system-wide. Anything missing or
@@ -11,18 +11,24 @@
 
 use gtk::glib;
 
-use crate::pdf::{Mode, Rgb};
+use crate::pdf::{Mode, Rgb, SidebarView};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reader {
     pub highlight: Rgb,
     pub night: bool,
     pub mode: Mode,
+    pub sidebar: SidebarView,
 }
 
 impl Default for Reader {
     fn default() -> Self {
-        Reader { highlight: Rgb(0xffff, 0xe4e4, 0x0000), night: false, mode: Mode::Continuous }
+        Reader {
+            highlight: Rgb(0xffff, 0xe4e4, 0x0000),
+            night: false,
+            mode: Mode::Continuous,
+            sidebar: SidebarView::Pages,
+        }
     }
 }
 
@@ -61,6 +67,7 @@ impl Reader {
                 "highlight" => reader.highlight = Rgb::from_hex(value).unwrap_or(reader.highlight),
                 "night" => reader.night = value == "true",
                 "layout" => reader.mode = mode_from(value).unwrap_or(reader.mode),
+                "sidebar" => reader.sidebar = SidebarView::from_name(value).unwrap_or(reader.sidebar),
                 _ => {}
             }
         }
@@ -68,7 +75,13 @@ impl Reader {
     }
 
     fn text(&self) -> String {
-        format!("highlight={}\nnight={}\nlayout={}\n", self.highlight.hex(), self.night, mode_name(self.mode))
+        format!(
+            "highlight={}\nnight={}\nlayout={}\nsidebar={}\n",
+            self.highlight.hex(),
+            self.night,
+            mode_name(self.mode),
+            self.sidebar.name()
+        )
     }
 
     pub fn save(&self) {
@@ -86,12 +99,17 @@ mod tests {
 
     #[test]
     fn preferences_come_back_as_they_were_saved() {
-        let reader = Reader { highlight: Rgb(0x7f7f, 0xe3e3, 0x5a5a), night: true, mode: Mode::Double };
+        let reader = Reader {
+            highlight: Rgb(0x7f7f, 0xe3e3, 0x5a5a),
+            night: true,
+            mode: Mode::Double,
+            sidebar: SidebarView::Contents,
+        };
         assert_eq!(Reader::parse(&reader.text()), reader);
     }
 
     #[test]
     fn nonsense_falls_back_to_the_defaults() {
-        assert_eq!(Reader::parse("highlight=blue\nlayout=sideways\nnoise"), Reader::default());
+        assert_eq!(Reader::parse("highlight=blue\nlayout=sideways\nsidebar=left\nnoise"), Reader::default());
     }
 }

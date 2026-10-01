@@ -12,10 +12,10 @@ Tick a box when a feature ships.
 | Area | Glance has | Partial |
 |---|---|---|
 | Images | 25 / 64 | 9 |
-| PDF | 9 / 28 | 1 |
+| PDF | 11 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **36 / 122** | **11** |
+| **Total** | **38 / 122** | **11** |
 
 ---
 
@@ -113,9 +113,9 @@ annotations, so every PDF reader shows them.
 - [x] Open and render PDFs
 - [x] Page thumbnails in a sidebar
 - [ ] Contact sheet (grid of every page)
-- [ ] Table of contents / outline
+- [x] Table of contents / outline — in the sidebar, following the section being read
 - [x] Continuous scroll, single page, and two-page layouts
-- [ ] Bookmarks
+- [x] Bookmarks — kept beside Glance's settings, so the file is not changed
 - [x] Search the text
 - [ ] Present as a slideshow
 - [x] Document info (title, author, page count, page size)
@@ -232,14 +232,14 @@ Things Glance does that Preview doesn't:
 
 Roughly in order of value for effort:
 
-1. **PDF table of contents and bookmarks** (section 6) — Poppler already reads a
-   document's outline; it needs a list in the page sidebar.
-2. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
+1. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
    sharpness and levels all fit the existing adjust pipeline.
-3. **EXIF panel and print** (sections 1 and 15) — small, and people expect them.
-4. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
+2. **EXIF panel and print** (sections 1 and 15) — small, and people expect them.
+3. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
    drawn once and placed anywhere, building on the pen the Draw panel already has.
-5. **PDF pages** (section 9) — combining, reordering and deleting pages.
+4. **PDF pages** (section 9) — combining, reordering and deleting pages; the sidebar's
+   Pages tab is the natural place to drag them around.
+5. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
 6. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.
 

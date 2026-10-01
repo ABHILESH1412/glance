@@ -24,6 +24,10 @@
 //!
 //! What a press on a page does depends on the tool: select text, draw with
 //! one of the image editor's pens and shapes, or place and pick text boxes.
+//!
+//! Beside the pages, the sidebar finds the way round: thumbnails, the table
+//! of contents, and bookmarks, which are kept apart from the file (see
+//! `bookmarks`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -37,16 +41,19 @@ use gtk::{gdk, gio, glib, graphene, pango};
 use crate::images::edit::draw;
 
 use super::annots::{self, Annotation, Rgb};
+use super::bookmark_list::Request;
+use super::bookmarks::{self, Bookmark};
 use super::document::{self, Opened, Pixels, Spot, Unit};
 use super::editor::{Commit, Editor};
 use super::layout::{self, Layout, Mode, Rotation};
 use super::markup::{self, Mark, Style};
 use super::ink::{self, Drawing};
 use super::notes::{self, Note, TextBox, TextStyle};
+use super::outline::{self, Heading};
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
-use super::sidebar::Sidebar;
+use super::sidebar::{Event as SidebarEvent, Sidebar, View as SidebarView};
 
 /// Pages drawn ahead of the ones on screen, in each direction.
 const PREFETCH: usize = 1;
@@ -59,6 +66,8 @@ const SETTLE: Duration = Duration::from_millis(120);
 /// quarter of the way down the window. A page moved to the top of the window
 /// is then the current page, as soon as it gets there.
 const READING_LINE: f64 = 0.25;
+/// Room left above a heading gone to from the table of contents, in pixels.
+const HEADING_ROOM: f64 = 12.0;
 /// One page at a time: how hard to keep scrolling past a page's end before
 /// the next one comes, for a wheel's notches and a touchpad's pixels, and how
 /// long before another turn, so one flick does not fly through the document.
@@ -143,6 +152,15 @@ struct Moving {
 
 pub struct PdfView {
     inner: Rc<Inner>,
+}
+
+/// A bookmark added or taken away, for the window to tell the reader about.
+pub enum BookmarkEvent {
+    /// `seen` when the bookmarks were on screen, where it shows for itself.
+    Added { page: usize, seen: bool },
+    /// What was removed, so it can be put back.
+    Removed(Bookmark),
+    Failed(String),
 }
 
 struct Inner {
@@ -242,6 +260,13 @@ struct Inner {
     /// Where a press with the text tool landed on empty page.
     placing: Cell<Option<Spot>>,
     on_chosen: RefCell<Option<Box<dyn Fn(Option<(String, TextStyle)>)>>>,
+    outline: RefCell<Vec<Heading>>,
+    /// The reader's bookmarks in this document, in page order, and which
+    /// document they are kept under.
+    bookmarks: RefCell<Vec<Bookmark>>,
+    bookmark_key: RefCell<Option<bookmarks::Key>>,
+    on_bookmarks: RefCell<Option<Box<dyn Fn(BookmarkEvent)>>>,
+    on_sidebar_view: RefCell<Option<Box<dyn Fn(SidebarView)>>>,
 }
 
 impl PdfView {
@@ -310,6 +335,11 @@ impl PdfView {
             restyle: RefCell::default(),
             placing: Cell::new(None),
             on_chosen: RefCell::default(),
+            outline: RefCell::default(),
+            bookmarks: RefCell::default(),
+            bookmark_key: RefCell::default(),
+            on_bookmarks: RefCell::default(),
+            on_sidebar_view: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -319,9 +349,55 @@ impl PdfView {
         &self.inner.root
     }
 
-    /// The page thumbnails, for the window to put beside the reader.
-    pub fn sidebar(&self) -> &gtk::ScrolledWindow {
+    /// Pages, contents and bookmarks, for the window to put beside the reader.
+    pub fn sidebar(&self) -> &gtk::Box {
         self.inner.sidebar.widget()
+    }
+
+    /// Which of them the sidebar shows.
+    pub fn set_sidebar_view(&self, view: SidebarView) {
+        self.inner.sidebar.set_view(view);
+    }
+
+    /// Called when the reader picks another of them.
+    pub fn connect_sidebar_view(&self, callback: impl Fn(SidebarView) + 'static) {
+        self.inner.on_sidebar_view.replace(Some(Box::new(callback)));
+    }
+
+    /// Whether the page being read is bookmarked.
+    pub fn is_bookmarked(&self) -> bool {
+        let page = self.inner.reported_page();
+        self.inner.bookmarks.borrow().iter().any(|mark| mark.page == page)
+    }
+
+    /// Bookmark the page being read, or take its bookmark away.
+    pub fn toggle_bookmark(&self) {
+        let inner = &self.inner;
+        if inner.uri.borrow().is_none() {
+            return;
+        }
+        let page = inner.reported_page();
+        if inner.bookmarks.borrow().iter().any(|mark| mark.page == page) {
+            inner.remove_bookmark(page);
+        } else {
+            inner.add_bookmark(page);
+        }
+    }
+
+    /// Put back a bookmark that was removed.
+    pub fn restore_bookmark(&self, mark: Bookmark) {
+        let inner = &self.inner;
+        if mark.page >= inner.pages.borrow().len() {
+            return;
+        }
+        let mut marks = inner.bookmarks.borrow().clone();
+        marks.retain(|m| m.page != mark.page);
+        marks.push(mark);
+        inner.set_bookmarks(marks);
+    }
+
+    pub fn connect_bookmarks(&self, callback: impl Fn(BookmarkEvent) + 'static) {
+        self.inner.on_bookmarks.replace(Some(Box::new(callback)));
     }
 
     /// The sidebar is on screen, or not. It draws nothing while hidden.
@@ -356,7 +432,14 @@ impl PdfView {
                 widget
             })
             .collect();
-        inner.sidebar.show_document(opened.uri.clone(), opened.pages.clone());
+        inner.sidebar.show_document(opened.uri.clone(), opened.pages.clone(), &opened.outline);
+        let key = bookmarks::Key { uri: opened.uri.clone(), id: opened.id.clone() };
+        let mut marks = bookmarks::load(&key);
+        marks.retain(|mark| mark.page < count);
+        inner.sidebar.set_bookmarks(&marks, 0);
+        inner.bookmarks.replace(marks);
+        inner.bookmark_key.replace(Some(key));
+        inner.outline.replace(opened.outline);
         *inner.pages.borrow_mut() = opened.pages;
         *inner.widgets.borrow_mut() = widgets;
         *inner.rendered.borrow_mut() = vec![0.0; count];
@@ -653,9 +736,30 @@ impl Inner {
         }
 
         let weak = Rc::downgrade(this);
-        this.sidebar.connect_pick(move |index| {
-            if let Some(inner) = weak.upgrade() {
-                inner.go_to_page(index);
+        this.sidebar.connect_event(move |event| {
+            let Some(inner) = weak.upgrade() else { return };
+            match event {
+                SidebarEvent::Go(page, y) => inner.go_to(page, y),
+                SidebarEvent::Switched(view) => {
+                    if let Some(callback) = inner.on_sidebar_view.borrow().as_ref() {
+                        callback(view);
+                    }
+                }
+                SidebarEvent::Bookmarks(Request::Go(page)) => inner.go_to_page(page),
+                SidebarEvent::Bookmarks(Request::Add) => {
+                    let page = inner.reported_page();
+                    if !inner.bookmarks.borrow().iter().any(|mark| mark.page == page) {
+                        inner.add_bookmark(page);
+                    }
+                }
+                SidebarEvent::Bookmarks(Request::Remove(page)) => inner.remove_bookmark(page),
+                SidebarEvent::Bookmarks(Request::Rename(page, name)) => {
+                    let mut marks = inner.bookmarks.borrow().clone();
+                    if let Some(mark) = marks.iter_mut().find(|mark| mark.page == page) {
+                        mark.name = name;
+                    }
+                    inner.set_bookmarks(marks);
+                }
             }
         });
 
@@ -921,6 +1025,35 @@ impl Inner {
         self.jumped.set(None);
         self.go_to_page(current);
         self.settle_then_render();
+    }
+
+    /// Go to a page, and as far down it as `y` says, in points from its top:
+    /// a heading in the table of contents is brought near the top of the
+    /// window, not just its page.
+    fn go_to(&self, index: usize, y: Option<f64>) {
+        let Some(&(width, height)) = self.pages.borrow().get(index) else { return };
+        // Turned a quarter, the heading's height on the page is its distance
+        // across the screen; the page's top is the best there is.
+        let y = y.and_then(|y| match self.rotation.get().quarters() {
+            0 | 2 => Some(self.rotation.get().apply(0.0, y, width, height).1),
+            _ => None,
+        });
+        let Some(y) = y else {
+            self.go_to_page(index);
+            return;
+        };
+        // A little above the heading, so it is not hard against the edge.
+        let offset = (y * self.scale.get() - HEADING_ROOM).max(0.0);
+        if self.mode.get() == Mode::Single {
+            self.show_page(index, false);
+            self.scroll_to(None, Some(offset));
+            return;
+        }
+        let v = self.root.vadjustment();
+        let top = self.layout.borrow().top(index);
+        v.set_value(if offset > 0.0 { top + offset } else { self.row_top(index) });
+        self.jumped.set(Some((index, v.value())));
+        self.emit_status();
     }
 
     fn go_to_page(&self, index: usize) {
@@ -1223,6 +1356,55 @@ impl Inner {
 
     fn path(&self) -> Option<PathBuf> {
         self.uri.borrow().as_deref().and_then(|uri| gio::File::for_uri(uri).path())
+    }
+
+    /// The page the header says is being read, counting from zero.
+    fn reported_page(&self) -> usize {
+        self.last_status.get().map_or_else(|| self.current_page(), |status| status.page.saturating_sub(1))
+    }
+
+    /// A new bookmark, named for the heading the page is under, if any.
+    fn add_bookmark(&self, page: usize) {
+        if page >= self.pages.borrow().len() {
+            return;
+        }
+        let name = outline::covering(&self.outline.borrow(), page)
+            .map_or_else(|| format!("Page {}", page + 1), |heading| heading.title.clone());
+        let seen = self.sidebar.showing_bookmarks();
+        let mut marks = self.bookmarks.borrow().clone();
+        marks.push(Bookmark { page, name });
+        if self.set_bookmarks(marks) {
+            self.emit_bookmark(BookmarkEvent::Added { page, seen });
+        }
+    }
+
+    fn remove_bookmark(&self, page: usize) {
+        let mut marks = self.bookmarks.borrow().clone();
+        let Some(i) = marks.iter().position(|mark| mark.page == page) else { return };
+        let removed = marks.remove(i);
+        if self.set_bookmarks(marks) {
+            self.emit_bookmark(BookmarkEvent::Removed(removed));
+        }
+    }
+
+    /// Keep a new set of bookmarks, and show it. False if it could not be
+    /// saved, in which case nothing changes.
+    fn set_bookmarks(&self, mut marks: Vec<Bookmark>) -> bool {
+        let Some(key) = self.bookmark_key.borrow().clone() else { return false };
+        marks.sort_by_key(|mark| mark.page);
+        if let Err(error) = bookmarks::save(&key, &marks) {
+            self.emit_bookmark(BookmarkEvent::Failed(format!("Could not save the bookmarks: {error}")));
+            return false;
+        }
+        self.sidebar.set_bookmarks(&marks, self.reported_page());
+        self.bookmarks.replace(marks);
+        true
+    }
+
+    fn emit_bookmark(&self, event: BookmarkEvent) {
+        if let Some(callback) = self.on_bookmarks.borrow().as_ref() {
+            callback(event);
+        }
     }
 
     fn set_selection(&self, selection: Option<Selection>) {
@@ -2009,6 +2191,9 @@ impl Inner {
         self.undone.borrow_mut().clear();
         self.emit_history();
         self.sidebar.clear();
+        self.outline.borrow_mut().clear();
+        self.bookmarks.borrow_mut().clear();
+        self.bookmark_key.replace(None);
     }
 }
 
