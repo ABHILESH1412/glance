@@ -21,6 +21,27 @@ const MATCH: gdk::RGBA = gdk::RGBA::new(1.0, 0.8, 0.0, 0.35);
 /// The match being looked at: stronger, and orange, so it stands out from the
 /// rest at a glance.
 const CURRENT: gdk::RGBA = gdk::RGBA::new(1.0, 0.45, 0.0, 0.55);
+/// Where a note being dragged will land.
+const GHOST: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 0.2);
+const GHOST_EDGE: gdk::RGBA = gdk::RGBA::new(0.208, 0.518, 0.894, 0.9);
+
+/// Night mode: light and dark swapped, but colours kept. Plain inversion turns
+/// red ink cyan and a photograph into its negative; this inverts, then turns
+/// the hue back half a circle, so white paper goes black, black text goes
+/// white, and red stays red.
+///
+/// GSK multiplies a row of colour by the matrix, so row `i` here is what input
+/// channel `i` gives each output channel: the transpose of the usual form.
+fn night() -> (graphene::Matrix, graphene::Vec4) {
+    #[rustfmt::skip]
+    let matrix = graphene::Matrix::from_float([
+         0.574, -0.426, -0.426, 0.0,
+        -1.430, -0.430, -1.430, 0.0,
+        -0.144, -0.144,  0.856, 0.0,
+         0.0,    0.0,    0.0,   1.0,
+    ]);
+    (matrix, graphene::Vec4::new(1.0, 1.0, 1.0, 0.0))
+}
 
 mod imp {
     use super::*;
@@ -36,6 +57,9 @@ mod imp {
         /// the same fractions.
         pub matches: RefCell<Vec<[f64; 4]>>,
         pub current: RefCell<Vec<[f64; 4]>>,
+        /// Where a note or speech bubble being dragged would land.
+        pub ghost: RefCell<Option<[f64; 4]>>,
+        pub night: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -67,9 +91,17 @@ mod imp {
                 0.0,
                 4.0,
             );
+            let night = self.night.get();
+            if night {
+                let (matrix, offset) = super::night();
+                snapshot.push_color_matrix(&matrix, &offset);
+            }
             snapshot.append_color(&gdk::RGBA::WHITE, &bounds);
             if let Some(texture) = self.texture.borrow().as_ref() {
                 snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Linear, &bounds);
+            }
+            if night {
+                snapshot.pop();
             }
             // Matches under the selection, so selecting a found word shows as
             // selected.
@@ -87,6 +119,11 @@ mod imp {
                     );
                     snapshot.append_color(colour, &area);
                 }
+            }
+            if let Some([x, y, rw, rh]) = *self.ghost.borrow() {
+                let area = graphene::Rect::new((x as f32) * w, (y as f32) * h, (rw as f32) * w, (rh as f32) * h);
+                snapshot.append_color(&GHOST, &area);
+                snapshot.append_border(&gsk::RoundedRect::from_rect(area, 2.0), &[1.5; 4], &[GHOST_EDGE; 4]);
             }
         }
     }
@@ -125,6 +162,22 @@ impl Page {
         if had_any || !matches.is_empty() || !current.is_empty() {
             imp.matches.replace(matches);
             imp.current.replace(current);
+            self.queue_draw();
+        }
+    }
+
+    /// Swap light and dark, for reading at night.
+    pub fn set_night(&self, night: bool) {
+        if self.imp().night.replace(night) != night {
+            self.queue_draw();
+        }
+    }
+
+    /// Outline where something being dragged would land, as fractions of the
+    /// page; `None` once it is dropped.
+    pub fn set_ghost(&self, ghost: Option<[f64; 4]>) {
+        if *self.imp().ghost.borrow() != ghost {
+            self.imp().ghost.replace(ghost);
             self.queue_draw();
         }
     }

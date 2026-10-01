@@ -53,6 +53,7 @@ struct Inner {
     syncing: Cell<bool>,
     /// On screen. Nothing is drawn until it is.
     active: Cell<bool>,
+    night: Cell<bool>,
     on_pick: RefCell<Option<Box<dyn Fn(usize)>>>,
 }
 
@@ -85,6 +86,7 @@ impl Sidebar {
             asked: Cell::new(false),
             syncing: Cell::new(false),
             active: Cell::new(false),
+            night: Cell::new(false),
             on_pick: RefCell::default(),
         });
 
@@ -108,6 +110,7 @@ impl Sidebar {
             number.set_text(&(index + 1).to_string());
             let (w, h) = inner.thumb_size(index);
             page.set_page_size(w, h);
+            page.set_night(inner.night.get());
             page.set_texture(inner.cache.borrow().get(&index).cloned());
             inner.bound.borrow_mut().insert(index, page);
             inner.ask();
@@ -183,6 +186,14 @@ impl Sidebar {
             page.set_texture(None);
         }
         inner.ask();
+    }
+
+    /// Light and dark swapped, as on the pages being read.
+    pub fn set_night(&self, night: bool) {
+        self.inner.night.set(night);
+        for page in self.inner.bound.borrow().values() {
+            page.set_night(night);
+        }
     }
 
     /// Shown or hidden. Showing it for the first time is what starts it

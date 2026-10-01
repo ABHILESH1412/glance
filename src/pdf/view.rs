@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Reading a PDF: every page in one scrolling column.
+//! Reading a PDF: every page in one scrolling column, one page at a time, or
+//! two side by side.
 //!
 //! Only the pages on screen are drawn, plus one either side so a scroll never
 //! shows a blank page for long. Pages well off screen give their pixels back,
@@ -15,20 +16,27 @@
 //! triple-click a line. The highlight is drawn over the page rather than into
 //! it, so selecting never waits for a page to be redrawn.
 //!
-//! Selected text can be highlighted, underlined or struck through. Those marks
-//! go into the file itself (see `markup`), the pages they are on are redrawn
-//! from it, and each change can be undone and redone.
+//! Selected text can be highlighted, underlined or struck through, and notes
+//! and speech bubbles put on a page. They go into the file itself (see
+//! `annots`), the pages they are on are redrawn from it, and each change can
+//! be undone and redone. A note or bubble is opened by clicking it, and moved
+//! by dragging it.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib};
+use gtk::{gdk, gio, glib, graphene};
 
+use super::annots::{self, Annotation, Rgb};
 use super::document::{self, Opened, Pixels, Spot, Unit};
-use super::layout::{self, Layout, Rotation};
+use super::editor::{Commit, Editor};
+use super::layout::{self, Layout, Mode, Rotation};
 use super::markup::{self, Mark, Style};
+use super::notes::{self, Bubble, Note};
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
@@ -45,6 +53,14 @@ const SETTLE: Duration = Duration::from_millis(120);
 /// quarter of the way down the window. A page moved to the top of the window
 /// is then the current page, as soon as it gets there.
 const READING_LINE: f64 = 0.25;
+/// One page at a time: how hard to keep scrolling past a page's end before
+/// the next one comes, for a wheel's notches and a touchpad's pixels, and how
+/// long before another turn, so one flick does not fly through the document.
+const PUSH_NOTCHES: f64 = 1.0;
+const PUSH_PIXELS: f64 = 80.0;
+const TURN_PAUSE: Duration = Duration::from_millis(350);
+/// A drag shorter than this, in points, is a click.
+const NUDGE: f64 = 1.5;
 
 /// What the header shows: where you are, and at what size.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,10 +90,19 @@ pub enum Marked {
     Failed(String),
 }
 
-/// One step to undo: marks put on, or taken off, together.
+/// What kind of thing to put on a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pinned {
+    Note,
+    Bubble,
+}
+
+/// One step to undo: annotations taken off and put on together. Recolouring a
+/// highlight is both.
+#[derive(Default)]
 struct Change {
-    marks: Vec<Mark>,
-    added: bool,
+    removed: Vec<Annotation>,
+    added: Vec<Annotation>,
 }
 
 /// A selection: where the drag started, where it is now, and by what unit.
@@ -88,31 +113,44 @@ struct Selection {
     unit: Unit,
 }
 
+/// A note or bubble being dragged, and how far so far, in points.
+struct Moving {
+    annotation: Annotation,
+    from: Spot,
+    by: (f64, f64),
+}
+
 pub struct PdfView {
     inner: Rc<Inner>,
 }
 
 struct Inner {
     root: gtk::ScrolledWindow,
-    column: gtk::Box,
+    /// Every page, placed where the layout says.
+    column: gtk::Fixed,
     sidebar: Sidebar,
+    editor: Editor,
     /// Page sizes in points, as the PDF gives them, before any turning.
     pages: RefCell<Vec<(f64, f64)>>,
     widgets: RefCell<Vec<Page>>,
     /// The device scale each page was last drawn at, or 0.0 for not drawn.
     rendered: RefCell<Vec<f64>>,
     layout: RefCell<Layout>,
+    mode: Cell<Mode>,
+    /// The page shown when they are shown one at a time.
+    shown: Cell<usize>,
     rotation: Cell<Rotation>,
+    night: Cell<bool>,
     /// Logical pixels per point.
     scale: Cell<f64>,
-    /// Following the window's width, until the user zooms by hand.
+    /// Following the window's size, until the user zooms by hand.
     fit: Cell<bool>,
-    /// A refit to a new window width is waiting for GTK to finish laying out.
+    /// A refit to a new window size is waiting for GTK to finish laying out.
     refit_queued: Cell<bool>,
     uri: RefCell<Option<String>>,
     renderer: RefCell<Option<Renderer>>,
-    /// The document again, on this thread, for selecting text. Opened the
-    /// first time anything is selected, not before.
+    /// The document again, on this thread, for selecting text and reading and
+    /// writing annotations. Opened the first time it is needed, not before.
     reader: RefCell<Option<poppler::Document>>,
     /// Bumped for every document, so pages drawn for the last one are ignored.
     document: Cell<u64>,
@@ -125,12 +163,24 @@ struct Inner {
     /// too near the end to reach the top of the window.
     jumped: Cell<Option<(usize, f64)>>,
     pointer: Cell<Option<(f64, f64)>>,
+    /// Where the context menu was opened, in the window's coordinates.
+    menu_point: Cell<Option<(f64, f64)>>,
     pinch_from: Cell<f64>,
+    /// One page at a time: scrolling pushed past the page's end so far, and
+    /// when the page last turned.
+    push: Cell<f64>,
+    turned_at: Cell<Option<Instant>>,
     selection: Cell<Option<Selection>>,
     /// Pages currently showing a highlight, so they can be cleared.
     highlighted: RefCell<Vec<usize>>,
     /// Consecutive presses in the same spot, for double and triple clicks.
     presses: Cell<(u32, Option<(Instant, f64, f64)>)>,
+    /// The notes and bubbles on each page looked at, read from the file once
+    /// per version of it.
+    pinned: RefCell<HashMap<usize, Vec<Annotation>>>,
+    moving: RefCell<Option<Moving>>,
+    /// The page whose pointer is showing a hand over a note.
+    hovering: Cell<Option<usize>>,
     status: RefCell<Option<Box<dyn Fn(Status)>>>,
     last_status: Cell<Option<Status>>,
     searcher: RefCell<Option<Searcher>>,
@@ -152,30 +202,32 @@ struct Inner {
     history: RefCell<Vec<Change>>,
     undone: RefCell<Vec<Change>>,
     on_history: RefCell<Option<Box<dyn Fn(bool, bool)>>>,
+    /// For what goes wrong after the call that started it has returned: a
+    /// note that could not be saved when its editor closed.
+    on_error: RefCell<Option<Box<dyn Fn(String)>>>,
 }
 
 impl PdfView {
     pub fn new() -> Self {
-        let column = gtk::Box::new(gtk::Orientation::Vertical, layout::SPACING as i32);
+        let column = gtk::Fixed::new();
         column.set_halign(gtk::Align::Center);
         column.set_valign(gtk::Align::Start);
-        let margin = layout::MARGIN as i32;
-        column.set_margin_top(margin);
-        column.set_margin_bottom(margin);
-        column.set_margin_start(margin);
-        column.set_margin_end(margin);
-
         let root = gtk::ScrolledWindow::builder().hexpand(true).vexpand(true).child(&column).build();
+        let editor = Editor::new(&root);
 
         let inner = Rc::new(Inner {
             root,
             column,
             sidebar: Sidebar::new(),
+            editor,
             pages: RefCell::default(),
             widgets: RefCell::default(),
             rendered: RefCell::default(),
             layout: RefCell::default(),
+            mode: Cell::new(Mode::default()),
+            shown: Cell::new(0),
             rotation: Cell::new(Rotation::default()),
+            night: Cell::new(false),
             scale: Cell::new(layout::ACTUAL),
             fit: Cell::new(true),
             refit_queued: Cell::new(false),
@@ -187,10 +239,16 @@ impl PdfView {
             pending: Cell::new((None, None)),
             jumped: Cell::new(None),
             pointer: Cell::new(None),
+            menu_point: Cell::new(None),
             pinch_from: Cell::new(layout::ACTUAL),
+            push: Cell::new(0.0),
+            turned_at: Cell::new(None),
             selection: Cell::new(None),
             highlighted: RefCell::default(),
             presses: Cell::new((0, None)),
+            pinned: RefCell::default(),
+            moving: RefCell::default(),
+            hovering: Cell::new(None),
             status: RefCell::default(),
             last_status: Cell::new(None),
             searcher: RefCell::default(),
@@ -205,6 +263,7 @@ impl PdfView {
             history: RefCell::default(),
             undone: RefCell::default(),
             on_history: RefCell::default(),
+            on_error: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -224,8 +283,18 @@ impl PdfView {
         self.inner.sidebar.set_active(active);
     }
 
-    /// Lay out a freshly opened document, fitted to the window's width, and
-    /// start drawing the first pages.
+    /// The file on screen.
+    pub fn path(&self) -> Option<PathBuf> {
+        self.inner.path()
+    }
+
+    /// The page being read, counting from zero.
+    pub fn current_page(&self) -> usize {
+        self.inner.current_page()
+    }
+
+    /// Lay out a freshly opened document, fitted to the window, and start
+    /// drawing the first pages.
     pub fn show(&self, opened: Opened) {
         let inner = &self.inner;
         inner.clear();
@@ -236,7 +305,8 @@ impl PdfView {
             .map(|_| {
                 let widget = Page::new();
                 widget.set_cursor_from_name(Some("text"));
-                inner.column.append(&widget);
+                widget.set_night(inner.night.get());
+                inner.column.put(&widget, 0.0, 0.0);
                 widget
             })
             .collect();
@@ -247,14 +317,7 @@ impl PdfView {
         inner.uri.replace(Some(opened.uri.clone()));
 
         inner.fit.set(true);
-        let width = inner.root.hadjustment().page_size();
-        let scale = if width > 0.0 {
-            layout::fit_width(&inner.turned_pages(), width)
-        } else {
-            // Not on screen yet; fitted properly once it has a width.
-            layout::ACTUAL
-        };
-        inner.apply_scale(scale);
+        inner.apply_scale(inner.fitted().unwrap_or(layout::ACTUAL));
         inner.scroll_to(Some(0.0), Some(0.0));
 
         let (sender, receiver) = async_channel::bounded(4);
@@ -289,12 +352,14 @@ impl PdfView {
         inner.set_scale(inner.scale.get() * factor, inner.centre());
     }
 
-    /// Fit the widest page to the window, and keep fitting as it resizes.
+    /// Fit the document to the window, and keep fitting as it resizes: the
+    /// width of a column or a spread, or one whole page.
     pub fn zoom_fit(&self) {
         let inner = &self.inner;
         inner.fit.set(true);
-        let width = inner.root.hadjustment().page_size();
-        inner.set_scale(layout::fit_width(&inner.turned_pages(), width), inner.centre());
+        if let Some(scale) = inner.fitted() {
+            inner.set_scale(scale, inner.centre());
+        }
     }
 
     /// Life size: a centimetre on the page is a centimetre on the screen.
@@ -304,15 +369,30 @@ impl PdfView {
         inner.set_scale(layout::ACTUAL, inner.centre());
     }
 
+    /// Continuous, one page at a time, or two side by side. The page being
+    /// read stays in view.
+    pub fn set_mode(&self, mode: Mode) {
+        self.inner.set_mode(mode);
+    }
+
+    /// Swap light and dark on the pages, for reading at night.
+    pub fn set_night(&self, night: bool) {
+        let inner = &self.inner;
+        inner.night.set(night);
+        for widget in inner.widgets.borrow().iter() {
+            widget.set_night(night);
+        }
+        inner.sidebar.set_night(night);
+    }
+
     /// Move by most of a screen, keeping a strip of the old view for context.
+    /// One page at a time, past the page's end is the next page.
     pub fn scroll_pages(&self, direction: f64) {
-        let v = self.inner.root.vadjustment();
-        v.set_value(v.value() + direction * v.page_size() * 0.9);
+        self.inner.scroll_by(direction, 0.9);
     }
 
     pub fn scroll_lines(&self, direction: f64) {
-        let v = self.inner.root.vadjustment();
-        v.set_value(v.value() + direction * v.page_size() * 0.1);
+        self.inner.scroll_by(direction, 0.1);
     }
 
     /// Sideways, for a page zoomed wider than the window.
@@ -322,12 +402,23 @@ impl PdfView {
     }
 
     pub fn scroll_to_start(&self) {
-        self.inner.root.vadjustment().set_value(0.0);
+        let inner = &self.inner;
+        if inner.mode.get() == Mode::Single {
+            inner.show_page(0, false);
+        } else {
+            inner.root.vadjustment().set_value(0.0);
+        }
     }
 
     pub fn scroll_to_end(&self) {
-        let v = self.inner.root.vadjustment();
-        v.set_value(v.upper());
+        let inner = &self.inner;
+        if inner.mode.get() == Mode::Single {
+            let last = inner.pages.borrow().len().saturating_sub(1);
+            inner.show_page(last, true);
+        } else {
+            let v = inner.root.vadjustment();
+            v.set_value(v.upper());
+        }
     }
 
     /// Bring a page to the top of the window. Counts from zero.
@@ -352,14 +443,9 @@ impl PdfView {
             widget.set_texture(None);
             *rendered = 0.0;
         }
-        let scale = if inner.fit.get() {
-            layout::fit_width(&inner.turned_pages(), inner.root.hadjustment().page_size())
-        } else {
-            inner.scale.get()
-        };
+        let scale = if inner.fit.get() { inner.fitted().unwrap_or(inner.scale.get()) } else { inner.scale.get() };
         inner.apply_scale(scale);
-        let top = inner.layout.borrow().top(current) - layout::SPACING / 2.0;
-        inner.scroll_to(None, Some(top.max(0.0)));
+        inner.scroll_to(None, Some(inner.row_top(current)));
         inner.settle_then_render();
         inner.sidebar.set_rotation(rotation);
         // Matches are positions on the page; turning moves where they show.
@@ -388,13 +474,26 @@ impl PdfView {
     }
 
     /// Highlight, underline or strike through the selected text, and save it
-    /// into the file. Marking text exactly as it is already marked takes the
-    /// mark off again.
-    pub fn mark(&self, style: Style) -> Marked {
-        self.inner.mark(style)
+    /// into the file. A highlight is in `colour`; the lines are always red.
+    /// Marking text exactly as it is already marked takes the mark off again;
+    /// highlighting it in another colour changes the colour.
+    pub fn mark(&self, style: Style, colour: Rgb) -> Marked {
+        self.inner.mark(style, colour)
     }
 
-    /// Take back the last marking, or put it back. Ok if there was nothing to
+    /// Open a new note or speech bubble for writing: where the context menu
+    /// was opened if `here`, otherwise at the selection, or failing that on
+    /// the page being read.
+    pub fn pin(&self, kind: Pinned, here: bool) {
+        self.inner.pin(kind, here);
+    }
+
+    /// Where the context menu is being opened, in the reader's coordinates.
+    pub fn set_menu_point(&self, x: f64, y: f64) {
+        self.inner.menu_point.set(Some((x, y)));
+    }
+
+    /// Take back the last change, or put it back. Ok if there was nothing to
     /// take back.
     pub fn undo(&self) -> Result<(), String> {
         self.inner.step_history(true)
@@ -407,6 +506,12 @@ impl PdfView {
     /// Called with whether there is anything to undo, and to redo.
     pub fn connect_history(&self, callback: impl Fn(bool, bool) + 'static) {
         self.inner.on_history.replace(Some(Box::new(callback)));
+    }
+
+    /// Called with a message when a change made in the note editor could not
+    /// be saved.
+    pub fn connect_error(&self, callback: impl Fn(String) + 'static) {
+        self.inner.on_error.replace(Some(Box::new(callback)));
     }
 
     /// Copy the selected text to the clipboard. False if nothing is selected.
@@ -448,29 +553,22 @@ impl Inner {
             });
         }
 
-        // A new window width means a new fitted size. This fires while GTK is
+        // A new window size means a new fitted size: its width always, and
+        // its height too for a whole page at a time. This fires while GTK is
         // in the middle of laying the window out, and a resize requested from
         // inside that pass is lost: GTK finishes the pass and forgets it,
         // leaving the scrollable height a page or more short of the pages.
         // So the refit waits until the pass is over.
-        let weak = Rc::downgrade(this);
-        h.connect_page_size_notify(move |_| {
-            let Some(inner) = weak.upgrade() else { return };
-            if !inner.fit.get() || inner.refit_queued.replace(true) {
-                return;
-            }
-            let weak = Rc::downgrade(&inner);
-            glib::idle_add_local_once(move || {
+        for (adjustment, height) in [(&h, false), (&v, true)] {
+            let weak = Rc::downgrade(this);
+            adjustment.connect_page_size_notify(move |_| {
                 let Some(inner) = weak.upgrade() else { return };
-                inner.refit_queued.set(false);
-                if inner.fit.get() && !inner.pages.borrow().is_empty() {
-                    let width = inner.root.hadjustment().page_size();
-                    let scale = layout::fit_width(&inner.turned_pages(), width);
-                    // Keep whatever is at the top of the window at the top.
-                    inner.set_scale(scale, (0.0, 0.0));
+                if height && inner.mode.get() != Mode::Single {
+                    return;
                 }
+                inner.queue_refit();
             });
-        });
+        }
 
         let weak = Rc::downgrade(this);
         this.sidebar.connect_pick(move |index| {
@@ -494,6 +592,16 @@ impl Inner {
         });
         this.root.add_controller(motion);
 
+        // A hand over a note or bubble, which a click opens and a drag moves.
+        let hover = gtk::EventControllerMotion::new();
+        let weak = Rc::downgrade(this);
+        hover.connect_motion(move |_, x, y| {
+            if let Some(inner) = weak.upgrade() {
+                inner.hover(x, y);
+            }
+        });
+        this.column.add_controller(hover);
+
         // The wheel and two fingers scroll, as in every reader; with Ctrl they
         // zoom about the pointer. Caught before the scrolled window sees it,
         // or it would scroll as well.
@@ -504,13 +612,13 @@ impl Inner {
             let Some(inner) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
-            if !controller.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
-                return glib::Propagation::Proceed;
-            }
             let smooth = controller
                 .current_event()
                 .and_then(|event| event.downcast::<gdk::ScrollEvent>().ok())
                 .is_some_and(|event| event.unit() == gdk::ScrollUnit::Surface);
+            if !controller.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+                return inner.scroll_past_page(dy, smooth);
+            }
             // A touchpad reports distance; a wheel reports notches.
             let factor = if smooth { (-dy * 0.01).exp() } else { 1.1f64.powf(-dy) };
             inner.fit.set(false);
@@ -536,7 +644,8 @@ impl Inner {
         });
         this.root.add_controller(pinch);
 
-        // Selecting text. Positions are in the column's own coordinates.
+        // Selecting text, or moving a note. Positions are in the column's own
+        // coordinates, which are the layout's.
         let drag = gtk::GestureDrag::new();
         drag.set_button(gdk::BUTTON_PRIMARY);
         let weak = Rc::downgrade(this);
@@ -544,15 +653,25 @@ impl Inner {
             let Some(inner) = weak.upgrade() else { return };
             let Some(spot) = inner.hit(x, y) else { return };
             let unit = inner.count_press(x, y);
+            if unit == Unit::Glyph {
+                if let Some(annotation) = inner.pinned_at(spot) {
+                    inner.set_selection(None);
+                    inner.moving.replace(Some(Moving { annotation, from: spot, by: (0.0, 0.0) }));
+                    return;
+                }
+            }
             inner.set_selection(Some(Selection { anchor: spot, head: spot, unit }));
         });
         let weak = Rc::downgrade(this);
         drag.connect_drag_update(move |gesture, dx, dy| {
             let Some(inner) = weak.upgrade() else { return };
-            let (Some((x, y)), Some(selection)) = (gesture.start_point(), inner.selection.get()) else {
+            let Some((x, y)) = gesture.start_point() else { return };
+            let Some(head) = inner.hit(x + dx, y + dy) else { return };
+            if inner.moving.borrow().is_some() {
+                inner.drag_pinned(head);
                 return;
-            };
-            if let Some(head) = inner.hit(x + dx, y + dy) {
+            }
+            if let Some(selection) = inner.selection.get() {
                 if head != selection.head {
                     inner.set_selection(Some(Selection { head, ..selection }));
                 }
@@ -561,6 +680,10 @@ impl Inner {
         let weak = Rc::downgrade(this);
         drag.connect_drag_end(move |_, _, _| {
             let Some(inner) = weak.upgrade() else { return };
+            if let Some(moving) = inner.moving.take() {
+                inner.drop_pinned(moving);
+                return;
+            }
             // A plain click with no drag selects nothing: it clears.
             if let Some(selection) = inner.selection.get() {
                 if selection.unit == Unit::Glyph && selection.anchor == selection.head {
@@ -580,6 +703,30 @@ impl Inner {
     fn centre(&self) -> (f64, f64) {
         let (h, v) = (self.root.hadjustment(), self.root.vadjustment());
         (h.page_size() / 2.0, v.page_size() / 2.0)
+    }
+
+    /// The scale that fits the window in the current mode, or `None` before
+    /// the window has a size.
+    fn fitted(&self) -> Option<f64> {
+        let (width, height) = (self.root.hadjustment().page_size(), self.root.vadjustment().page_size());
+        (width > 0.0).then(|| layout::fit(&self.turned_pages(), self.mode.get(), (width, height)))
+    }
+
+    fn queue_refit(self: &Rc<Self>) {
+        if !self.fit.get() || self.refit_queued.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            let Some(inner) = weak.upgrade() else { return };
+            inner.refit_queued.set(false);
+            if inner.fit.get() && !inner.pages.borrow().is_empty() {
+                if let Some(scale) = inner.fitted() {
+                    // Keep whatever is at the top of the window at the top.
+                    inner.set_scale(scale, (0.0, 0.0));
+                }
+            }
+        });
     }
 
     /// Device pixels per point: the zoom, times the screen's own scale.
@@ -616,32 +763,132 @@ impl Inner {
         self.emit_status();
     }
 
+    /// Lay the pages out again at `scale`, in the current mode, and put every
+    /// widget where the layout says. Pages not laid out are hidden.
     fn apply_scale(&self, scale: f64) {
         self.scale.set(scale);
-        let layout = Layout::new(&self.turned_pages(), scale);
+        let layout = Layout::new(&self.turned_pages(), scale, self.mode.get(), self.shown.get());
         for (i, widget) in self.widgets.borrow().iter().enumerate() {
-            let (w, h) = layout.size(i);
-            widget.set_page_size(w as i32, h as i32);
+            let shown = layout.contains(i);
+            widget.set_visible(shown);
+            if shown {
+                let (w, h) = layout.size(i);
+                widget.set_page_size(w as i32, h as i32);
+                self.column.move_(widget, layout.left(i), layout.top(i));
+            }
         }
+        let (w, h) = layout.extent();
+        self.column.set_size_request(w as i32, h as i32);
         *self.layout.borrow_mut() = layout;
     }
 
+    fn set_mode(self: &Rc<Self>, mode: Mode) {
+        if self.mode.get() == mode {
+            return;
+        }
+        // Read in the old arrangement, before it changes.
+        let current = self.current_page();
+        self.mode.set(mode);
+        // One page at a time sits in the middle of the window.
+        self.column.set_valign(if mode == Mode::Single { gtk::Align::Center } else { gtk::Align::Start });
+        if self.pages.borrow().is_empty() {
+            return;
+        }
+        self.shown.set(current);
+        let scale = if self.fit.get() { self.fitted().unwrap_or(self.scale.get()) } else { self.scale.get() };
+        self.apply_scale(scale);
+        self.jumped.set(None);
+        self.go_to_page(current);
+        self.settle_then_render();
+    }
+
     fn go_to_page(&self, index: usize) {
-        let top = {
-            let layout = self.layout.borrow();
-            if index >= layout.len() {
-                return;
-            }
-            (layout.top(index) - layout::SPACING / 2.0).max(0.0)
-        };
+        if index >= self.pages.borrow().len() {
+            return;
+        }
+        if self.mode.get() == Mode::Single {
+            self.show_page(index, false);
+            return;
+        }
         let v = self.root.vadjustment();
-        v.set_value(top);
+        v.set_value(self.row_top(index));
         self.jumped.set(Some((index, v.value())));
         self.emit_status();
     }
 
-    /// The page being read: the one crossing the reading line.
+    /// Scrolled to put a page's row just under the top of the window.
+    fn row_top(&self, page: usize) -> f64 {
+        (self.layout.borrow().position(page, 0.0) - layout::SPACING / 2.0).max(0.0)
+    }
+
+    /// One page at a time: show another, from its top, or from its end when
+    /// going back.
+    fn show_page(&self, index: usize, from_end: bool) {
+        let count = self.pages.borrow().len();
+        if count == 0 {
+            return;
+        }
+        let index = index.min(count - 1);
+        self.shown.set(index);
+        self.apply_scale(self.scale.get());
+        let bottom = (self.layout.borrow().extent().1 - self.root.vadjustment().page_size()).max(0.0);
+        self.scroll_to(None, Some(if from_end { bottom } else { 0.0 }));
+        self.refresh(true);
+        self.emit_status();
+    }
+
+    /// Scroll by a share of the window; one page at a time, turn the page
+    /// instead at its end.
+    fn scroll_by(&self, direction: f64, share: f64) {
+        let v = self.root.vadjustment();
+        if self.mode.get() == Mode::Single {
+            let (at_top, at_bottom) = (v.value() <= 0.5, v.value() + v.page_size() >= v.upper() - 0.5);
+            let shown = self.shown.get();
+            if direction > 0.0 && at_bottom {
+                if shown + 1 < self.pages.borrow().len() {
+                    self.show_page(shown + 1, false);
+                }
+                return;
+            }
+            if direction < 0.0 && at_top {
+                if shown > 0 {
+                    self.show_page(shown - 1, true);
+                }
+                return;
+            }
+        }
+        v.set_value(v.value() + direction * v.page_size() * share);
+    }
+
+    /// One page at a time, scrolling on past the end of a page turns it.
+    fn scroll_past_page(&self, dy: f64, smooth: bool) -> glib::Propagation {
+        if self.mode.get() != Mode::Single || dy == 0.0 {
+            return glib::Propagation::Proceed;
+        }
+        let v = self.root.vadjustment();
+        let at_edge = if dy > 0.0 { v.value() + v.page_size() >= v.upper() - 0.5 } else { v.value() <= 0.5 };
+        if !at_edge {
+            self.push.set(0.0);
+            return glib::Propagation::Proceed;
+        }
+        let push = self.push.get() + dy;
+        self.push.set(push);
+        let needed = if smooth { PUSH_PIXELS } else { PUSH_NOTCHES };
+        let rested = self.turned_at.get().is_none_or(|at| at.elapsed() >= TURN_PAUSE);
+        if push.abs() >= needed && rested {
+            self.push.set(0.0);
+            self.turned_at.set(Some(Instant::now()));
+            self.scroll_by(dy.signum(), 0.9);
+        }
+        glib::Propagation::Stop
+    }
+
+    /// The page being read: the one shown, or the one crossing the reading
+    /// line.
     fn current_page(&self) -> usize {
+        if self.mode.get() == Mode::Single {
+            return self.shown.get();
+        }
         let v = self.root.vadjustment();
         self.layout.borrow().page_at(v.value() + v.page_size() * READING_LINE)
     }
@@ -712,14 +959,14 @@ impl Inner {
         let Some(renderer) = renderer.as_ref() else { return };
 
         // On-screen pages first, nearest the middle of the window first; then
-        // one page either side.
+        // the next row's worth either side, so turning a page finds it drawn.
         let centre = (top + bottom) / 2.0;
         let middle = |i: usize| layout.top(i) + layout.size(i).1 / 2.0;
         let mut order: Vec<usize> = (first..=last).collect();
         order.sort_by(|&a, &b| (middle(a) - centre).abs().total_cmp(&(middle(b) - centre).abs()));
-        let ahead = (last + PREFETCH).min(layout.len() - 1);
-        order.extend((last + 1)..=ahead);
-        order.extend((first.saturating_sub(PREFETCH)..first).rev());
+        let ahead = if self.mode.get() == Mode::Double { 2 * PREFETCH } else { PREFETCH };
+        order.extend((last + 1)..=(last + ahead).min(layout.len() - 1));
+        order.extend((first.saturating_sub(ahead)..first).rev());
 
         let (target, rotation) = (self.device_scale(), self.rotation.get());
         let jobs = order
@@ -758,12 +1005,16 @@ impl Inner {
             return;
         }
         let v = self.root.vadjustment();
-        let page = if let Some((page, _)) = self.jumped.get() {
+        let page = if self.mode.get() == Mode::Single {
+            self.shown.get() + 1
+        } else if let Some((page, _)) = self.jumped.get() {
             page + 1
         } else if v.value() <= 0.5 {
             1
         } else if v.value() + v.page_size() >= v.upper() - 0.5 {
-            pages // Scrolled to the end: the last page, even if it is short.
+            // Scrolled to the end: the last page, even if it is short, or the
+            // first of the last pair.
+            self.layout.borrow().page_at(v.upper()) + 1
         } else {
             self.current_page() + 1
         };
@@ -777,29 +1028,37 @@ impl Inner {
     }
 
     /// Where a point in the column falls, in the PDF's own page coordinates.
-    /// A point between pages belongs to the end of the page above it.
+    /// A point between pages belongs to the nearest.
     fn hit(&self, x: f64, y: f64) -> Option<Spot> {
-        let page = {
-            let layout = self.layout.borrow();
-            if layout.len() == 0 {
-                return None;
-            }
-            // The column's own coordinates start below its top margin.
-            layout.page_at(y + layout::MARGIN)
-        };
-        let widgets = self.widgets.borrow();
-        let bounds = widgets.get(page)?.compute_bounds(&self.column)?;
-        let (w, h) = (f64::from(bounds.width()), f64::from(bounds.height()));
+        let layout = self.layout.borrow();
+        if layout.len() == 0 {
+            return None;
+        }
+        let page = layout.page_at_point(x, y);
+        let (w, h) = layout.size(page);
         if w <= 0.0 || h <= 0.0 {
             return None;
         }
-        let local_x = (x - f64::from(bounds.x())).clamp(0.0, w);
-        let local_y = (y - f64::from(bounds.y())).clamp(0.0, h);
+        let local_x = (x - layout.left(page)).clamp(0.0, w);
+        let local_y = (y - layout.top(page)).clamp(0.0, h);
         let (page_w, page_h) = self.pages.borrow()[page];
         let rotation = self.rotation.get();
         let (turned_w, turned_h) = rotation.size(page_w, page_h);
         let (px, py) = rotation.undo(local_x / w * turned_w, local_y / h * turned_h, page_w, page_h);
         Some(Spot { page, x: px, y: py })
+    }
+
+    /// An area of a page, x1, y1, x2, y2 in points, as a rectangle in the
+    /// reader's own coordinates, for pointing a popover at.
+    fn on_screen(&self, page: usize, area: [f64; 4]) -> Option<gdk::Rectangle> {
+        let size = *self.pages.borrow().get(page)?;
+        let [x1, y1, x2, y2] = area;
+        let [fx, fy, fw, fh] = shown([x1, y1, x2 - x1, y2 - y1], size, self.rotation.get());
+        let layout = self.layout.borrow();
+        let (w, h) = layout.size(page);
+        let corner = graphene::Point::new((layout.left(page) + fx * w) as f32, (layout.top(page) + fy * h) as f32);
+        let at = self.column.compute_point(&self.root, &corner)?;
+        Some(gdk::Rectangle::new(at.x() as i32, at.y() as i32, (fw * w).ceil() as i32, (fh * h).ceil() as i32))
     }
 
     /// Count presses landing close together in time and place, the way the
@@ -834,6 +1093,10 @@ impl Inner {
             self.reader.replace(poppler::Document::from_file(&uri, None).ok());
         }
         self.reader.borrow().clone()
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        self.uri.borrow().as_deref().and_then(|uri| gio::File::for_uri(uri).path())
     }
 
     fn set_selection(&self, selection: Option<Selection>) {
@@ -990,20 +1253,31 @@ impl Inner {
             let Some(&area) = found.areas.first() else { return };
             (found.page, area)
         };
+        self.reveal(page, area);
+    }
+
+    /// Bring an area of a page — x, y, width, height in points — into view,
+    /// turning to its page first if pages are shown one at a time.
+    fn reveal(&self, page: usize, area: [f64; 4]) {
         let Some(&size) = self.pages.borrow().get(page) else { return };
-        let [fx, fy, fw, fh] = shown(area, size, self.rotation.get());
-        let widgets = self.widgets.borrow();
-        let Some(bounds) = widgets.get(page).and_then(|w| w.compute_bounds(&self.root)) else { return };
-        let (bw, bh) = (f64::from(bounds.width()), f64::from(bounds.height()));
-        // Where the match is now, in the window's own coordinates.
-        let (x, y) = (f64::from(bounds.x()) + fx * bw, f64::from(bounds.y()) + fy * bh);
-        let (w, h) = (fw * bw, fh * bh);
-        let (hadj, vadj) = (self.root.hadjustment(), self.root.vadjustment());
-        if y < 0.0 || y + h > vadj.page_size() {
-            vadj.set_value(vadj.value() + y - vadj.page_size() * 0.3);
+        if self.mode.get() == Mode::Single && self.shown.get() != page {
+            self.show_page(page, false);
         }
-        if x < 0.0 || x + w > hadj.page_size() {
-            hadj.set_value(hadj.value() + x - hadj.page_size() * 0.3);
+        let [fx, fy, fw, fh] = shown(area, size, self.rotation.get());
+        // Worked out from the layout rather than from where GTK last put the
+        // page, which is out of date just after a page is turned.
+        let layout = self.layout.borrow();
+        let (w, h) = layout.size(page);
+        let (x, y) = (layout.left(page) + fx * w, layout.top(page) + fy * h);
+        let (mw, mh) = (fw * w, fh * h);
+        drop(layout);
+        let (hadj, vadj) = (self.root.hadjustment(), self.root.vadjustment());
+        let want_y = (y < vadj.value() || y + mh > vadj.value() + vadj.page_size())
+            .then(|| (y - vadj.page_size() * 0.3).max(0.0));
+        let want_x = (x < hadj.value() || x + mw > hadj.value() + hadj.page_size())
+            .then(|| (x - hadj.page_size() * 0.3).max(0.0));
+        if want_x.is_some() || want_y.is_some() {
+            self.scroll_to(want_x, want_y);
         }
     }
 
@@ -1018,9 +1292,10 @@ impl Inner {
         }
     }
 
-    fn mark(&self, style: Style) -> Marked {
+    fn mark(&self, style: Style, colour: Rgb) -> Marked {
         let Some(selection) = self.selection.get() else { return Marked::NothingSelected };
         let Some(reader) = self.reader() else { return Marked::NothingSelected };
+        let colour = if style == Style::Highlight { colour } else { style.default_colour() };
         let marks: Vec<Mark> = {
             let pages = self.pages.borrow();
             document::spans(selection.anchor, selection.head, &pages)
@@ -1029,6 +1304,7 @@ impl Inner {
                     page,
                     style,
                     lines: markup::selected_lines(&reader, page, span, selection.unit),
+                    colour,
                 })
                 .filter(|mark| !mark.lines.is_empty())
                 .collect()
@@ -1036,24 +1312,42 @@ impl Inner {
         if marks.is_empty() {
             return Marked::NothingSelected; // Only space between words.
         }
-        // All of it marked this way already: the same again takes it off,
-        // like bold in a word processor. Otherwise mark what is not yet.
-        let already = marks.iter().all(|mark| markup::exists(&reader, mark));
-        let marks = if already {
-            marks
+        let existing: Vec<Option<Rgb>> = marks.iter().map(|mark| markup::existing_colour(&reader, mark)).collect();
+        let mut change = Change::default();
+        if existing.iter().all(|&found| found == Some(colour)) {
+            // All of it marked just so already: the same again takes it off,
+            // like bold in a word processor.
+            change.removed = marks.into_iter().map(Annotation::Mark).collect();
         } else {
-            marks.into_iter().filter(|mark| !markup::exists(&reader, mark)).collect()
-        };
-        let change = Change { marks, added: !already };
-        if let Err(error) = self.apply(&reader, &change, true) {
+            // Mark what is not yet; what is marked in another colour changes
+            // colour, remembering the old one for undo.
+            for (mark, found) in marks.into_iter().zip(existing) {
+                match found {
+                    Some(old) if old == colour => {}
+                    Some(old) => {
+                        change.removed.push(Annotation::Mark(Mark { colour: old, ..mark.clone() }));
+                        change.added.push(Annotation::Mark(mark));
+                    }
+                    None => change.added.push(Annotation::Mark(mark)),
+                }
+            }
+        }
+        if let Err(error) = self.commit(change) {
             return Marked::Failed(error);
         }
-        self.history.borrow_mut().push(change);
-        self.undone.borrow_mut().clear();
         // Out of the way, so the mark just made shows.
         self.set_selection(None);
-        self.emit_history();
         Marked::Done
+    }
+
+    /// Make a change, save it, and make it the one undo takes back.
+    fn commit(&self, change: Change) -> Result<(), String> {
+        let Some(reader) = self.reader() else { return Ok(()) };
+        self.apply(&reader, &change, true)?;
+        self.history.borrow_mut().push(change);
+        self.undone.borrow_mut().clear();
+        self.emit_history();
+        Ok(())
     }
 
     /// Undo the last change, or redo the last one undone.
@@ -1075,34 +1369,32 @@ impl Inner {
     /// saved the document is put back as it was, so what is on screen never
     /// differs from the file.
     fn apply(&self, reader: &poppler::Document, change: &Change, forwards: bool) -> Result<(), String> {
-        let edit = |adding: bool| {
-            for mark in &change.marks {
-                if adding {
-                    markup::add(reader, mark);
-                } else {
-                    markup::remove(reader, mark);
-                }
+        let (take, put) = if forwards { (&change.removed, &change.added) } else { (&change.added, &change.removed) };
+        let edit = |take: &[Annotation], put: &[Annotation]| {
+            for annotation in take {
+                annotation.remove(reader);
+            }
+            for annotation in put {
+                annotation.add(reader);
             }
         };
-        let adding = change.added == forwards;
-        let path = self
-            .uri
-            .borrow()
-            .as_deref()
-            .and_then(|uri| gio::File::for_uri(uri).path())
-            .ok_or_else(|| "Only a file on this computer can be marked up.".to_string())?;
-        edit(adding);
-        if let Err(error) = markup::save(reader, &path) {
-            edit(!adding);
+        let path = self.path().ok_or_else(|| "Only a file on this computer can be marked up.".to_string())?;
+        let mut pages: Vec<usize> = take.iter().chain(put).map(Annotation::page).collect();
+        pages.sort_unstable();
+        pages.dedup();
+        edit(take, put);
+        annots::settle(reader, &pages);
+        if let Err(error) = annots::save(reader, &path) {
+            edit(put, take);
             return Err(error);
         }
 
         let revision = self.revision.get() + 1;
         self.revision.set(revision);
+        self.pinned.borrow_mut().clear();
         if let Some(renderer) = self.renderer.borrow().as_ref() {
             renderer.reload(revision);
         }
-        let pages: Vec<usize> = change.marks.iter().map(|mark| mark.page).collect();
         {
             let mut rendered = self.rendered.borrow_mut();
             for &page in &pages {
@@ -1120,10 +1412,15 @@ impl Inner {
 
     /// Bring an undone or redone change into view, if it is off screen.
     fn reveal_change(&self, change: &Change) {
-        let Some(page) = change.marks.first().map(|mark| mark.page) else { return };
-        let v = self.root.vadjustment();
-        let visible = self.layout.borrow().visible(v.value(), v.value() + v.page_size());
-        if visible.is_some_and(|(first, last)| page < first || page > last) {
+        let Some(page) = change.added.iter().chain(&change.removed).map(Annotation::page).next() else { return };
+        let visible = if self.mode.get() == Mode::Single {
+            self.shown.get() == page
+        } else {
+            let v = self.root.vadjustment();
+            let range = self.layout.borrow().visible(v.value(), v.value() + v.page_size());
+            range.is_some_and(|(first, last)| (first..=last).contains(&page))
+        };
+        if !visible {
             self.go_to_page(page);
         }
     }
@@ -1134,6 +1431,163 @@ impl Inner {
         if let Some(callback) = self.on_history.borrow().as_ref() {
             callback(can_undo, can_redo);
         }
+    }
+
+    fn report(&self, error: String) {
+        if let Some(callback) = self.on_error.borrow().as_ref() {
+            callback(error);
+        }
+    }
+
+    /// The note or bubble under a spot, if any.
+    fn pinned_at(&self, spot: Spot) -> Option<Annotation> {
+        let reader = self.reader()?;
+        let mut pinned = self.pinned.borrow_mut();
+        let here = pinned.entry(spot.page).or_insert_with(|| notes::on_page(&reader, spot.page));
+        notes::under(here, spot.x, spot.y).cloned()
+    }
+
+    /// A hand over a note or bubble, the text cursor elsewhere.
+    fn hover(&self, x: f64, y: f64) {
+        let over = self.hit(x, y).filter(|&spot| self.pinned_at(spot).is_some()).map(|spot| spot.page);
+        if over == self.hovering.get() {
+            return;
+        }
+        let widgets = self.widgets.borrow();
+        if let Some(widget) = self.hovering.get().and_then(|page| widgets.get(page)) {
+            widget.set_cursor_from_name(Some("text"));
+        }
+        if let Some(widget) = over.and_then(|page| widgets.get(page)) {
+            widget.set_cursor_from_name(Some("pointer"));
+        }
+        self.hovering.set(over);
+    }
+
+    fn drag_pinned(&self, to: Spot) {
+        let mut moving = self.moving.borrow_mut();
+        let Some(moving) = moving.as_mut() else { return };
+        // A note stays on its own page.
+        if to.page != moving.from.page {
+            return;
+        }
+        moving.by = (to.x - moving.from.x, to.y - moving.from.y);
+        let page = moving.from.page;
+        let Some(&size) = self.pages.borrow().get(page) else { return };
+        let [x1, y1, x2, y2] = area_of(&moved(&moving.annotation, moving.by, size));
+        let ghost = shown([x1, y1, x2 - x1, y2 - y1], size, self.rotation.get());
+        if let Some(widget) = self.widgets.borrow().get(page) {
+            widget.set_ghost(Some(ghost));
+        }
+    }
+
+    /// A note or bubble let go of: moved, if it was dragged, or opened, if it
+    /// was only clicked.
+    fn drop_pinned(self: &Rc<Self>, moving: Moving) {
+        let page = moving.from.page;
+        if let Some(widget) = self.widgets.borrow().get(page) {
+            widget.set_ghost(None);
+        }
+        let Some(&size) = self.pages.borrow().get(page) else { return };
+        if moving.by.0.hypot(moving.by.1) < NUDGE {
+            self.open_pinned(moving.annotation);
+            return;
+        }
+        let after = moved(&moving.annotation, moving.by, size);
+        let change = Change { removed: vec![moving.annotation], added: vec![after] };
+        if let Err(error) = self.commit(change) {
+            self.report(error);
+        }
+    }
+
+    /// Open a note or bubble already on the page, to read, change or delete.
+    fn open_pinned(self: &Rc<Self>, annotation: Annotation) {
+        let page = annotation.page();
+        let (title, text) = match &annotation {
+            Annotation::Note(note) => ("Note", note.text.clone()),
+            Annotation::Bubble(bubble) => ("Speech Bubble", bubble.text.clone()),
+            Annotation::Mark(_) => return,
+        };
+        let Some(at) = self.on_screen(page, area_of(&annotation)) else { return };
+        let size = self.pages.borrow()[page];
+        let weak = Rc::downgrade(self);
+        self.editor.open(at, title, &text, true, move |commit| {
+            let Some(inner) = weak.upgrade() else { return };
+            let change = match commit {
+                Commit::Delete => Change { removed: vec![annotation.clone()], added: Vec::new() },
+                // Emptied is as good as deleted.
+                Commit::Text(text) if text.trim().is_empty() => {
+                    Change { removed: vec![annotation.clone()], added: Vec::new() }
+                }
+                Commit::Text(text) => {
+                    let after = match &annotation {
+                        Annotation::Note(note) => Annotation::Note(Note { text, ..note.clone() }),
+                        Annotation::Bubble(bubble) => Annotation::Bubble(bubble.with_text(text, size)),
+                        Annotation::Mark(_) => return,
+                    };
+                    Change { removed: vec![annotation.clone()], added: vec![after] }
+                }
+            };
+            if let Err(error) = inner.commit(change) {
+                inner.report(error);
+            }
+        });
+    }
+
+    /// Open a new note or bubble for writing, and put it on the page once
+    /// something is written.
+    fn pin(self: &Rc<Self>, kind: Pinned, here: bool) {
+        let spot = if here {
+            self.menu_point.get().and_then(|(x, y)| {
+                let point = self.root.compute_point(&self.column, &graphene::Point::new(x as f32, y as f32))?;
+                self.hit(f64::from(point.x()), f64::from(point.y()))
+            })
+        } else {
+            None
+        };
+        // Otherwise just after the selected text, or near the top of the page
+        // being read.
+        let spot = spot.or_else(|| self.selection_end()).or_else(|| {
+            let page = self.current_page();
+            let (w, h) = *self.pages.borrow().get(page)?;
+            Some(Spot { page, x: w / 2.0, y: h / 4.0 })
+        });
+        let Some(spot) = spot else { return };
+        let Some(&size) = self.pages.borrow().get(spot.page) else { return };
+        let (title, point) = match kind {
+            Pinned::Note => ("New Note", [spot.x, spot.y, spot.x + notes::NOTE_SIZE, spot.y + notes::NOTE_SIZE]),
+            Pinned::Bubble => ("New Speech Bubble", [spot.x, spot.y, spot.x + 1.0, spot.y + 1.0]),
+        };
+        self.set_selection(None);
+        let Some(at) = self.on_screen(spot.page, point) else { return };
+        let weak = Rc::downgrade(self);
+        self.editor.open(at, title, "", false, move |commit| {
+            let Some(inner) = weak.upgrade() else { return };
+            let Commit::Text(text) = commit else { return };
+            if text.trim().is_empty() {
+                return;
+            }
+            let annotation = match kind {
+                Pinned::Note => Annotation::Note(Note::new(spot.page, (spot.x, spot.y), size, text)),
+                Pinned::Bubble => Annotation::Bubble(Bubble::new(spot.page, (spot.x, spot.y), size, text)),
+            };
+            if let Err(error) = inner.commit(Change { removed: Vec::new(), added: vec![annotation] }) {
+                inner.report(error);
+            }
+        });
+    }
+
+    /// The top right corner of the last line of the selection: where the
+    /// text chosen ends, whichever way it was dragged.
+    fn selection_end(&self) -> Option<Spot> {
+        let selection = self.selection.get()?;
+        let reader = self.reader()?;
+        let pages = self.pages.borrow();
+        let (page, span) = document::spans(selection.anchor, selection.head, &pages).pop()?;
+        let areas = document::highlights(&reader, page, span, selection.unit);
+        // The last line is the lowest; the end of it, its rightmost box.
+        let bottom = areas.iter().map(|a| a[1]).fold(f64::MIN, f64::max);
+        let last = areas.iter().filter(|a| (a[1] - bottom).abs() < 1.0).max_by(|a, b| (a[0] + a[2]).total_cmp(&(b[0] + b[2])))?;
+        Some(Spot { page, x: last[0] + last[2], y: last[1] })
     }
 
     fn selected_text(&self) -> Option<String> {
@@ -1157,6 +1611,9 @@ impl Inner {
         self.document.set(self.document.get() + 1);
         self.selection.set(None);
         self.highlighted.borrow_mut().clear();
+        self.pinned.borrow_mut().clear();
+        self.moving.replace(None);
+        self.hovering.set(None);
         // Taken out first, so nothing is borrowed while GTK removes them.
         let widgets = std::mem::take(&mut *self.widgets.borrow_mut());
         for widget in widgets {
@@ -1165,6 +1622,7 @@ impl Inner {
         self.pages.borrow_mut().clear();
         self.rendered.borrow_mut().clear();
         *self.layout.borrow_mut() = Layout::default();
+        self.shown.set(0);
         self.rotation.set(Rotation::default());
         self.uri.replace(None);
         self.pending.set((None, None));
@@ -1181,6 +1639,23 @@ impl Inner {
         self.undone.borrow_mut().clear();
         self.emit_history();
         self.sidebar.clear();
+    }
+}
+
+/// Where a note or bubble sits: x1, y1, x2, y2 in points.
+fn area_of(annotation: &Annotation) -> [f64; 4] {
+    match annotation {
+        Annotation::Note(note) => note.area,
+        Annotation::Bubble(bubble) => bubble.area,
+        Annotation::Mark(mark) => mark.lines.first().map_or([0.0; 4], |line| line.area),
+    }
+}
+
+fn moved(annotation: &Annotation, by: (f64, f64), page_size: (f64, f64)) -> Annotation {
+    match annotation {
+        Annotation::Note(note) => Annotation::Note(note.moved(by, page_size)),
+        Annotation::Bubble(bubble) => Annotation::Bubble(bubble.moved(by, page_size)),
+        Annotation::Mark(_) => annotation.clone(),
     }
 }
 

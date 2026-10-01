@@ -205,6 +205,7 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.mark-strike", idle: &[], typing: &[] },
     Accel { action: "win.undo-mark", idle: &[], typing: &[] },
     Accel { action: "win.redo-mark", idle: &[], typing: &[] },
+    Accel { action: "win.document-info", idle: &[], typing: &[] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document
@@ -241,6 +242,7 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.mark-strike", &["<Primary><Shift>x"]),
     ("win.undo-mark", &["<Primary>z"]),
     ("win.redo-mark", &["<Primary><Shift>z", "<Primary>y"]),
+    ("win.document-info", &["<Primary>i"]),
 ];
 
 /// Swap the whole set over when focus moves into or out of a text box, or

@@ -53,7 +53,8 @@ Animated GIF and WebP play, and keep playing while you zoom or rotate.
 **Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
 and the folder is watched so files added elsewhere show up.
 
-**PDFs** — every page in one scrolling column, fitted to the window's width. Only the
+**PDFs** — every page in one scrolling column, one page at a time, or two side by side
+like an open book, fitted to the window. Only the
 pages near the screen are drawn and held in memory, so a long document costs about what
 a short one does. Zooming redraws the pages sharp once it stops moving.
 
@@ -67,10 +68,19 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   window. Case and accents do not matter, and a phrase broken across two lines is still
   found, as one match. The first match shown is the first from the page you are on
 - **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
-  Ctrl+Shift+X, or from the right-click menu. The marks are ordinary PDF annotations
-  saved straight into the file, so every other PDF reader shows them too. Ctrl+Z and
-  Ctrl+Shift+Z undo and redo; marking text the same way again takes the mark off.
-  A read-only file is left untouched
+  Ctrl+Shift+X, or from the right-click menu. Pick the highlighter's colour from the
+  pen button in the header — six to hand, or any other. The marks are ordinary PDF
+  annotations saved straight into the file, so every other PDF reader shows them too.
+  Ctrl+Z and Ctrl+Shift+Z undo and redo; marking text the same way again takes the mark
+  off. A read-only file is left untouched
+- **Notes and speech bubbles**: right-click where one should go, or use the menu. A
+  note is a sticky-note icon that opens when clicked; a speech bubble writes its words
+  on the page, with a tail pointing at the spot. Click either to edit or delete it,
+  drag it to move it, and undo any of it
+- **Night mode** from the menu: black pages, white text, and colours that keep their
+  hue, so a red heading stays red
+- **Document info** (Ctrl+I, or the ⓘ button): title, author, dates, the program that
+  made it, PDF version, page sizes by name (A4, Letter…), fonts, restrictions and more
 - **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
 - The wheel scrolls; Ctrl + wheel or a pinch zooms
 
@@ -348,6 +358,7 @@ file, and four CC0 camera raws covering different decode paths.
 | `Ctrl+F` | In a PDF: find (fullscreen is `F11` there) |
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |
+| `Ctrl+I` | In a PDF: document info |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

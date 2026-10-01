@@ -1,25 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Highlighting, underlining and striking through text.
-//!
-//! Marks are ordinary PDF annotations, the kind every reader shows, written
-//! into the file itself the moment they are made, as Preview does. There is
-//! no separate save to forget, and the file on disk is always what is on
-//! screen, so a page drawn later on another thread simply reopens it.
-//!
-//! The file is replaced whole: written beside the original, then renamed over
-//! it. Poppler reads the document lazily from the original while it writes,
-//! so writing into that same file would pull it out from under itself, and a
-//! crash halfway through would leave half a PDF.
-
-use std::fs::{self, File, OpenOptions};
-use std::io::ErrorKind;
-use std::path::Path;
+//! Highlighting, underlining and striking through text: finding the lines a
+//! selection covers, and the annotation that marks them. Saving, and undoing,
+//! are shared with notes and speech bubbles, in `annots`.
 
 use gtk::glib;
-use poppler::prelude::*;
 
+use super::annots::{self, Rgb};
 use super::document::{self, Unit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,10 +19,10 @@ pub enum Style {
 
 impl Style {
     /// Highlighter yellow; a red pen for the lines, as in Preview.
-    fn colour(self) -> (u16, u16, u16) {
+    pub fn default_colour(self) -> Rgb {
         match self {
-            Style::Highlight => (0xffff, 0xe400, 0x0000),
-            Style::Underline | Style::StrikeOut => (0xd700, 0x2200, 0x2200),
+            Style::Highlight => Rgb(0xffff, 0xe4e4, 0x0000),
+            Style::Underline | Style::StrikeOut => Rgb(0xd7d7, 0x2222, 0x2222),
         }
     }
 
@@ -56,12 +44,13 @@ pub struct Line {
     pub quarter: u8,
 }
 
-/// One annotation: a style over some lines of one page.
+/// One annotation: a style, in a colour, over some lines of one page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     pub page: usize,
     pub style: Style,
     pub lines: Vec<Line>,
+    pub colour: Rgb,
 }
 
 /// A character on the page, its box, and whether the selection takes it.
@@ -189,48 +178,34 @@ fn bounds(lines: &[Line], page_height: f64) -> [f64; 4] {
     [b[0], page_height - b[3], b[2], page_height - b[1]]
 }
 
-/// Add a mark to the document in memory. Nothing is written until `save`.
-pub fn add(document: &poppler::Document, mark: &Mark) {
-    let Some(page) = i32::try_from(mark.page).ok().and_then(|i| document.page(i)) else { return };
+pub(super) fn add(document: &poppler::Document, page: &poppler::Page, mark: &Mark) {
     if mark.lines.is_empty() {
         return;
     }
     let (_, height) = page.size();
     let annot = create(document, mark.style, &mark.lines, height);
-    let (red, green, blue) = mark.style.colour();
-    let mut colour = poppler::Color::new();
-    colour.set_red(red);
-    colour.set_green(green);
-    colour.set_blue(blue);
-    annot.set_color(Some(&colour));
-    // Printed with the page, as a highlighter's ink would be.
-    annot.set_flags(poppler::AnnotFlag::PRINT);
-    page.add_annot(&annot);
+    annots::attach(page, &annot, mark.colour, true);
 }
 
-/// Take a mark off again. False if it is not there.
-pub fn remove(document: &poppler::Document, mark: &Mark) -> bool {
-    let Some(page) = i32::try_from(mark.page).ok().and_then(|i| document.page(i)) else { return false };
-    match find(&page, mark) {
-        Some(annot) => {
-            page.remove_annot(&annot);
-            true
-        }
-        None => false,
-    }
+/// What the mark is found by again: its kind, and its box in the PDF's own
+/// coordinates, which is how Poppler reports it back.
+pub(super) fn key(page: &poppler::Page, mark: &Mark) -> (poppler::ffi::PopplerAnnotType, [f64; 4]) {
+    let (_, height) = page.size();
+    (mark.style.annot_type(), bounds(&mark.lines, height))
 }
 
-/// Whether the page already carries this very mark.
-pub fn exists(document: &poppler::Document, mark: &Mark) -> bool {
-    i32::try_from(mark.page).ok().and_then(|i| document.page(i)).is_some_and(|page| find(&page, mark).is_some())
+/// The colour of the page's mark just like this one, if it has one.
+pub fn existing_colour(document: &poppler::Document, mark: &Mark) -> Option<Rgb> {
+    let page = annots::page(document, mark.page)?;
+    let (kind, rect) = key(&page, mark);
+    annots::colour_of(&page, kind, rect).map(|colour| colour.unwrap_or(mark.style.default_colour()))
 }
 
 fn create(document: &poppler::Document, style: Style, lines: &[Line], page_height: f64) -> poppler::Annot {
     use glib::translate::{from_glib_full, ToGlibPtr};
-    use poppler::ffi::{PopplerPoint, PopplerQuadrilateral, PopplerRectangle};
+    use poppler::ffi::{PopplerPoint, PopplerQuadrilateral};
 
-    let [x1, y1, x2, y2] = bounds(lines, page_height);
-    let mut rect = PopplerRectangle { x1, y1, x2, y2 };
+    let mut rect = annots::rectangle(bounds(lines, page_height));
     // SAFETY: the array holds plain structs and is released after Poppler
     // has copied what it needs from it; the rectangle is read, not kept.
     unsafe {
@@ -250,39 +225,6 @@ fn create(document: &poppler::Document, style: Style, lines: &[Line], page_heigh
         glib::ffi::g_array_unref(quads);
         from_glib_full(annot)
     }
-}
-
-/// The page's annotation matching a mark: same kind, same place.
-fn find(page: &poppler::Page, mark: &Mark) -> Option<poppler::Annot> {
-    use glib::translate::{from_glib_none, ToGlibPtr};
-
-    // Poppler stores coordinates as written in the file, so allow for them
-    // coming back a hair different from what was given.
-    const CLOSE: f64 = 0.05;
-    let (_, height) = page.size();
-    let want = bounds(&mark.lines, height);
-    let mut found = None;
-    // SAFETY: the list and every mapping in it belong to Poppler until freed
-    // below; the annotation found is taken with a reference of its own.
-    unsafe {
-        let list = poppler::ffi::poppler_page_get_annot_mapping(page.to_glib_none().0);
-        let mut node = list;
-        while !node.is_null() {
-            let mapping = (*node).data.cast::<poppler::ffi::PopplerAnnotMapping>();
-            if found.is_none() && !mapping.is_null() && !(*mapping).annot.is_null() {
-                let area = (*mapping).area;
-                let corners = [area.x1, area.y1, area.x2, area.y2];
-                let near = corners.iter().zip(want).all(|(a, b)| (a - b).abs() < CLOSE);
-                let kind = poppler::ffi::poppler_annot_get_annot_type((*mapping).annot);
-                if near && kind == mark.style.annot_type() {
-                    found = Some(from_glib_none((*mapping).annot));
-                }
-            }
-            node = (*node).next;
-        }
-        poppler::ffi::poppler_page_free_annot_mapping(list);
-    }
-    found
 }
 
 /// Every character on the page, in reading order, with its box.
@@ -311,44 +253,6 @@ fn glyphs(page: &poppler::Page) -> Vec<(char, [f64; 4])> {
         return Vec::new();
     }
     text.chars().zip(areas).collect()
-}
-
-/// Write the document, marks and all, over the file it came from.
-pub fn save(document: &poppler::Document, path: &Path) -> Result<(), String> {
-    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
-    // The file itself, not a link to it: replacing a link would leave the
-    // real file as it was and turn the link into a copy.
-    let target = fs::canonicalize(path).map_err(|e| format!("Could not save “{name}”: {e}"))?;
-    // Replacing a file only needs its folder to be writable. A file marked
-    // read-only is left alone rather than slipped round.
-    if let Err(error) = OpenOptions::new().write(true).open(&target) {
-        eprintln!("glance: {}: {error}", target.display());
-        return Err(match error.kind() {
-            ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem => {
-                format!("“{name}” is read-only, so it cannot be marked up.")
-            }
-            _ => format!("Could not save “{name}”: {error}"),
-        });
-    }
-    let temp = target.with_file_name(format!(".{name}.glance-{}", std::process::id()));
-    if let Err(error) = replace(document, &temp, &target) {
-        let _ = fs::remove_file(&temp);
-        eprintln!("glance: {}: {error}", target.display());
-        return Err(format!("Could not save “{name}”: {error}"));
-    }
-    Ok(())
-}
-
-/// Write to `temp`, then put it in `target`'s place.
-fn replace(document: &poppler::Document, temp: &Path, target: &Path) -> Result<(), String> {
-    let io = |e: std::io::Error| e.to_string();
-    document.save(&document::uri(temp)).map_err(|e| e.message().to_string())?;
-    let permissions = fs::metadata(target).map_err(io)?.permissions();
-    fs::set_permissions(temp, permissions).map_err(io)?;
-    // On the disk before it takes the original's place, so a crash leaves
-    // one whole file or the other.
-    File::open(temp).and_then(|file| file.sync_all()).map_err(io)?;
-    fs::rename(temp, target).map_err(io)
 }
 
 #[cfg(test)]

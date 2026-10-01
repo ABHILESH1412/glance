@@ -8,6 +8,8 @@
 //! Today the window only opens images; `Window::load` is where a PDF or a 3D
 //! model will be handed to its own module instead.
 
+pub mod doc_info;
 pub mod filmstrip;
 pub mod playlist;
+pub mod prefs;
 pub mod window;

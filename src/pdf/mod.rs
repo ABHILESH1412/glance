@@ -12,9 +12,13 @@
 //! Anything in `crate::images` can be used from here directly — the drawing
 //! and text tools in `images::edit` are the obvious ones for annotating a page.
 
+mod annots;
 mod document;
+mod editor;
+mod info;
 mod layout;
 mod markup;
+mod notes;
 mod page;
 mod render;
 mod search;
@@ -22,5 +26,8 @@ mod sidebar;
 mod view;
 
 pub use document::{is_pdf, open, Opened};
+pub use annots::Rgb;
+pub use info::{gather as document_info, Info};
+pub use layout::Mode;
 pub use markup::Style;
-pub use view::{Marked, PdfView, SearchStatus, Status};
+pub use view::{Marked, PdfView, Pinned, SearchStatus, Status};

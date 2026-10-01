@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 25 / 64 | 7 |
-| PDF | 5 / 28 | 3 |
+| Images | 25 / 64 | 8 |
+| PDF | 8 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **32 / 122** | **11** |
+| **Total** | **35 / 122** | **10** |
 
 ---
 
@@ -69,7 +69,7 @@ Tick a box when a feature ships.
 - [x] Text background colour, bold, italic, underline
 - [ ] Select, move and resize a shape after drawing it — *partial:* text can be dragged; drawn marks can only be undone
 - [ ] Loupe annotation (a magnified circle placed on the image)
-- [ ] Sticky notes
+- [ ] Sticky notes — *partial:* on PDFs, not yet on images
 - [ ] Signatures
 - [ ] Redact / black out a region
 
@@ -111,17 +111,17 @@ Tick a box when a feature ships.
 - [x] Page thumbnails in a sidebar
 - [ ] Contact sheet (grid of every page)
 - [ ] Table of contents / outline
-- [ ] Continuous scroll, single page, and two-page layouts — *partial:* continuous scroll
+- [x] Continuous scroll, single page, and two-page layouts
 - [ ] Bookmarks
 - [x] Search the text
 - [ ] Present as a slideshow
-- [ ] Document info (title, author, page count, page size) — *partial:* page count, and the current page, in the header
+- [x] Document info (title, author, page count, page size)
 
 ## 7. PDF — text
 
 - [x] Select and copy text
-- [x] Highlight, underline and strike through text
-- [ ] Notes and speech bubbles
+- [x] Highlight, underline and strike through text, highlights in any colour
+- [x] Notes and speech bubbles
 
 ## 8. PDF — forms and signatures
 
@@ -221,6 +221,7 @@ Things Glance does that Preview doesn't:
 - **Compress or inflate an image to an exact file size.** Preview can make a file smaller — a JPEG quality slider, Adjust Size, a "Reduce File Size" filter for PDFs — but you can't ask it for 500 KB and get 500 KB.
 - **Browse the whole folder.** Open one image and the arrow keys walk through everything beside it. Preview only steps through files you opened together.
 - **Rotate to any angle you type.** Preview rotates images in 90° steps.
+- **Night mode for PDFs.** Black paper and white text, with colours keeping their hue, so red ink stays red instead of turning cyan.
 
 ---
 
@@ -234,7 +235,7 @@ Roughly in order of value for effort:
 2. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
    sharpness and levels all fit the existing adjust pipeline.
 3. **EXIF panel and print** (sections 1 and 15) — small, and people expect them.
-4. **PDF markup** (sections 7–8) — mostly reuses Glance's existing draw and text tools.
+4. **PDF forms and signatures** (section 8) — filling in forms, and signing.
 5. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.
 
