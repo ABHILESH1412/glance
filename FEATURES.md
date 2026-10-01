@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 25 / 64 | 8 |
-| PDF | 8 / 28 | 1 |
+| Images | 25 / 64 | 9 |
+| PDF | 9 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **35 / 122** | **10** |
+| **Total** | **36 / 122** | **11** |
 
 ---
 
@@ -65,12 +65,12 @@ annotations, so every PDF reader shows them.
 - [x] Freehand pen (Preview: Sketch / Draw)
 - [x] Highlighter
 - [x] Line, arrow, rectangle, ellipse
-- [ ] More shapes: star, polygon, rounded rectangle, speech bubble
+- [ ] More shapes: star, polygon, rounded rectangle, speech bubble — *partial:* speech bubbles, on PDFs
 - [x] Stroke thickness and colour
 - [ ] Fill colour for shapes — *partial:* shapes are outlines only
 - [x] Text boxes with font, size and colour
 - [x] Text background colour, bold, italic, underline — underline on images only; a PDF text box has none
-- [ ] Select, move and resize a shape after drawing it — *partial:* text can be dragged; drawn marks can only be undone
+- [ ] Select, move and resize a shape after drawing it — *partial:* text can be dragged, and on a PDF so can notes and speech bubbles; drawn marks can only be undone, and nothing resizes yet
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
 - [ ] Signatures
@@ -129,7 +129,7 @@ annotations, so every PDF reader shows them.
 ## 8. PDF — forms and signatures
 
 - [ ] Fill in interactive form fields
-- [ ] Add text boxes to forms that aren't interactive
+- [x] Add text boxes to forms that aren't interactive — the PDF text tool
 - [ ] Draw a signature with the mouse or touchpad and place it on a page
 - [ ] Capture a signature from paper with the webcam
 - [ ] Save signatures for reuse
@@ -198,7 +198,7 @@ onward) covers.
 
 ## 15. General
 
-- [x] Keyboard shortcuts
+- [x] Keyboard shortcuts, all listed in one searchable window (Ctrl+?)
 - [x] Save in place and export a copy
 - [ ] Print
 - [ ] Share to other apps
@@ -232,14 +232,15 @@ Things Glance does that Preview doesn't:
 
 Roughly in order of value for effort:
 
-1. **PDF viewing** (section 6) — the biggest gap, and the best-supported one on Linux.
-   [`poppler-rs`](https://crates.io/crates/poppler-rs) wraps Poppler, the same engine GNOME's
-   document viewers use, and its GPL licence is compatible with Glance's.
+1. **PDF table of contents and bookmarks** (section 6) — Poppler already reads a
+   document's outline; it needs a list in the page sidebar.
 2. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
    sharpness and levels all fit the existing adjust pipeline.
 3. **EXIF panel and print** (sections 1 and 15) — small, and people expect them.
-4. **PDF forms and signatures** (section 8) — filling in forms, and signing.
-5. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
+4. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
+   drawn once and placed anywhere, building on the pen the Draw panel already has.
+5. **PDF pages** (section 9) — combining, reordering and deleting pages.
+6. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.
 
 ---

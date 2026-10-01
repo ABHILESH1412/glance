@@ -16,7 +16,8 @@ It opens a file, shows it properly, and gets out of the way.
 
 An image viewer first: photographs, screenshots, vector art and camera raw all open in
 the same window, and browsing a folder is a matter of pressing an arrow key. PDFs open
-in the same window too.
+in the same window too, and can be searched, highlighted, annotated, drawn and written
+on, with every change saved into the file where any PDF reader will see it.
 
 When you do need to change something, the editor is one button away — crop, resize,
 rotate, adjust the colour, draw on it, add text, convert it to another format, or squeeze
@@ -54,48 +55,55 @@ Animated GIF and WebP play, and keep playing while you zoom or rotate.
 and the folder is watched so files added elsewhere show up.
 
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
-like an open book, fitted to the window. Only the
-pages near the screen are drawn and held in memory, so a long document costs about what
-a short one does. Zooming redraws the pages sharp once it stops moving.
+like an open book, fitted to the window. Only the pages near the screen are drawn and
+held in memory, so a long document costs about what a short one does. Zooming redraws
+the pages sharp once it stops moving. The header stays quiet — pages, open, the page
+box, search and the menu — and the menu opens on a row of zoom, rotate and fullscreen
+buttons and a row of highlight colours.
+
+*Reading*
 
 - A **sidebar of page thumbnails** (F9, or the button at the top left), drawn only once
   it is opened. Click one to go there; it follows along as you scroll
 - A **page number box** in the header: type a number and press Enter to go there
-- **Select text** by dragging, a word with a double-click, a line with a triple-click,
-  across pages if you like, and copy it with Ctrl+C
 - **Search** with Ctrl+F. Every match is marked, the current one in orange, and the
   count grows while a long document is still being searched — it never freezes the
   window. Case and accents do not matter, and a phrase broken across two lines is still
   found, as one match. The first match shown is the first from the page you are on
-- **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
-  Ctrl+Shift+X, or from the right-click menu. Pick the highlighter's colour from the
-  row of colours in the menu — six to hand, or any other. The marks are ordinary PDF
-  annotations saved straight into the file, so every other PDF reader shows them too.
-  Ctrl+Z and Ctrl+Shift+Z undo and redo; marking text the same way again takes the mark
-  off. A read-only file is left untouched
-- **Notes and speech bubbles**: right-click where one should go, or use the menu. A
-  note is a sticky-note icon that opens when clicked; a speech bubble writes its words
-  on the page, with a tail pointing at the spot. Click either to edit or delete it,
-  drag it to move it, and undo any of it
-- **Draw and write on pages** (Ctrl+E, or Draw and Write in the menu): the image editor's pen,
-  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, and text
-  boxes in any font, size, colour and background, bold or italic. Click a text box to
-  change it, drag it to move it. Everything is saved into the PDF as it is made, and
-  Ctrl+Z takes it back. Drawing needs Poppler 25.06 or newer, and styled text 24.12;
-  on an older Poppler those tools say so and the rest works as usual
-- **Night mode** from the menu: black pages, white text, and colours that keep their
-  hue, so a red heading stays red
-- **Document info** (Ctrl+I, or the menu): title, author, dates, the program that
-  made it, PDF version, page sizes by name (A4, Letter…), fonts, restrictions and more
+- **Select text** by dragging, a word with a double-click, a line with a triple-click,
+  across pages if you like, and copy it with Ctrl+C
+- **Night mode**: black pages and white text, with colours keeping their hue, so a red
+  heading stays red
+- **Document info** (Ctrl+I): title, author, dates, the program that made it, PDF
+  version, page sizes by name (A4, Letter…), fonts, restrictions and more
 - **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
-- The wheel scrolls; Ctrl + wheel or a pinch zooms
-- A **quiet header**: pages, open, the page box, search and the menu — nothing else.
-  Zoom, rotate and fullscreen sit as a row of icons at the top of the menu, and the
-  rest in a few short groups
+
+*Marking up* — every change is an ordinary PDF annotation, saved straight into the file,
+so every other PDF reader shows it too. Ctrl+Z and Ctrl+Shift+Z undo and redo all of
+it, and a read-only file is left untouched.
+
+- **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
+  Ctrl+Shift+X, or from the right-click menu. Highlights come in six colours from the
+  menu, or any other; marking text the same way again takes the mark off
+- **Notes and speech bubbles**: right-click where one should go. A note is a
+  sticky-note icon that opens when clicked; a speech bubble writes its words on the
+  page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
+  to move it
+- **Draw and write** (Ctrl+E): the image editor's pen, highlighter, line, arrow,
+  rectangle and ellipse, in any colour and thickness, and text boxes in any font, size,
+  colour and background, bold or italic. Click a text box to change it, drag it to
+  move it
 
 A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
 arrow keys do not step to the next file. PDFs do not appear in an image folder's
-filmstrip either. Password-protected PDFs are not supported yet.
+filmstrip either.
+
+**Keyboard shortcuts** — the menus stay short, without a shortcut written beside every
+item; instead **Keyboard Shortcuts** in the menu, or Ctrl+?, opens one window listing
+them all, for pictures and for PDFs, with a search box.
+
+**Colours** are picked from GTK's own palette and colour editor, in a dialog that grows
+and shrinks to fit whichever is showing.
 
 **Editing** — one panel, one section at a time:
 
@@ -188,13 +196,14 @@ documentation in September 2026 — features move, so check upstream if one matt
 <tr><td>Slideshow</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td></tr>
 <tr><td>Batch processing</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>Tags, catalogs, albums</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>Read, search and mark up PDFs</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Windows and macOS builds</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td></tr>
 </table>
 
 Icons are each project's own, from their Flathub listings, used to identify them.
 
 **The short version.** Glance is the fastest and the most capable editor of the six, and
-the only one that can hit a file size on request. It is not a photo library: if you want
+the only one that can hit a file size on request — or open a PDF and mark it up. It is not a photo library: if you want
 tags, catalogs, batch jobs or a camera import wizard, gThumb is still the answer, and
 nomacs if you need Windows too. Loupe is the closest in spirit — same toolkit, same
 language — but stops at crop and rotate.
@@ -210,7 +219,9 @@ runtime instead of from your system.
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
 AVIF, Poppler's GLib library for PDFs, Rust, `make`, and glib's resource compiler, which
-the build uses to put the icons inside the binary. Everything else is pure Rust and comes in through Cargo.
+the build uses to put the icons inside the binary. Drawing on PDFs needs Poppler 25.06,
+and text boxes in a chosen font 24.12; with an older Poppler, PDFs open and the rest works,
+and those two tools say what they need. Everything else is pure Rust and comes in through Cargo.
 
 ```bash
 # Arch
@@ -352,13 +363,13 @@ search box. The most used:
 
 | Key | Action |
 |---|---|
-| `Ctrl+O` | Open an image |
+| `Ctrl+O` | Open a file |
 | `←` `→` `Space` | Previous / next image |
 | `+` `-` `0` `1` | Zoom in, out, fit, 100% |
 | `[` `]` | Rotate left / right |
-| `Ctrl+E` | Edit panel |
+| `Ctrl+E` | Edit panel; in a PDF, Draw and Write |
 | `Ctrl+T` `Ctrl+R` | Rotate and flip / Resize |
-| `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit, or a mark in a PDF |
+| `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit, or a change to a PDF |
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |
 | `Ctrl+C` | Copy the image, or a PDF's selected text |
 | `F11` | Fullscreen |
@@ -372,7 +383,7 @@ search box. The most used:
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |
 | `Ctrl+I` | In a PDF: document info |
-| `Ctrl+E` | In a PDF: the Draw and Text panel |
+| `Ctrl+Enter` | Finish writing a note or speech bubble |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 | `Ctrl+?` | All keyboard shortcuts |
 
@@ -385,6 +396,11 @@ search box. The most used:
 - Exporting an animated GIF or WebP writes the frame you are looking at.
 - "Move to Bin" needs a filesystem that has one. From `/tmp` or some removable media it
   reports that it is unsupported; **Delete Permanently** still works there.
+- On a PDF, text boxes, notes and bubbles can be moved but not resized, and drawings
+  can be undone but not moved. A PDF text box has no underline.
+- A text box in a font of your choosing carries that font inside the file — a few
+  hundred kilobytes, once per font per document — so it looks the same everywhere.
+- Password-protected PDFs do not open yet.
 
 Wanted, but not built yet: HDR and wide-gamut output, and progressive loading so a 100 MP
 TIFF appears in stages.
