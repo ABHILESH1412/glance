@@ -36,7 +36,8 @@ pub enum Tool {
     Rectangle,
     Ellipse,
     /// Black out an area for good. Shown see-through until it is applied,
-    /// so what is under it can be checked first.
+    /// so what is under it can be checked first. Not in `TOOLS`: it has a
+    /// section of its own in the editing panels, apart from the pens.
     Redact,
 }
 
@@ -47,7 +48,6 @@ pub const TOOLS: &[Tool] = &[
     Tool::Arrow,
     Tool::Rectangle,
     Tool::Ellipse,
-    Tool::Redact,
 ];
 
 /// How a marked-but-not-yet-applied redaction looks: dark enough to see it

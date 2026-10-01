@@ -128,6 +128,9 @@ mod imp {
         pub draw_hint: gtk::Label,
         pub text_toggle: gtk::ToggleButton,
         pub text_options: gtk::Box,
+        /// Marking areas of the picture for redaction.
+        pub redact_toggle: gtk::ToggleButton,
+        pub redact_options: gtk::Box,
         pub text_entry: gtk::Entry,
         pub text_size: gtk::SpinButton,
         pub text_bold: gtk::ToggleButton,
@@ -260,6 +263,8 @@ mod imp {
                 draw_hint: gtk::Label::new(None),
                 text_toggle: section_toggle("insert-text-symbolic", "Text"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
+                redact_toggle: section_toggle("view-conceal-symbolic", "Redact"),
+                redact_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
                 text_size: gtk::SpinButton::with_range(6.0, 2000.0, 1.0),
                 text_bold: gtk::ToggleButton::with_label("B"),
@@ -436,6 +441,7 @@ impl Window {
         menu_button.set_icon_name("open-menu-symbolic");
         menu_button.set_tooltip_text(Some("Main Menu"));
         menu_button.set_menu_model(Some(menu));
+        self.fill_menu(false);
         menu_button.set_primary(true);
 
         // For PDFs only: the sidebar of pages, contents and bookmarks, and the
@@ -1841,8 +1847,11 @@ impl Window {
         imp.search_bar.set_search_mode(false);
         imp.search_entry.set_text("");
         imp.pdf_view.show(opened);
-        if let Some(page) = imp.reopen_at.take() {
-            imp.pdf_view.go_to_page(page);
+        match imp.reopen_at.take() {
+            // The same document, rewritten: back where it was, tools and all.
+            Some(page) => imp.pdf_view.go_to_page(page),
+            // Another document starts plain, without the last one's tools.
+            None => self.set_draw_panel(false),
         }
         imp.content.set_visible_child_name("pdf");
 
@@ -1892,6 +1901,7 @@ impl Window {
             imp.search_bar.set_search_mode(false);
         }
         imp.menu_button.set_menu_model(Some(if pdf { &imp.pdf_menu } else { &imp.image_menu }));
+        self.fill_menu(pdf);
         if let Some(action) = self.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
             action.set_enabled(pdf);
             if !pdf {
@@ -2184,7 +2194,7 @@ impl Window {
                     return;
                 }
                 if let pdf::Marked::NothingSelected = imp.pdf_view.mark_redaction() {
-                    window.toast("Select text to redact, or draw over an area with Redact in Draw and Write.");
+                    window.toast("Select text to redact, or mark an area with Redact in the Edit panel.");
                 }
             }
         ));
@@ -2253,6 +2263,15 @@ impl Window {
                 }
             }
         ));
+    }
+
+    /// Put the row of view buttons into the main menu. Setting a menu makes
+    /// a new one each time, so this follows every change of menu.
+    fn fill_menu(&self, pdf: bool) {
+        let popover = self.imp().menu_button.popover().and_downcast::<gtk::PopoverMenu>();
+        if let Some(popover) = popover {
+            popover.add_child(&menus::view_buttons(pdf), menus::VIEW_BUTTONS);
+        }
     }
 
     /// Whether the document on screen has redactions waiting to be applied.

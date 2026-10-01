@@ -140,6 +140,9 @@ pub enum Tool {
     Draw(draw::Tool),
     /// Put a text box down, or pick one to restyle or move.
     Text,
+    /// Select text as usual, and mark what is selected for redaction as soon
+    /// as the selecting is done.
+    RedactText,
 }
 
 /// How long typing or restyling a text box has to pause before the file is
@@ -427,24 +430,7 @@ impl PdfView {
 
     /// Mark the selected text for redaction. Nothing is changed yet.
     pub fn mark_redaction(&self) -> Marked {
-        let inner = &self.inner;
-        let Some(selection) = inner.selection.get() else { return Marked::NothingSelected };
-        let Some(reader) = inner.reader() else { return Marked::NothingSelected };
-        let spans = document::spans(selection.anchor, selection.head, &inner.pages.borrow());
-        let areas: Vec<RedactArea> = spans
-            .into_iter()
-            .flat_map(|(page, span)| {
-                document::highlights(&reader, page, span, selection.unit)
-                    .into_iter()
-                    .map(move |rect| RedactArea { page, rect })
-            })
-            .collect();
-        if areas.is_empty() {
-            return Marked::NothingSelected;
-        }
-        inner.set_selection(None);
-        inner.add_redactions(areas);
-        Marked::Done
+        self.inner.mark_redaction()
     }
 
     /// The areas marked for redaction.
@@ -955,7 +941,7 @@ impl Inner {
                     }
                     return;
                 }
-                Tool::Select => {}
+                Tool::Select | Tool::RedactText => {}
             }
             let unit = inner.count_press(x, y);
             if unit == Unit::Glyph {
@@ -1009,6 +995,8 @@ impl Inner {
             if let Some(selection) = inner.selection.get() {
                 if selection.unit == Unit::Glyph && selection.anchor == selection.head {
                     inner.set_selection(None);
+                } else if inner.tool.get() == Tool::RedactText {
+                    inner.mark_redaction();
                 }
             }
         });
@@ -1966,6 +1954,27 @@ impl Inner {
         });
     }
 
+    /// Mark the selected text for redaction.
+    fn mark_redaction(&self) -> Marked {
+        let Some(selection) = self.selection.get() else { return Marked::NothingSelected };
+        let Some(reader) = self.reader() else { return Marked::NothingSelected };
+        let spans = document::spans(selection.anchor, selection.head, &self.pages.borrow());
+        let areas: Vec<RedactArea> = spans
+            .into_iter()
+            .flat_map(|(page, span)| {
+                document::highlights(&reader, page, span, selection.unit)
+                    .into_iter()
+                    .map(move |rect| RedactArea { page, rect })
+            })
+            .collect();
+        if areas.is_empty() {
+            return Marked::NothingSelected;
+        }
+        self.set_selection(None);
+        self.add_redactions(areas);
+        Marked::Done
+    }
+
     /// Where on a page the context menu was opened.
     fn menu_spot(&self) -> Option<Spot> {
         self.menu_point.get().and_then(|(x, y)| {
@@ -2068,7 +2077,7 @@ impl Inner {
         match self.tool.get() {
             Tool::Draw(_) => "crosshair",
             Tool::Text => "default",
-            Tool::Select => "text",
+            Tool::Select | Tool::RedactText => "text",
         }
     }
 

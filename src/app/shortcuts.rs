@@ -152,7 +152,7 @@ pub const PAGES: &[Page] = &[
                     key("Underline", "<Primary>u"),
                     key("Strike through", "<Primary><Shift>x"),
                     key("Mark for redaction", "<Primary><Shift>r"),
-                    key("Draw and write", "<Primary>e"),
+                    key("Edit: draw, write and redact", "<Primary>e"),
                     local("Finish a note", "<Primary>Return"),
                     key("Undo", "<Primary>z"),
                     key("Redo", "<Primary><Shift>z <Primary>y"),

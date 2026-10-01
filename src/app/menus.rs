@@ -7,6 +7,10 @@
 //! the rest in a few small groups, and no shortcut beside every item — those
 //! all live in the Keyboard Shortcuts window instead, where they can be read
 //! together.
+//!
+//! The row of icons is made of real buttons, put in by `view_buttons`, not
+//! menu items: a menu item closes the menu, and zooming in three steps
+//! should not mean opening it three times.
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
@@ -78,16 +82,45 @@ fn closing() -> gio::Menu {
     section(&[item("_Keyboard Shortcuts", "win.show-shortcuts"), item("_About Glance", "win.about")])
 }
 
+/// Where the row of view buttons goes, by the name `view_buttons` uses.
+pub const VIEW_BUTTONS: &str = "view-buttons";
+
+fn view_buttons_slot() -> gio::Menu {
+    let slot = gio::MenuItem::new(None, None);
+    slot.set_attribute_value("custom", Some(&VIEW_BUTTONS.to_variant()));
+    row(&[slot])
+}
+
+/// The row of view buttons for the top of a menu: zoom, and for a PDF also
+/// turning and fullscreen. Pressing them leaves the menu open.
+pub fn view_buttons(pdf: bool) -> gtk::Box {
+    let mut buttons = vec![
+        ("Zoom Out", "win.zoom-out", "zoom-out-symbolic"),
+        ("Fit to Window", "win.zoom-fit", "zoom-fit-best-symbolic"),
+        ("Zoom In", "win.zoom-in", "zoom-in-symbolic"),
+    ];
+    if pdf {
+        buttons.extend([
+            ("Rotate Left", "win.rotate-left", "object-rotate-left-symbolic"),
+            ("Rotate Right", "win.rotate-right", "object-rotate-right-symbolic"),
+            ("Fullscreen", "win.fullscreen", "view-fullscreen-symbolic"),
+        ]);
+    }
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.set_homogeneous(true);
+    row.add_css_class("view-buttons");
+    for (label, action, icon_name) in buttons {
+        let button = gtk::Button::builder().icon_name(icon_name).tooltip_text(label).action_name(action).build();
+        button.add_css_class("flat");
+        button.update_property(&[gtk::accessible::Property::Label(label)]);
+        row.append(&button);
+    }
+    row
+}
+
 pub fn image_menu() -> gio::Menu {
     let menu = gio::Menu::new();
-    menu.append_item(&as_row(
-        &row(&[
-            icon("Zoom Out", "win.zoom-out", "zoom-out-symbolic"),
-            icon("Fit to Window", "win.zoom-fit", "zoom-fit-best-symbolic"),
-            icon("Zoom In", "win.zoom-in", "zoom-in-symbolic"),
-        ]),
-        None,
-    ));
+    menu.append_section(None, &view_buttons_slot());
     menu.append_section(
         None,
         &section(&[
@@ -117,17 +150,7 @@ pub fn image_menu() -> gio::Menu {
 pub fn pdf_menu() -> gio::Menu {
     let menu = gio::Menu::new();
     // What is reached for most, as icons, so the header can stay clear.
-    menu.append_item(&as_row(
-        &row(&[
-            icon("Zoom Out", "win.zoom-out", "zoom-out-symbolic"),
-            icon("Fit", "win.zoom-fit", "zoom-fit-best-symbolic"),
-            icon("Zoom In", "win.zoom-in", "zoom-in-symbolic"),
-            icon("Rotate Left", "win.rotate-left", "object-rotate-left-symbolic"),
-            icon("Rotate Right", "win.rotate-right", "object-rotate-right-symbolic"),
-            icon("Fullscreen", "win.fullscreen", "view-fullscreen-symbolic"),
-        ]),
-        None,
-    ));
+    menu.append_section(None, &view_buttons_slot());
 
     // The highlighter's colour, as colours rather than names.
     let colours = gio::Menu::new();
@@ -147,7 +170,7 @@ pub fn pdf_menu() -> gio::Menu {
     menu.append_section(
         None,
         &section(&[
-            item("_Draw and Write", "win.draw-panel"),
+            item("_Edit", "win.draw-panel"),
             item("Add _Note", "win.pin::note"),
             item("Add Speech _Bubble", "win.pin::bubble"),
             item("Mark for _Redaction", "win.mark-redact"),

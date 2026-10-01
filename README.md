@@ -59,7 +59,8 @@ like an open book, fitted to the window. Only the pages near the screen are draw
 held in memory, so a long document costs about what a short one does. Zooming redraws
 the pages sharp once it stops moving. The header stays quiet — pages, open, the page
 box, search and the menu — and the menu opens on a row of zoom, rotate and fullscreen
-buttons and a row of highlight colours.
+buttons, which leave it open so you can press them again, and a row of highlight
+colours.
 
 *Reading*
 
@@ -98,10 +99,11 @@ it, and a read-only file is left untouched.
   sticky-note icon that opens when clicked; a speech bubble writes its words on the
   page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
   to move it
-- **Draw and write** (Ctrl+E): the image editor's pen, highlighter, line, arrow,
-  rectangle and ellipse, in any colour and thickness, and text boxes in any font, size,
-  colour and background, bold or italic. Click a text box to change it, drag it to
-  move it
+- **Edit** (Ctrl+E), a panel of three sections: **Draw**, with the image editor's pen,
+  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness; **Text**,
+  for text boxes in any font, size, colour and background, bold or italic — click one to
+  change it, drag it to move it; and **Redact** (see below). Opening another PDF puts the
+  panel away
 
 *Protecting and shrinking*
 
@@ -128,10 +130,11 @@ what is under the box for good, in pictures and PDFs alike.
 
 It happens in two steps, so nothing goes by accident:
 
-1. **Mark** what should go: select text and press Ctrl+Shift+R (or right-click → Redact),
-   or drag over any area with **Redact** in the Draw panel. Marked areas show dark but
-   see-through, edged in red, so you can check what each one covers. Undo, or right-click
-   → Remove Redaction Mark, takes one back. Nothing has changed yet.
+1. **Mark** what should go, in the **Redact** section of the Edit panel: drag a box over
+   anything (**Area**), or select text and have it marked as you let go (**Text**). Or
+   select text anywhere and press Ctrl+Shift+R, or right-click → Redact. Marked areas show
+   dark but see-through, edged in red, so you can check what each one covers. Undo, or
+   right-click → Remove Redaction Mark, takes one back. Nothing has changed yet.
 2. **Apply**: a bar says how many areas are marked, and its Apply button asks what to do.
    **Save Redacted Copy…** (the default) leaves the original as it was; **Redact
    Original** changes the file itself. Saving an edited picture with marked areas asks the
@@ -431,7 +434,7 @@ search box. The most used:
 | `←` `→` `Space` | Previous / next image |
 | `+` `-` `0` `1` | Zoom in, out, fit, 100% |
 | `[` `]` | Rotate left / right |
-| `Ctrl+E` | Edit panel; in a PDF, Draw and Write |
+| `Ctrl+E` | Edit panel: draw, write and redact |
 | `Ctrl+T` `Ctrl+R` | Rotate and flip / Resize |
 | `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit, or a change to a PDF |
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |

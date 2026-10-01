@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The Draw and Text panel beside a PDF: the image editor's pens, shapes and
-//! text, for a page.
+//! The Edit panel beside a PDF: the image editor's pens, shapes and text,
+//! for a page, and marking areas for redaction.
 //!
 //! Laid out like the image editor's own sections, with the same tool icons
 //! and colour wells, so moving between a picture and a document there is
@@ -25,6 +25,7 @@ pub struct PdfTools {
     pub root: gtk::ScrolledWindow,
     draw: gtk::ToggleButton,
     text: gtk::ToggleButton,
+    redact: gtk::ToggleButton,
 }
 
 /// The text controls, kept together so the chosen box can be shown in them.
@@ -101,6 +102,8 @@ impl PdfTools {
         draw_toggle.set_tooltip_text(Some("Draw on the page"));
         let text_toggle = section_toggle("insert-text-symbolic", "Text");
         text_toggle.set_tooltip_text(Some("Write on the page"));
+        let redact_toggle = section_toggle("view-conceal-symbolic", "Redact");
+        redact_toggle.set_tooltip_text(Some("Black out parts of the document for good"));
 
         // -- drawing --
         let strokes = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -224,9 +227,41 @@ impl PdfTools {
         }
         words.append(&controls.hint);
 
+        // -- redaction --
+        let marking = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        marking.set_visible(false);
+        // Two ways to mark: a box over anything, or text as it is selected.
+        let by_area = gtk::ToggleButton::with_label("Area");
+        by_area.set_tooltip_text(Some("Drag a box over anything: text, pictures, drawings"));
+        let by_text = gtk::ToggleButton::with_label("Text");
+        by_text.set_tooltip_text(Some("Select text to mark it, word by word"));
+        by_text.set_group(Some(&by_area));
+        by_area.set_active(true);
+        let ways = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        ways.add_css_class("linked");
+        ways.set_homogeneous(true);
+        ways.append(&by_area);
+        ways.append(&by_text);
+        marking.append(&ways);
+        let redact_hint = hint("Drag over what should go.");
+        marking.append(&redact_hint);
+        let redact_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        redact_actions.set_homogeneous(true);
+        let unmark = gtk::Button::with_label("Unmark All");
+        unmark.set_action_name(Some("win.unredact-all"));
+        unmark.set_tooltip_text(Some("Take every mark away"));
+        let apply = gtk::Button::with_label("Apply…");
+        apply.add_css_class("suggested-action");
+        apply.set_action_name(Some("win.apply-redactions"));
+        apply.set_tooltip_text(Some("Black out what is marked, in a copy or the original"));
+        redact_actions.append(&unmark);
+        redact_actions.append(&apply);
+        marking.append(&redact_actions);
+        marking.append(&hint("Marked areas stay see-through, so you can check them. Nothing is blacked out until you apply them."));
+
         // Its name and a way out, now that nothing in the header opens it.
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let title = gtk::Label::builder().label("Draw and Write").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
+        let title = gtk::Label::builder().label("Edit").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
         let close = gtk::Button::builder()
             .icon_name("window-close-symbolic")
             .tooltip_text("Close (Ctrl+E)")
@@ -240,6 +275,8 @@ impl PdfTools {
         column.append(&strokes);
         column.append(&text_toggle);
         column.append(&words);
+        column.append(&redact_toggle);
+        column.append(&marking);
         // One width whichever section is open, or the page would be refitted,
         // and jump, every time the other one is opened.
         let root = gtk::ScrolledWindow::builder()
@@ -258,6 +295,7 @@ impl PdfTools {
         let push_tool = {
             let window = window.downgrade();
             let (draw_toggle, text_toggle, tools) = (draw_toggle.clone(), text_toggle.clone(), tools.clone());
+            let (redact_toggle, by_text) = (redact_toggle.clone(), by_text.clone());
             let (width, ink, controls) = (width.clone(), ink.clone(), controls.clone());
             Rc::new(move || {
                 let Some(window) = window.upgrade() else { return };
@@ -267,6 +305,10 @@ impl PdfTools {
                     tools.iter().find(|(_, b)| b.is_active()).map_or(pdf::Tool::Select, |(t, _)| pdf::Tool::Draw(*t))
                 } else if text_toggle.is_active() {
                     pdf::Tool::Text
+                } else if redact_toggle.is_active() && by_text.is_active() {
+                    pdf::Tool::RedactText
+                } else if redact_toggle.is_active() {
+                    pdf::Tool::Draw(draw::Tool::Redact)
                 } else {
                     pdf::Tool::Select
                 };
@@ -276,12 +318,17 @@ impl PdfTools {
                 }
             })
         };
-        for (toggle, options, other) in [(&draw_toggle, &strokes, &text_toggle), (&text_toggle, &words, &draw_toggle)] {
-            let (options, other, push_tool) = (options.clone(), other.clone(), push_tool.clone());
+        let sections = [(draw_toggle.clone(), strokes.clone()), (text_toggle.clone(), words.clone()), (redact_toggle.clone(), marking.clone())];
+        for (toggle, options) in &sections {
+            let others: Vec<gtk::ToggleButton> =
+                sections.iter().map(|(t, _)| t.clone()).filter(|t| t != toggle).collect();
+            let (options, push_tool) = (options.clone(), push_tool.clone());
             toggle.connect_toggled(move |toggle| {
                 // One section open at a time, as in the image editor.
-                if toggle.is_active() && other.is_active() {
-                    other.set_active(false);
+                if toggle.is_active() {
+                    for other in others.iter().filter(|o| o.is_active()) {
+                        other.set_active(false);
+                    }
                 }
                 options.set_visible(toggle.is_active());
                 push_tool();
@@ -290,6 +337,17 @@ impl PdfTools {
         for (_, button) in tools.iter() {
             let push_tool = push_tool.clone();
             button.connect_toggled(move |_| push_tool());
+        }
+        {
+            let push_tool = push_tool.clone();
+            by_text.connect_toggled(move |by_text| {
+                redact_hint.set_text(if by_text.is_active() {
+                    "Select text to mark it. A word touched anywhere is redacted whole."
+                } else {
+                    "Drag over what should go."
+                });
+                push_tool();
+            });
         }
         {
             let push_tool = push_tool.clone();
@@ -347,7 +405,7 @@ impl PdfTools {
         let shown = controls.clone();
         window.imp().pdf_view.connect_chosen(move |chosen| shown.show(chosen));
 
-        PdfTools { root, draw: draw_toggle, text: text_toggle }
+        PdfTools { root, draw: draw_toggle, text: text_toggle, redact: redact_toggle }
     }
 
     /// Show the panel, or put it away; put away, a press on the page selects
@@ -357,7 +415,8 @@ impl PdfTools {
         if !open {
             self.draw.set_active(false);
             self.text.set_active(false);
-        } else if !self.draw.is_active() && !self.text.is_active() {
+            self.redact.set_active(false);
+        } else if !self.draw.is_active() && !self.text.is_active() && !self.redact.is_active() {
             // Opened to draw, most likely: start with the pen in hand.
             self.draw.set_active(true);
         }

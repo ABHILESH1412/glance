@@ -587,6 +587,46 @@ impl Window {
         words.append(&imp.text_hint);
         tools.append(words);
 
+        // -- redaction --
+        let redact = &imp.redact_toggle;
+        redact.set_tooltip_text(Some("Black out parts of the picture for good"));
+        redact.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let open = button.is_active();
+                if open {
+                    window.close_other_sections(button);
+                }
+                window.imp().redact_options.set_visible(open);
+                window.sync_draw_tool();
+            }
+        ));
+        tools.append(redact);
+        let marking = &imp.redact_options;
+        marking.set_visible(false);
+        let explain = gtk::Label::new(Some(
+            "Drag over what should go. Marked areas stay see-through until you apply them, \
+             so you can check what each one covers.",
+        ));
+        explain.add_css_class("dim-label");
+        explain.set_xalign(0.0);
+        explain.set_wrap(true);
+        marking.append(&explain);
+        let redact_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        redact_actions.set_homogeneous(true);
+        let unmark = gtk::Button::with_label("Undo");
+        unmark.set_action_name(Some("win.undo"));
+        unmark.set_tooltip_text(Some("Take back the last mark (Ctrl+Z)"));
+        let apply = gtk::Button::with_label("Apply…");
+        apply.add_css_class("suggested-action");
+        apply.set_action_name(Some("win.apply-redactions"));
+        apply.set_tooltip_text(Some("Black out what is marked, in a copy or the original"));
+        redact_actions.append(&unmark);
+        redact_actions.append(&apply);
+        marking.append(&redact_actions);
+        tools.append(marking);
+
         imp.pending_crop.add_css_class("dim-label");
         imp.pending_crop.set_xalign(0.0);
         imp.pending_crop.set_wrap(true);
@@ -835,6 +875,7 @@ impl Window {
             &imp.adjust_toggle,
             &imp.draw_toggle,
             &imp.text_toggle,
+            &imp.redact_toggle,
             &imp.export_toggle,
         ] {
             if section != keep && section.is_active() {
@@ -852,6 +893,8 @@ impl Window {
                 .iter()
                 .position(|button| button.is_active())
                 .and_then(|index| draw::TOOLS.get(index).copied())
+        } else if imp.redact_toggle.is_active() {
+            Some(draw::Tool::Redact)
         } else {
             None
         };
