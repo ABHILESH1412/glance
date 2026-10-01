@@ -59,6 +59,9 @@ Tick a box when a feature ships.
 
 ## 3. Markup — shared by images and PDFs
 
+On a PDF the same pens, shapes and text are saved into the file as standard
+annotations, so every PDF reader shows them.
+
 - [x] Freehand pen (Preview: Sketch / Draw)
 - [x] Highlighter
 - [x] Line, arrow, rectangle, ellipse
@@ -66,7 +69,7 @@ Tick a box when a feature ships.
 - [x] Stroke thickness and colour
 - [ ] Fill colour for shapes — *partial:* shapes are outlines only
 - [x] Text boxes with font, size and colour
-- [x] Text background colour, bold, italic, underline
+- [x] Text background colour, bold, italic, underline — underline on images only; a PDF text box has none
 - [ ] Select, move and resize a shape after drawing it — *partial:* text can be dragged; drawn marks can only be undone
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images

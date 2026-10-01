@@ -59,6 +59,11 @@ mod imp {
         pub current: RefCell<Vec<[f64; 4]>>,
         /// Where a note or speech bubble being dragged would land.
         pub ghost: RefCell<Option<[f64; 4]>>,
+        /// The chosen text box's outline, as fractions of the page.
+        pub outline: RefCell<Option<[f64; 4]>>,
+        /// A drawing in progress, in the widget's own pixels, until the page
+        /// is redrawn with it saved.
+        pub sketch: RefCell<Option<crate::images::edit::draw::Mark>>,
         pub night: Cell<bool>,
     }
 
@@ -100,6 +105,12 @@ mod imp {
             if let Some(texture) = self.texture.borrow().as_ref() {
                 snapshot.append_scaled_texture(texture, gsk::ScalingFilter::Linear, &bounds);
             }
+            // Part of the page it is drawn on, so turned dark with it at night.
+            if let Some(mark) = self.sketch.borrow().as_ref() {
+                if let Some(path) = mark.path() {
+                    snapshot.append_stroke(&path, &mark.stroke(), &mark.paint());
+                }
+            }
             if night {
                 snapshot.pop();
             }
@@ -119,6 +130,10 @@ mod imp {
                     );
                     snapshot.append_color(colour, &area);
                 }
+            }
+            if let Some([x, y, rw, rh]) = *self.outline.borrow() {
+                let area = graphene::Rect::new((x as f32) * w - 3.0, (y as f32) * h - 3.0, (rw as f32) * w + 6.0, (rh as f32) * h + 6.0);
+                snapshot.append_border(&gsk::RoundedRect::from_rect(area, 3.0), &[1.5; 4], &[GHOST_EDGE; 4]);
             }
             if let Some([x, y, rw, rh]) = *self.ghost.borrow() {
                 let area = graphene::Rect::new((x as f32) * w, (y as f32) * h, (rw as f32) * w, (rh as f32) * h);
@@ -178,6 +193,22 @@ impl Page {
     pub fn set_ghost(&self, ghost: Option<[f64; 4]>) {
         if *self.imp().ghost.borrow() != ghost {
             self.imp().ghost.replace(ghost);
+            self.queue_draw();
+        }
+    }
+
+    /// Outline the chosen text box; `None` to take the outline away.
+    pub fn set_outline(&self, outline: Option<[f64; 4]>) {
+        if *self.imp().outline.borrow() != outline {
+            self.imp().outline.replace(outline);
+            self.queue_draw();
+        }
+    }
+
+    /// Show a drawing being made, in this widget's own pixels.
+    pub fn set_sketch(&self, sketch: Option<crate::images::edit::draw::Mark>) {
+        let had = self.imp().sketch.replace(sketch).is_some();
+        if had || self.imp().sketch.borrow().is_some() {
             self.queue_draw();
         }
     }

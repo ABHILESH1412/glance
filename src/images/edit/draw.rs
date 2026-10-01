@@ -16,7 +16,7 @@ use gtk::{gdk, glib, graphene, gsk};
 use crate::images::edit::text::Patch;
 
 /// How see-through a highlighter is. Low enough to read what is under it.
-const HIGHLIGHT_ALPHA: f32 = 0.35;
+pub(crate) const HIGHLIGHT_ALPHA: f32 = 0.35;
 /// Arrow heads are sized from the line, with a floor so a thin arrow still
 /// has a head worth seeing.
 const HEAD_OF_WIDTH: f64 = 3.5;
@@ -188,6 +188,43 @@ impl Mark {
         Some(builder.to_path())
     }
 
+    /// The mark as polylines: what a PDF's ink annotation is made of. A
+    /// curve is followed closely enough that the corners do not show.
+    pub fn strokes(&self) -> Vec<Vec<(f64, f64)>> {
+        const ELLIPSE_STEPS: usize = 72;
+        match self.tool {
+            _ if self.tool.freehand() => match self.points.as_slice() {
+                [] => Vec::new(),
+                // A dot: a line of no length, which round caps make round.
+                [only] => vec![vec![*only, *only]],
+                points => vec![points.to_vec()],
+            },
+            Tool::Line | Tool::Arrow => {
+                let Some((from, to)) = self.ends() else { return Vec::new() };
+                let mut strokes = vec![vec![from, to]];
+                if self.tool == Tool::Arrow {
+                    let (left, right) = self.head(from, to);
+                    strokes.push(vec![left, to, right]);
+                }
+                strokes
+            }
+            Tool::Rectangle => {
+                let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
+                vec![vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]]
+            }
+            Tool::Ellipse => {
+                let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
+                let (rx, ry) = (w / 2.0, h / 2.0);
+                let around = (0..=ELLIPSE_STEPS).map(|i| {
+                    let t = i as f64 / ELLIPSE_STEPS as f64 * std::f64::consts::TAU;
+                    (x + rx + rx * t.cos(), y + ry + ry * t.sin())
+                });
+                vec![around.collect()]
+            }
+            _ => Vec::new(),
+        }
+    }
+
     fn ends(&self) -> Option<((f64, f64), (f64, f64))> {
         Some((*self.points.first()?, *self.points.last()?))
     }
@@ -292,6 +329,30 @@ mod tests {
             width: 8.0,
             sequence: 0,
         }
+    }
+
+    #[test]
+    fn every_mark_can_be_traced_as_lines() {
+        let line = mark(Tool::Line, &[(0.0, 0.0), (10.0, 0.0)]);
+        assert_eq!(line.strokes(), vec![vec![(0.0, 0.0), (10.0, 0.0)]]);
+        // An arrow is its shaft and its head.
+        let arrow = mark(Tool::Arrow, &[(0.0, 0.0), (100.0, 0.0)]);
+        let strokes = arrow.strokes();
+        assert_eq!(strokes.len(), 2);
+        assert_eq!(strokes[1][1], (100.0, 0.0));
+        // A rectangle closes on itself, whichever way it was dragged.
+        let rectangle = mark(Tool::Rectangle, &[(10.0, 20.0), (0.0, 0.0)]);
+        let ring = &rectangle.strokes()[0];
+        assert_eq!((ring[0], ring.len()), ((0.0, 0.0), 5));
+        assert_eq!(ring.first(), ring.last());
+        // Every point of an ellipse is on it.
+        let ellipse = mark(Tool::Ellipse, &[(0.0, 0.0), (20.0, 10.0)]);
+        for &(x, y) in &ellipse.strokes()[0] {
+            let on = ((x - 10.0) / 10.0).powi(2) + ((y - 5.0) / 5.0).powi(2);
+            assert!((on - 1.0).abs() < 1e-9, "({x}, {y})");
+        }
+        // A click with the pen is a dot.
+        assert_eq!(mark(Tool::Pen, &[(3.0, 4.0)]).strokes(), vec![vec![(3.0, 4.0), (3.0, 4.0)]]);
     }
 
     /// A shape is two points however far the pointer travelled: keeping the

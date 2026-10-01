@@ -1,19 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Notes and speech bubbles.
+//! Notes, speech bubbles and text boxes.
 //!
 //! A note is the PDF's own sticky note: an icon on the page, its text shown
-//! when it is opened. A speech bubble is text written on the page itself, in a
-//! box, with a tail pointing at what it is about. PDF has no single annotation
-//! for that, so it is two: a text box and a line, which every reader draws
-//! just as they look here.
+//! when it is opened. A text box is words written on the page itself, in a
+//! font, size and colour of your choosing. A speech bubble is a text box with
+//! a plain look, an outline and a tail pointing at what it is about. PDF has
+//! no single annotation for that, so it is two: a text box and a line, which
+//! every reader draws just as they look here.
 //!
 //! Positions are points from the page's top-left corner, as in `annots`.
 
 use gtk::glib;
 
 use super::annots::{self, Annotation, Rgb};
+use super::newer;
 
 /// A note's icon, in points.
 pub const NOTE_SIZE: f64 = 20.0;
@@ -59,42 +61,80 @@ impl Note {
     }
 }
 
+/// How a text box's words look.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Bubble {
-    pub page: usize,
-    /// The text box, x1, y1, x2, y2.
-    pub area: [f64; 4],
-    /// Where the tail points. `None` for a plain text box, as another program
-    /// might have left.
-    pub tip: Option<(f64, f64)>,
-    pub text: String,
+pub struct TextStyle {
+    /// `None` for Poppler's own small Helvetica, which needs nothing put in
+    /// the file. A family named here is embedded in it, so it looks the same
+    /// in every reader.
+    pub family: Option<String>,
+    /// In points.
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
+    pub colour: Rgb,
+    /// The box's background; `None` lets the page show through.
+    pub fill: Option<Rgb>,
+    pub border: bool,
 }
 
-impl Bubble {
-    /// A new bubble pointing at `tip`: above and to the right of it, or
-    /// wherever else there is room on the page.
-    pub fn new(page: usize, tip: (f64, f64), page_size: (f64, f64), text: String) -> Self {
-        let (w, h) = size_for(&text);
+impl TextStyle {
+    /// A speech bubble: plain dark text, white, outlined.
+    pub fn bubble() -> Self {
+        TextStyle {
+            family: None,
+            size: 10.0,
+            bold: false,
+            italic: false,
+            colour: Rgb(0, 0, 0),
+            fill: Some(BUBBLE_FILL),
+            border: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBox {
+    pub page: usize,
+    /// The box, x1, y1, x2, y2.
+    pub area: [f64; 4],
+    /// Where a speech bubble's tail points. `None` for a plain text box.
+    pub tip: Option<(f64, f64)>,
+    pub text: String,
+    pub style: TextStyle,
+}
+
+impl TextBox {
+    /// A new speech bubble pointing at `tip`: above and to the right of it,
+    /// or wherever else there is room on the page.
+    pub fn bubble(page: usize, tip: (f64, f64), page_size: (f64, f64), text: String) -> Self {
+        let style = TextStyle::bubble();
+        let (w, h) = box_size(&text, &style, None);
         let pw = page_size.0;
         let x = if tip.0 + REACH + w <= pw - EDGE { tip.0 + REACH } else { tip.0 - REACH - w };
         let y = if tip.1 - REACH - h >= EDGE { tip.1 - REACH - h } else { tip.1 + REACH };
         let (x, y) = keep_on_page((x, y), (w, h), page_size);
-        Bubble { page, area: [x, y, x + w, y + h], tip: Some(tip), text }
+        TextBox { page, area: [x, y, x + w, y + h], tip: Some(tip), text, style }
     }
 
-    /// The same bubble saying something else: resized to fit, from the same
-    /// top-left corner.
-    pub fn with_text(&self, text: String, page_size: (f64, f64)) -> Self {
-        let (w, h) = size_for(&text);
-        let (x, y) = keep_on_page((self.area[0], self.area[1]), (w, h), page_size);
-        Bubble { area: [x, y, x + w, y + h], text, ..self.clone() }
+    /// A new text box with its top-left corner at `corner`, `size` big.
+    pub fn new(page: usize, corner: (f64, f64), size: (f64, f64), page_size: (f64, f64), text: String, style: TextStyle) -> Self {
+        let (x, y) = keep_on_page(corner, size, page_size);
+        TextBox { page, area: [x, y, x + size.0, y + size.1], tip: None, text, style }
     }
 
-    /// The box moved; the tail still points where it did.
+    /// The same box saying something else, or in another style: resized to
+    /// `size`, from the same top-left corner.
+    pub fn changed(&self, text: String, style: TextStyle, size: (f64, f64), page_size: (f64, f64)) -> Self {
+        let (x, y) = keep_on_page((self.area[0], self.area[1]), size, page_size);
+        TextBox { area: [x, y, x + size.0, y + size.1], text, style, ..self.clone() }
+    }
+
+    /// The box moved; a bubble's tail still points where it did.
     pub fn moved(&self, by: (f64, f64), page_size: (f64, f64)) -> Self {
         let [x1, y1, x2, y2] = self.area;
         let (x, y) = keep_on_page((x1 + by.0, y1 + by.1), (x2 - x1, y2 - y1), page_size);
-        Bubble { area: [x, y, x + (x2 - x1), y + (y2 - y1)], ..self.clone() }
+        TextBox { area: [x, y, x + (x2 - x1), y + (y2 - y1)], ..self.clone() }
     }
 
     /// The tail, from the box's edge to the tip. None if there is no tip, or
@@ -124,14 +164,28 @@ fn attach(area: [f64; 4], tip: (f64, f64)) -> Option<(f64, f64)> {
     Some((x, y))
 }
 
-/// The box a bubble needs for its text: wide enough for its longest line, up
-/// to a limit, and tall enough for every line once wrapped at that width.
-pub fn size_for(text: &str) -> (f64, f64) {
+/// The box a text needs.
+///
+/// In a chosen font, `measured` is the text's width in points and how many
+/// lines it takes, as Pango sets it in that same font; Poppler gives each line
+/// exactly the font's size, and the last line's descenders a third more.
+/// Without a measurement — Poppler's own font, for a bubble — the size is
+/// estimated: wide enough for the longest line, up to a limit, and tall
+/// enough for every line once wrapped at that width.
+pub fn box_size(text: &str, style: &TextStyle, measured: Option<(f64, usize)>) -> (f64, f64) {
+    if let (Some(_), Some((width, lines))) = (&style.family, measured) {
+        // A little to spare, or Poppler wraps a line that only just fits.
+        let width = (width * 1.04 + 4.0).max(style.size);
+        let height = lines.max(1) as f64 * style.size + style.size * 0.35;
+        return (width.ceil(), height.ceil());
+    }
+    let scale = style.size / 10.0;
+    let (char_width, line_height, padding) = (CHAR_WIDTH * scale, LINE_HEIGHT * scale, PADDING * scale);
     let longest = text.lines().map(|line| line.chars().count()).max().unwrap_or(0);
-    let width = (longest as f64 * CHAR_WIDTH + 2.0 * PADDING).clamp(NARROWEST, WIDEST);
-    let per_line = (((width - 2.0 * PADDING) / CHAR_WIDTH).floor() as usize).max(1);
+    let width = (longest as f64 * char_width + 2.0 * padding).clamp(NARROWEST * scale, WIDEST * scale);
+    let per_line = (((width - 2.0 * padding) / char_width).floor() as usize).max(1);
     let lines: usize = text.split('\n').map(|paragraph| wrapped(paragraph, per_line)).sum();
-    (width.round(), (lines.max(1) as f64 * LINE_HEIGHT + 2.0 * PADDING).round())
+    (width.round(), (lines.max(1) as f64 * line_height + 2.0 * padding).round())
 }
 
 /// Lines a paragraph takes, wrapped at word breaks to `per_line` characters.
@@ -171,8 +225,8 @@ pub(super) fn note_key(page: &poppler::Page, note: &Note) -> (poppler::ffi::Popp
     (poppler::ffi::POPPLER_ANNOT_TEXT, annots::flip(note.area, height))
 }
 
-/// A bubble is its box and, if it has one, its tail.
-pub(super) fn bubble_keys(page: &poppler::Page, bubble: &Bubble) -> Vec<(poppler::ffi::PopplerAnnotType, [f64; 4])> {
+/// A text box is the box and, for a bubble, its tail.
+pub(super) fn box_keys(page: &poppler::Page, bubble: &TextBox) -> Vec<(poppler::ffi::PopplerAnnotType, [f64; 4])> {
     let (_, height) = page.size();
     let mut keys = vec![(poppler::ffi::POPPLER_ANNOT_FREE_TEXT, annots::flip(bubble.area, height))];
     if let Some((from, to)) = bubble.tail() {
@@ -195,34 +249,95 @@ pub(super) fn add_note(document: &poppler::Document, page: &poppler::Page, note:
     };
     annot.set_contents(&note.text);
     // A note is a comment on the page, not part of it: not printed.
-    annots::attach(page, &annot, note.colour, false);
+    annots::attach(page, &annot, Some(note.colour), false);
 }
 
-pub(super) fn add_bubble(document: &poppler::Document, page: &poppler::Page, bubble: &Bubble) {
+pub(super) fn add_box(document: &poppler::Document, page: &poppler::Page, text_box: &TextBox) {
     use glib::translate::{from_glib_full, ToGlibPtr};
     use poppler::prelude::*;
 
     let (_, height) = page.size();
     let doc = document.to_glib_none().0;
-    let mut rect = annots::rectangle(annots::flip(bubble.area, height));
-    // SAFETY: Poppler copies the rectangle.
-    let text_box: poppler::Annot = unsafe { from_glib_full(poppler::ffi::poppler_annot_free_text_new(doc, &mut rect)) };
-    text_box.set_contents(&bubble.text);
-    annots::attach(page, &text_box, BUBBLE_FILL, true);
+    let style = &text_box.style;
+    let mut rect = annots::rectangle(annots::flip(text_box.area, height));
+    // SAFETY: Poppler copies the rectangle; the font calls are its own, found
+    // by name, and the description is freed once Poppler has copied it.
+    let annot: poppler::Annot = unsafe {
+        let raw = poppler::ffi::poppler_annot_free_text_new(doc, &mut rect);
+        let newer = newer::get();
+        if let (Some(family), Some(fonts)) = (&style.family, &newer.fonts) {
+            if let Ok(name) = std::ffi::CString::new(family.as_str()) {
+                let desc = (fonts.desc_new)(name.as_ptr());
+                (*desc).size_pt = style.size;
+                (*desc).weight = if style.bold { poppler::ffi::POPPLER_WEIGHT_BOLD } else { poppler::ffi::POPPLER_WEIGHT_NORMAL };
+                (*desc).style = if style.italic { poppler::ffi::POPPLER_STYLE_ITALIC } else { poppler::ffi::POPPLER_STYLE_NORMAL };
+                (fonts.set_desc)(raw, desc);
+                (fonts.desc_free)(desc);
+                let mut colour = style.colour.ffi();
+                (fonts.set_colour)(raw, &mut colour);
+            }
+        }
+        if !style.border {
+            if let Some(border) = &newer.border {
+                (border.set)(raw, 0.0);
+            }
+        }
+        from_glib_full(raw)
+    };
+    annot.set_contents(&text_box.text);
+    annots::attach(page, &annot, style.fill, true);
 
-    if let Some((from, to)) = bubble.tail() {
+    if let Some((from, to)) = text_box.tail() {
         let flip = |(x, y): (f64, f64)| poppler::ffi::PopplerPoint { x, y: height - y };
         let mut rect = annots::rectangle(annots::flip(padded(from, to), height));
         let (mut start, mut end) = (flip(from), flip(to));
         // SAFETY: Poppler copies the rectangle and both points.
         let tail: poppler::Annot =
             unsafe { from_glib_full(poppler::ffi::poppler_annot_line_new(doc, &mut rect, &mut start, &mut end)) };
-        annots::attach(page, &tail, TAIL_COLOUR, true);
+        annots::attach(page, &tail, Some(TAIL_COLOUR), true);
     }
 }
 
-/// The notes and bubbles on a page, read back from the document, including
-/// any another program made.
+/// How a text box already in the file looks. One with an outline is shown as
+/// a bubble is; one without, as its font says, where Poppler can tell.
+fn style_of(annot: &poppler::Annot, fill: Option<Rgb>) -> TextStyle {
+    use glib::translate::ToGlibPtr;
+    let newer = newer::get();
+    let raw: *mut poppler::ffi::PopplerAnnot = annot.to_glib_none().0;
+    // SAFETY: Poppler's own calls, found by name; what they hand back is ours
+    // to free, and freed here.
+    unsafe {
+        let border = newer.border.as_ref().map_or(1.0, |border| {
+            let mut width = 1.0;
+            if (border.get)(raw, &mut width) == 0 { 1.0 } else { width }
+        });
+        if border > 0.0 {
+            return TextStyle { fill, ..TextStyle::bubble() };
+        }
+        let mut style = TextStyle { fill, border: false, ..TextStyle::bubble() };
+        if let Some(fonts) = &newer.fonts {
+            let desc = (fonts.get_desc)(raw);
+            if !desc.is_null() {
+                if !(*desc).font_name.is_null() {
+                    style.family = Some(std::ffi::CStr::from_ptr((*desc).font_name).to_string_lossy().into_owned());
+                }
+                style.size = (*desc).size_pt;
+                style.bold = (*desc).weight >= poppler::ffi::POPPLER_WEIGHT_SEMIBOLD;
+                style.italic = (*desc).style != poppler::ffi::POPPLER_STYLE_NORMAL;
+                (fonts.desc_free)(desc);
+            }
+            let colour = (fonts.get_colour)(raw);
+            if !colour.is_null() {
+                style.colour = Rgb::from_ffi(&*colour);
+                poppler::ffi::poppler_color_free(colour);
+            }
+        }
+        style
+    }
+}
+
+/// The notes, bubbles and text boxes on a page, read back from the document,
+/// including any another program made.
 pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Annotation> {
     let Some(page) = annots::page(document, index) else { return Vec::new() };
     let found = annots::list(&page);
@@ -237,11 +352,12 @@ pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Annotation> {
                 text: f.text.clone(),
                 colour: f.colour.unwrap_or(NOTE_COLOUR),
             })),
-            poppler::ffi::POPPLER_ANNOT_FREE_TEXT => Some(Annotation::Bubble(Bubble {
+            poppler::ffi::POPPLER_ANNOT_FREE_TEXT => Some(Annotation::TextBox(TextBox {
                 page: index,
                 area: f.area,
                 tip: tip_among(f.area, &lines),
                 text: f.text.clone(),
+                style: style_of(&f.annot, f.colour),
             })),
             _ => None,
         })
@@ -269,8 +385,8 @@ pub fn under(annotations: &[Annotation], x: f64, y: f64) -> Option<&Annotation> 
     annotations.iter().rev().find(|a| {
         let area = match a {
             Annotation::Note(note) => note.area,
-            Annotation::Bubble(bubble) => bubble.area,
-            Annotation::Mark(_) => return false,
+            Annotation::TextBox(text_box) => text_box.area,
+            Annotation::Mark(_) | Annotation::Ink(_) => return false,
         };
         (area[0] - SLACK..=area[2] + SLACK).contains(&x) && (area[1] - SLACK..=area[3] + SLACK).contains(&y)
     })
@@ -280,11 +396,15 @@ pub fn under(annotations: &[Annotation], x: f64, y: f64) -> Option<&Annotation> 
 mod tests {
     use super::*;
 
+    fn box_size_bubble(text: &str) -> (f64, f64) {
+        box_size(text, &TextStyle::bubble(), None)
+    }
+
     const A4: (f64, f64) = (595.0, 842.0);
 
     #[test]
     fn a_bubble_sits_above_and_right_of_what_it_points_at() {
-        let bubble = Bubble::new(0, (100.0, 400.0), A4, "Hello".into());
+        let bubble = TextBox::bubble(0, (100.0, 400.0), A4, "Hello".into());
         let [x1, _, _, y2] = bubble.area;
         assert_eq!(x1, 100.0 + REACH);
         assert_eq!(y2, 400.0 - REACH);
@@ -297,7 +417,7 @@ mod tests {
     #[test]
     fn near_the_edges_a_bubble_goes_where_there_is_room() {
         // Top right corner: below and to the left.
-        let bubble = Bubble::new(0, (580.0, 10.0), A4, "Hello there".into());
+        let bubble = TextBox::bubble(0, (580.0, 10.0), A4, "Hello there".into());
         let [x1, y1, x2, _] = bubble.area;
         assert!(x2 <= 580.0 - REACH + 1e-9 && x1 >= EDGE, "{:?}", bubble.area);
         assert_eq!(y1, 10.0 + REACH);
@@ -305,14 +425,14 @@ mod tests {
 
     #[test]
     fn longer_text_makes_a_bigger_bubble_up_to_a_width() {
-        let (w1, h1) = size_for("Hi");
-        let (w2, h2) = size_for("A rather longer remark about this page");
-        let (w3, h3) = size_for(&"word ".repeat(80));
+        let (w1, h1) = box_size_bubble("Hi");
+        let (w2, h2) = box_size_bubble("A rather longer remark about this page");
+        let (w3, h3) = box_size_bubble(&"word ".repeat(80));
         assert_eq!((w1, h1), (NARROWEST, (LINE_HEIGHT + 2.0 * PADDING).round()));
         assert!(w2 > w1 && h2 == h1, "{w2} {h2}");
         assert!(w3 == WIDEST && h3 > 5.0 * LINE_HEIGHT, "{w3} {h3}");
         // Lines the writer broke count too.
-        assert_eq!(size_for("one\ntwo\nthree").1, (3.0 * LINE_HEIGHT + 2.0 * PADDING).round());
+        assert_eq!(box_size_bubble("one\ntwo\nthree").1, (3.0 * LINE_HEIGHT + 2.0 * PADDING).round());
     }
 
     #[test]
@@ -325,7 +445,7 @@ mod tests {
 
     #[test]
     fn moving_a_bubble_keeps_its_tail_on_the_same_spot() {
-        let bubble = Bubble::new(0, (100.0, 400.0), A4, "Hello".into());
+        let bubble = TextBox::bubble(0, (100.0, 400.0), A4, "Hello".into());
         let moved = bubble.moved((50.0, -100.0), A4);
         assert_eq!(moved.tip, bubble.tip);
         assert_eq!(moved.area[0], bubble.area[0] + 50.0);
@@ -336,7 +456,7 @@ mod tests {
 
     #[test]
     fn a_tail_is_recognised_from_its_line_alone() {
-        let bubble = Bubble::new(0, (100.0, 400.0), A4, "Hello".into());
+        let bubble = TextBox::bubble(0, (100.0, 400.0), A4, "Hello".into());
         let (from, to) = bubble.tail().unwrap();
         let line = padded(from, to);
         assert_eq!(tip_among(bubble.area, &[line]), Some((100.0, 400.0)));
@@ -346,7 +466,7 @@ mod tests {
 
     #[test]
     fn a_tip_under_the_box_has_no_tail() {
-        let bubble = Bubble { page: 0, area: [10.0, 10.0, 100.0, 50.0], tip: Some((20.0, 20.0)), text: String::new() };
+        let bubble = TextBox { page: 0, area: [10.0, 10.0, 100.0, 50.0], tip: Some((20.0, 20.0)), text: String::new(), style: TextStyle::bubble() };
         assert_eq!(bubble.tail(), None);
     }
 
@@ -361,7 +481,7 @@ mod tests {
 
     #[test]
     fn the_topmost_note_or_bubble_is_the_one_under_the_pointer() {
-        let under_it = Annotation::Bubble(Bubble { page: 0, area: [0.0, 0.0, 100.0, 100.0], tip: None, text: "a".into() });
+        let under_it = Annotation::TextBox(TextBox { page: 0, area: [0.0, 0.0, 100.0, 100.0], tip: None, text: "a".into(), style: TextStyle::bubble() });
         let on_top = Annotation::Note(Note::new(0, (10.0, 10.0), A4, "b".into()));
         let both = [under_it.clone(), on_top.clone()];
         assert_eq!(under(&both, 15.0, 15.0), Some(&on_top));

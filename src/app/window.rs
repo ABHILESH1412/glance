@@ -74,6 +74,9 @@ mod imp {
         pub highlight_button: gtk::MenuButton,
         pub highlight_swatch: gtk::DrawingArea,
         pub info_button: gtk::Button,
+        /// Opens the Draw and Text panel beside a PDF.
+        pub annotate_button: gtk::ToggleButton,
+        pub pdf_tools: std::cell::OnceCell<crate::app::pdf_tools::PdfTools>,
         /// Highlight colour, night mode and layout, as last chosen.
         pub reader_prefs: Cell<prefs::Reader>,
         /// The main menu differs by document: an image's has editing and
@@ -208,6 +211,8 @@ mod imp {
                 highlight_button: gtk::MenuButton::new(),
                 highlight_swatch: gtk::DrawingArea::new(),
                 info_button: gtk::Button::from_icon_name("glance-info-symbolic"),
+                annotate_button: gtk::ToggleButton::new(),
+                pdf_tools: std::cell::OnceCell::new(),
                 reader_prefs: Cell::new(prefs::Reader::load()),
                 image_menu: gio::Menu::new(),
                 pdf_menu: gio::Menu::new(),
@@ -378,6 +383,22 @@ impl Window {
         imp.pdf_view.set_night(reader.night);
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
+        let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
+        body.append(&pdf_tools.root);
+        let _ = imp.pdf_tools.set(pdf_tools);
+        let annotate = &imp.annotate_button;
+        annotate.set_icon_name("document-edit-symbolic");
+        annotate.set_tooltip_text(Some("Draw and Write (Ctrl+E)"));
+        annotate.set_visible(false);
+        annotate.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if let Some(tools) = window.imp().pdf_tools.get() {
+                    tools.set_open(button.is_active());
+                }
+            }
+        ));
         imp.toasts.set_child(Some(&body));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
@@ -583,6 +604,7 @@ impl Window {
         header.pack_end(&imp.search_button);
         header.pack_end(&imp.info_button);
         header.pack_end(&imp.highlight_button);
+        header.pack_end(&imp.annotate_button);
 
         let action_bar = &imp.action_bar;
         action_bar.add_css_class("toolbar");
@@ -931,6 +953,12 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _| {
+                // A PDF's Draw and Text panel takes the image editor's key.
+                if window.imp().showing_pdf.get() {
+                    let button = &window.imp().annotate_button;
+                    button.set_active(!button.is_active());
+                    return;
+                }
                 let button = &window.imp().edit_button;
                 if button.is_sensitive() {
                     button.set_active(!button.is_active());
@@ -1262,6 +1290,8 @@ impl Window {
                 // The search bar first: it is the last thing opened.
                 if window.imp().search_bar.is_search_mode() {
                     window.imp().search_bar.set_search_mode(false);
+                } else if window.imp().annotate_button.is_active() {
+                    window.imp().annotate_button.set_active(false);
                 } else if window.is_fullscreen() {
                     window.unfullscreen();
                 } else {
@@ -1877,6 +1907,10 @@ impl Window {
         imp.search_button.set_visible(pdf);
         imp.highlight_button.set_visible(pdf);
         imp.info_button.set_visible(pdf);
+        imp.annotate_button.set_visible(pdf);
+        if !pdf {
+            imp.annotate_button.set_active(false);
+        }
         if !pdf {
             imp.search_bar.set_search_mode(false);
         }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Everything Glance writes onto a page — highlights and other text marks,
-//! notes and speech bubbles — as one kind of thing, so undo, redo and saving
+//! notes, speech bubbles, text boxes and drawings — as one kind of thing, so undo, redo and saving
 //! treat them all alike.
 //!
 //! Each is an ordinary PDF annotation, written into the file the moment it is
@@ -22,7 +22,8 @@ use gtk::{cairo, glib};
 
 use super::document;
 use super::markup::Mark;
-use super::notes::{Bubble, Note};
+use super::ink::Drawing;
+use super::notes::{Note, TextBox};
 
 /// A colour as Poppler takes it, 16 bits a channel. Only ever 8 bits' worth
 /// of it is used: the PDF stores colours as decimals, which come back a hair
@@ -43,6 +44,14 @@ impl Rgb {
 
     fn from_poppler(colour: &poppler::Color) -> Self {
         Rgb(snap(colour.red()), snap(colour.green()), snap(colour.blue()))
+    }
+
+    pub(super) fn from_ffi(colour: &poppler::ffi::PopplerColor) -> Self {
+        Rgb(snap(colour.red), snap(colour.green), snap(colour.blue))
+    }
+
+    pub(super) fn ffi(self) -> poppler::ffi::PopplerColor {
+        poppler::ffi::PopplerColor { red: self.0, green: self.1, blue: self.2 }
     }
 
     pub fn to_rgba(self) -> gtk::gdk::RGBA {
@@ -77,7 +86,8 @@ impl Rgb {
 pub enum Annotation {
     Mark(Mark),
     Note(Note),
-    Bubble(Bubble),
+    TextBox(TextBox),
+    Ink(Drawing),
 }
 
 impl Annotation {
@@ -85,7 +95,8 @@ impl Annotation {
         match self {
             Annotation::Mark(mark) => mark.page,
             Annotation::Note(note) => note.page,
-            Annotation::Bubble(bubble) => bubble.page,
+            Annotation::TextBox(text_box) => text_box.page,
+            Annotation::Ink(drawing) => drawing.page,
         }
     }
 
@@ -96,7 +107,8 @@ impl Annotation {
         match self {
             Annotation::Mark(mark) => super::markup::add(document, &page, mark),
             Annotation::Note(note) => super::notes::add_note(document, &page, note),
-            Annotation::Bubble(bubble) => super::notes::add_bubble(document, &page, bubble),
+            Annotation::TextBox(text_box) => super::notes::add_box(document, &page, text_box),
+            Annotation::Ink(drawing) => super::ink::add(document, &page, drawing),
         }
     }
 
@@ -106,7 +118,8 @@ impl Annotation {
         let parts = match self {
             Annotation::Mark(mark) => vec![super::markup::key(&page, mark)],
             Annotation::Note(note) => vec![super::notes::note_key(&page, note)],
-            Annotation::Bubble(bubble) => super::notes::bubble_keys(&page, bubble),
+            Annotation::TextBox(text_box) => super::notes::box_keys(&page, text_box),
+            Annotation::Ink(drawing) => vec![super::ink::key(&page, drawing)],
         };
         let mut removed = false;
         for (kind, rect) in parts {
@@ -135,11 +148,13 @@ pub(super) fn rectangle(area: [f64; 4]) -> poppler::ffi::PopplerRectangle {
     poppler::ffi::PopplerRectangle { x1, y1, x2, y2 }
 }
 
-/// Finish off a new annotation and put it on the page: its colour, and
-/// printed with the page, as ink on paper would be.
-pub(super) fn attach(page: &poppler::Page, annot: &poppler::Annot, colour: Rgb, print: bool) {
+/// Finish off a new annotation and put it on the page: its colour, if it has
+/// one, and printed with the page, as ink on paper would be.
+pub(super) fn attach(page: &poppler::Page, annot: &poppler::Annot, colour: Option<Rgb>, print: bool) {
     use poppler::prelude::*;
-    annot.set_color(Some(&colour.poppler()));
+    if let Some(colour) = colour {
+        annot.set_color(Some(&colour.poppler()));
+    }
     if print {
         annot.set_flags(poppler::AnnotFlag::PRINT);
     }
@@ -153,7 +168,7 @@ pub(super) struct Found {
     pub area: [f64; 4],
     pub text: String,
     pub colour: Option<Rgb>,
-    annot: poppler::Annot,
+    pub annot: poppler::Annot,
 }
 
 /// Every annotation on a page.
@@ -274,7 +289,7 @@ fn replace(document: &poppler::Document, temp: &Path, target: &Path) -> Result<(
 
 #[cfg(test)]
 mod tests {
-    use super::super::notes::{Bubble, Note};
+    use super::super::notes::{Note, TextBox, TextStyle};
     use super::*;
 
     #[test]
@@ -336,10 +351,34 @@ mod tests {
             colour: Rgb(0x7f7f, 0xe3e3, 0x5a5a),
         });
         let note = Annotation::Note(Note::new(0, (400.0, 300.0), a4, "A note".into()));
-        let bubble = Annotation::Bubble(Bubble::new(0, (150.0, 500.0), a4, "Look here, please".into()));
+        let bubble = Annotation::TextBox(TextBox::bubble(0, (150.0, 500.0), a4, "Look here, please".into()));
+        let words = Annotation::TextBox(TextBox::new(
+            0,
+            (300.0, 600.0),
+            (180.0, 30.0),
+            a4,
+            "In a font of my own".into(),
+            TextStyle {
+                family: Some("DejaVu Sans".into()),
+                size: 18.0,
+                bold: true,
+                italic: false,
+                colour: Rgb(0xc0c0, 0x1c1c, 0x2828),
+                fill: None,
+                border: false,
+            },
+        ));
+        let drawing = Annotation::Ink(super::super::ink::Drawing {
+            page: 0,
+            tool: crate::images::edit::draw::Tool::Arrow,
+            strokes: vec![vec![(100.0, 700.0), (200.0, 720.0)], vec![(190.0, 712.0), (200.0, 720.0), (188.0, 724.0)]],
+            colour: Rgb(0x1c1c, 0x7171, 0xd8d8),
+            width: 3.0,
+        });
 
         let doc = open();
-        for a in [&mark, &note, &bubble] {
+        let all = [&mark, &note, &bubble, &words, &drawing];
+        for a in all {
             a.add(&doc);
         }
         settle(&doc, &[0]);
@@ -349,7 +388,7 @@ mod tests {
         // Read back by another document, as the next run would.
         let doc = open();
         let pinned = notes::on_page(&doc, 0);
-        assert_eq!(pinned, vec![note.clone(), bubble.clone()]);
+        assert_eq!(pinned, vec![note.clone(), bubble.clone(), words.clone()]);
         let Annotation::Mark(m) = &mark else { unreachable!() };
         assert_eq!(super::super::markup::existing_colour(&doc, m), Some(m.colour));
         // The text box carries its own appearance, for other readers.
@@ -357,7 +396,7 @@ mod tests {
         assert!(bytes.windows(4).any(|w| w == b"/AP "), "no appearance stream written");
 
         // And each can be taken off again, tail and all.
-        for a in [&mark, &note, &bubble] {
+        for a in all {
             assert!(a.remove(&doc), "{a:?} not found to remove");
         }
         settle(&doc, &[0]);
@@ -365,6 +404,25 @@ mod tests {
         let doc = open();
         let page = page(&doc, 0).unwrap();
         assert!(list(&page).is_empty(), "annotations left behind");
+
+        // Undone then redone, in the same document, as the reader does.
+        let doc = open();
+        for a in all {
+            a.add(&doc);
+        }
+        save(&doc, &path).unwrap();
+        for a in all {
+            assert!(a.remove(&doc), "{a:?} not there to take back");
+        }
+        save(&doc, &path).unwrap();
+        for a in all {
+            a.add(&doc);
+        }
+        settle(&doc, &[0]);
+        save(&doc, &path).unwrap();
+        let again = list(&super::page(&open(), 0).unwrap()).len();
+        // Five, the bubble's tail making a sixth.
+        assert_eq!(again, 6, "not everything came back after undo and redo");
         fs::remove_dir_all(&dir).unwrap();
     }
 

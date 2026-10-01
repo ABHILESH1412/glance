@@ -16,8 +16,10 @@ mod annots;
 mod document;
 mod editor;
 mod info;
+mod ink;
 mod layout;
 mod markup;
+mod newer;
 mod notes;
 mod page;
 mod render;
@@ -30,4 +32,15 @@ pub use annots::Rgb;
 pub use info::{gather as document_info, Info};
 pub use layout::Mode;
 pub use markup::Style;
-pub use view::{Marked, PdfView, Pinned, SearchStatus, Status};
+pub use notes::TextStyle;
+pub use view::{Marked, PdfView, Pinned, SearchStatus, Status, Tool};
+
+/// Whether this Poppler can draw on pages: ink needs 25.06.
+pub fn can_draw() -> bool {
+    ink::available()
+}
+
+/// Whether this Poppler can set a text box's font, size and colour: 24.12.
+pub fn can_style_text() -> bool {
+    newer::get().fonts.is_some() && newer::get().border.is_some()
+}

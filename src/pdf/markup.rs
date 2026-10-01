@@ -184,7 +184,7 @@ pub(super) fn add(document: &poppler::Document, page: &poppler::Page, mark: &Mar
     }
     let (_, height) = page.size();
     let annot = create(document, mark.style, &mark.lines, height);
-    annots::attach(page, &annot, mark.colour, true);
+    annots::attach(page, &annot, Some(mark.colour), true);
 }
 
 /// What the mark is found by again: its kind, and its box in the PDF's own

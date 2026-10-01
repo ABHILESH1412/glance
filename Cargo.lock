@@ -785,6 +785,7 @@ dependencies = [
  "gtk4",
  "image",
  "libadwaita",
+ "libc",
  "libheif-rs",
  "moxcms",
  "poppler-rs",

@@ -77,6 +77,12 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   note is a sticky-note icon that opens when clicked; a speech bubble writes its words
   on the page, with a tail pointing at the spot. Click either to edit or delete it,
   drag it to move it, and undo any of it
+- **Draw and write on pages** (Ctrl+E, or the pencil button): the image editor's pen,
+  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, and text
+  boxes in any font, size, colour and background, bold or italic. Click a text box to
+  change it, drag it to move it. Everything is saved into the PDF as it is made, and
+  Ctrl+Z takes it back. Drawing needs Poppler 25.06 or newer, and styled text 24.12;
+  on an older Poppler those tools say so and the rest works as usual
 - **Night mode** from the menu: black pages, white text, and colours that keep their
   hue, so a red heading stays red
 - **Document info** (Ctrl+I, or the ⓘ button): title, author, dates, the program that
@@ -359,6 +365,7 @@ file, and four CC0 camera raws covering different decode paths.
 | `Enter` `Shift+Enter` / `F3` `Shift+F3` | In a PDF: next / previous match |
 | `Ctrl+H` `Ctrl+U` `Ctrl+Shift+X` | In a PDF: highlight / underline / strike through the selected text |
 | `Ctrl+I` | In a PDF: document info |
+| `Ctrl+E` | In a PDF: the Draw and Text panel |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
 
 ## Known limitations

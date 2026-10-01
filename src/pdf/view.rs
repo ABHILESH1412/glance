@@ -16,11 +16,14 @@
 //! triple-click a line. The highlight is drawn over the page rather than into
 //! it, so selecting never waits for a page to be redrawn.
 //!
-//! Selected text can be highlighted, underlined or struck through, and notes
-//! and speech bubbles put on a page. They go into the file itself (see
-//! `annots`), the pages they are on are redrawn from it, and each change can
-//! be undone and redone. A note or bubble is opened by clicking it, and moved
-//! by dragging it.
+//! Selected text can be highlighted, underlined or struck through, and notes,
+//! speech bubbles, text boxes and drawings put on a page. They go into the
+//! file itself (see `annots`), the pages they are on are redrawn from it, and
+//! each change can be undone and redone. A note or bubble is opened by
+//! clicking it, and any of them moved by dragging it.
+//!
+//! What a press on a page does depends on the tool: select text, draw with
+//! one of the image editor's pens and shapes, or place and pick text boxes.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -29,14 +32,17 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib, graphene};
+use gtk::{gdk, gio, glib, graphene, pango};
+
+use crate::images::edit::draw;
 
 use super::annots::{self, Annotation, Rgb};
 use super::document::{self, Opened, Pixels, Spot, Unit};
 use super::editor::{Commit, Editor};
 use super::layout::{self, Layout, Mode, Rotation};
 use super::markup::{self, Mark, Style};
-use super::notes::{self, Bubble, Note};
+use super::ink::{self, Drawing};
+use super::notes::{self, Note, TextBox, TextStyle};
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
@@ -112,6 +118,21 @@ struct Selection {
     head: Spot,
     unit: Unit,
 }
+
+/// What a press on a page does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// Select text; open notes; move notes and bubbles.
+    Select,
+    /// Draw with one of the image editor's pens or shapes.
+    Draw(draw::Tool),
+    /// Put a text box down, or pick one to restyle or move.
+    Text,
+}
+
+/// How long typing or restyling a text box has to pause before the file is
+/// written: one save, and one step of undo, per pause rather than per key.
+const RESTYLE_PAUSE: Duration = Duration::from_millis(500);
 
 /// A note or bubble being dragged, and how far so far, in points.
 struct Moving {
@@ -205,6 +226,22 @@ struct Inner {
     /// For what goes wrong after the call that started it has returned: a
     /// note that could not be saved when its editor closed.
     on_error: RefCell<Option<Box<dyn Fn(String)>>>,
+    tool: Cell<Tool>,
+    /// The pen's colour and thickness, in points.
+    ink: Cell<(gdk::RGBA, f64)>,
+    /// A drawing being made, on a page, in page points.
+    sketch: RefCell<Option<(usize, draw::Mark)>>,
+    /// The page showing a finished drawing until it is redrawn with it.
+    sketched: Cell<Option<usize>>,
+    /// What the text controls say, for the next box and the chosen one.
+    look: RefCell<(String, TextStyle)>,
+    /// The text box picked with the text tool.
+    chosen: RefCell<Option<TextBox>>,
+    /// A change to the chosen box, waiting for typing to pause.
+    restyle: RefCell<Option<glib::SourceId>>,
+    /// Where a press with the text tool landed on empty page.
+    placing: Cell<Option<Spot>>,
+    on_chosen: RefCell<Option<Box<dyn Fn(Option<(String, TextStyle)>)>>>,
 }
 
 impl PdfView {
@@ -264,6 +301,15 @@ impl PdfView {
             undone: RefCell::default(),
             on_history: RefCell::default(),
             on_error: RefCell::default(),
+            tool: Cell::new(Tool::Select),
+            ink: Cell::new((gdk::RGBA::new(0.9, 0.15, 0.15, 1.0), 3.0)),
+            sketch: RefCell::default(),
+            sketched: Cell::new(None),
+            look: RefCell::new(("Text".to_string(), TextStyle::bubble())),
+            chosen: RefCell::default(),
+            restyle: RefCell::default(),
+            placing: Cell::new(None),
+            on_chosen: RefCell::default(),
         });
         Inner::connect(&inner);
         PdfView { inner }
@@ -304,7 +350,7 @@ impl PdfView {
         let widgets: Vec<Page> = (0..count)
             .map(|_| {
                 let widget = Page::new();
-                widget.set_cursor_from_name(Some("text"));
+                widget.set_cursor_from_name(Some(inner.cursor()));
                 widget.set_night(inner.night.get());
                 inner.column.put(&widget, 0.0, 0.0);
                 widget
@@ -514,6 +560,42 @@ impl PdfView {
         self.inner.on_error.replace(Some(Box::new(callback)));
     }
 
+    /// What a press on a page does from now on.
+    pub fn set_tool(&self, tool: Tool) {
+        self.inner.set_tool(tool);
+    }
+
+    /// The pen's colour, and its thickness in points.
+    pub fn set_ink(&self, colour: gdk::RGBA, width: f64) {
+        self.inner.ink.set((colour, width));
+    }
+
+    /// What the text controls say: the words and look for the next text box,
+    /// and for the chosen one, which follows once typing pauses.
+    pub fn set_text_look(&self, text: String, style: TextStyle) {
+        self.inner.set_text_look(text, style);
+    }
+
+    /// Put a new text box near the top of the page being read.
+    pub fn add_text_box(&self) {
+        let inner = &self.inner;
+        let page = inner.current_page();
+        if let Some(&(w, h)) = inner.pages.borrow().get(page) {
+            inner.place_text(Spot { page, x: w * 0.12, y: h * 0.12 });
+        }
+    }
+
+    /// Delete the chosen text box.
+    pub fn remove_chosen(&self) {
+        self.inner.remove_chosen();
+    }
+
+    /// Called with the chosen text box's words and look, or `None` when none
+    /// is chosen.
+    pub fn connect_chosen(&self, callback: impl Fn(Option<(String, TextStyle)>) + 'static) {
+        self.inner.on_chosen.replace(Some(Box::new(callback)));
+    }
+
     /// Copy the selected text to the clipboard. False if nothing is selected.
     pub fn copy_selection(&self) -> bool {
         let inner = &self.inner;
@@ -652,6 +734,29 @@ impl Inner {
         drag.connect_drag_begin(move |_, x, y| {
             let Some(inner) = weak.upgrade() else { return };
             let Some(spot) = inner.hit(x, y) else { return };
+            match inner.tool.get() {
+                Tool::Draw(tool) => {
+                    inner.start_sketch(spot, tool);
+                    return;
+                }
+                Tool::Text => {
+                    inner.set_selection(None);
+                    match inner.pinned_at(spot) {
+                        Some(annotation) => {
+                            if let Annotation::TextBox(text_box) = &annotation {
+                                inner.choose(Some(text_box.clone()));
+                            }
+                            inner.moving.replace(Some(Moving { annotation, from: spot, by: (0.0, 0.0) }));
+                        }
+                        None => {
+                            inner.choose(None);
+                            inner.placing.set(Some(spot));
+                        }
+                    }
+                    return;
+                }
+                Tool::Select => {}
+            }
             let unit = inner.count_press(x, y);
             if unit == Unit::Glyph {
                 if let Some(annotation) = inner.pinned_at(spot) {
@@ -667,6 +772,14 @@ impl Inner {
             let Some(inner) = weak.upgrade() else { return };
             let Some((x, y)) = gesture.start_point() else { return };
             let Some(head) = inner.hit(x + dx, y + dy) else { return };
+            if inner.sketch.borrow().is_some() {
+                inner.extend_sketch(head);
+                return;
+            }
+            // Dragged off where it was pressed: not a click to place text.
+            if inner.placing.get().is_some() && dx.hypot(dy) > 4.0 {
+                inner.placing.set(None);
+            }
             if inner.moving.borrow().is_some() {
                 inner.drag_pinned(head);
                 return;
@@ -680,6 +793,14 @@ impl Inner {
         let weak = Rc::downgrade(this);
         drag.connect_drag_end(move |_, _, _| {
             let Some(inner) = weak.upgrade() else { return };
+            if inner.sketch.borrow().is_some() {
+                inner.finish_sketch();
+                return;
+            }
+            if let Some(spot) = inner.placing.take() {
+                inner.place_text(spot);
+                return;
+            }
             if let Some(moving) = inner.moving.take() {
                 inner.drop_pinned(moving);
                 return;
@@ -997,6 +1118,11 @@ impl Inner {
         let Some(widget) = widgets.get(rendered.page) else { return };
         widget.set_texture(Some(texture(rendered.pixels)));
         self.rendered.borrow_mut()[rendered.page] = rendered.requested;
+        // The drawing is in the page now; the sketch of it can go.
+        if self.sketched.get() == Some(rendered.page) {
+            widget.set_sketch(None);
+            self.sketched.set(None);
+        }
     }
 
     fn emit_status(&self) {
@@ -1353,8 +1479,11 @@ impl Inner {
     /// Undo the last change, or redo the last one undone.
     fn step_history(&self, back: bool) -> Result<(), String> {
         let (from, to) = if back { (&self.history, &self.undone) } else { (&self.undone, &self.history) };
+        self.flush_restyle();
         let Some(change) = from.borrow_mut().pop() else { return Ok(()) };
         let Some(reader) = self.reader() else { return Ok(()) };
+        // What was chosen may be what is about to be taken away.
+        self.choose(None);
         if let Err(error) = self.apply(&reader, &change, !back) {
             from.borrow_mut().push(change);
             return Err(error);
@@ -1449,13 +1578,17 @@ impl Inner {
 
     /// A hand over a note or bubble, the text cursor elsewhere.
     fn hover(&self, x: f64, y: f64) {
+        // A pen draws over notes like anything else on the page.
+        if matches!(self.tool.get(), Tool::Draw(_)) {
+            return;
+        }
         let over = self.hit(x, y).filter(|&spot| self.pinned_at(spot).is_some()).map(|spot| spot.page);
         if over == self.hovering.get() {
             return;
         }
         let widgets = self.widgets.borrow();
         if let Some(widget) = self.hovering.get().and_then(|page| widgets.get(page)) {
-            widget.set_cursor_from_name(Some("text"));
+            widget.set_cursor_from_name(Some(self.cursor()));
         }
         if let Some(widget) = over.and_then(|page| widgets.get(page)) {
             widget.set_cursor_from_name(Some("pointer"));
@@ -1488,14 +1621,26 @@ impl Inner {
             widget.set_ghost(None);
         }
         let Some(&size) = self.pages.borrow().get(page) else { return };
+        let text_tool = self.tool.get() == Tool::Text;
         if moving.by.0.hypot(moving.by.1) < NUDGE {
-            self.open_pinned(moving.annotation);
+            // With the text tool a click picks a text box, to restyle in the
+            // panel; a note still opens.
+            if !(text_tool && matches!(moving.annotation, Annotation::TextBox(_))) {
+                self.open_pinned(moving.annotation);
+            }
             return;
         }
+        self.flush_restyle();
         let after = moved(&moving.annotation, moving.by, size);
-        let change = Change { removed: vec![moving.annotation], added: vec![after] };
-        if let Err(error) = self.commit(change) {
-            self.report(error);
+        let change = Change { removed: vec![moving.annotation], added: vec![after.clone()] };
+        match self.commit(change) {
+            Ok(()) if text_tool => {
+                if let Annotation::TextBox(text_box) = after {
+                    self.choose(Some(text_box));
+                }
+            }
+            Ok(()) => {}
+            Err(error) => self.report(error),
         }
     }
 
@@ -1504,8 +1649,9 @@ impl Inner {
         let page = annotation.page();
         let (title, text) = match &annotation {
             Annotation::Note(note) => ("Note", note.text.clone()),
-            Annotation::Bubble(bubble) => ("Speech Bubble", bubble.text.clone()),
-            Annotation::Mark(_) => return,
+            Annotation::TextBox(text_box) if text_box.tip.is_some() => ("Speech Bubble", text_box.text.clone()),
+            Annotation::TextBox(text_box) => ("Text Box", text_box.text.clone()),
+            Annotation::Mark(_) | Annotation::Ink(_) => return,
         };
         let Some(at) = self.on_screen(page, area_of(&annotation)) else { return };
         let size = self.pages.borrow()[page];
@@ -1521,8 +1667,11 @@ impl Inner {
                 Commit::Text(text) => {
                     let after = match &annotation {
                         Annotation::Note(note) => Annotation::Note(Note { text, ..note.clone() }),
-                        Annotation::Bubble(bubble) => Annotation::Bubble(bubble.with_text(text, size)),
-                        Annotation::Mark(_) => return,
+                        Annotation::TextBox(text_box) => {
+                            let fits = inner.box_size(&text, &text_box.style, size.0);
+                            Annotation::TextBox(text_box.changed(text, text_box.style.clone(), fits, size))
+                        }
+                        Annotation::Mark(_) | Annotation::Ink(_) => return,
                     };
                     Change { removed: vec![annotation.clone()], added: vec![after] }
                 }
@@ -1568,12 +1717,226 @@ impl Inner {
             }
             let annotation = match kind {
                 Pinned::Note => Annotation::Note(Note::new(spot.page, (spot.x, spot.y), size, text)),
-                Pinned::Bubble => Annotation::Bubble(Bubble::new(spot.page, (spot.x, spot.y), size, text)),
+                Pinned::Bubble => Annotation::TextBox(TextBox::bubble(spot.page, (spot.x, spot.y), size, text)),
             };
             if let Err(error) = inner.commit(Change { removed: Vec::new(), added: vec![annotation] }) {
                 inner.report(error);
             }
         });
+    }
+
+    fn set_tool(&self, tool: Tool) {
+        if self.tool.replace(tool) == tool {
+            return;
+        }
+        self.flush_restyle();
+        self.choose(None);
+        for widget in self.widgets.borrow().iter() {
+            widget.set_cursor_from_name(Some(self.cursor()));
+        }
+        self.hovering.set(None);
+    }
+
+    /// The pointer over a page, for the tool in hand: a drawing tool takes
+    /// over the press, so the text cursor would lie.
+    fn cursor(&self) -> &'static str {
+        match self.tool.get() {
+            Tool::Draw(_) => "crosshair",
+            Tool::Text => "default",
+            Tool::Select => "text",
+        }
+    }
+
+    /// Start a drawing where the pointer went down.
+    fn start_sketch(&self, spot: Spot, tool: draw::Tool) {
+        if !ink::available() {
+            self.report("Drawing on a PDF needs Poppler 25.06 or newer.".to_string());
+            return;
+        }
+        let (colour, width) = self.ink.get();
+        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour, width, sequence: 0 };
+        // A new drawing replaces any sketch still waiting for its page.
+        if let Some(page) = self.sketched.take() {
+            if let Some(widget) = self.widgets.borrow().get(page) {
+                widget.set_sketch(None);
+            }
+        }
+        self.sketch.replace(Some((spot.page, mark)));
+        self.show_sketch();
+    }
+
+    fn extend_sketch(&self, to: Spot) {
+        {
+            let mut sketch = self.sketch.borrow_mut();
+            let Some((page, mark)) = sketch.as_mut() else { return };
+            // A drawing stays on the page it was started on.
+            if to.page != *page {
+                return;
+            }
+            mark.extend((to.x, to.y));
+        }
+        self.show_sketch();
+    }
+
+    /// Draw the sketch on its page, converted to the page widget's pixels.
+    fn show_sketch(&self) {
+        let sketch = self.sketch.borrow();
+        let Some((page, mark)) = sketch.as_ref() else { return };
+        let Some(&(pw, ph)) = self.pages.borrow().get(*page) else { return };
+        let rotation = self.rotation.get();
+        let (tw, th) = rotation.size(pw, ph);
+        let (w, h) = self.layout.borrow().size(*page);
+        let points = mark
+            .points
+            .iter()
+            .map(|&(x, y)| {
+                let (x, y) = rotation.apply(x, y, pw, ph);
+                (x / tw * w, y / th * h)
+            })
+            .collect();
+        let shown = draw::Mark { points, width: mark.width * w / tw, ..mark.clone() };
+        if let Some(widget) = self.widgets.borrow().get(*page) {
+            widget.set_sketch(Some(shown));
+        }
+    }
+
+    /// The pointer let go: save the drawing. Its sketch stays up until the
+    /// page has been redrawn with it, so it never blinks out.
+    fn finish_sketch(&self) {
+        let Some((page, mark)) = self.sketch.take() else { return };
+        let saved = match Drawing::from_mark(page, &mark) {
+            Some(drawing) => match self.commit(Change { removed: Vec::new(), added: vec![Annotation::Ink(drawing)] }) {
+                Ok(()) => true,
+                Err(error) => {
+                    self.report(error);
+                    false
+                }
+            },
+            None => false,
+        };
+        if saved {
+            self.sketched.set(Some(page));
+        } else if let Some(widget) = self.widgets.borrow().get(page) {
+            widget.set_sketch(None);
+        }
+    }
+
+    /// The text box a piece of text in a style needs, `page_width` wide at
+    /// most. Measured with Pango in that very font, the one Poppler will find.
+    fn box_size(&self, text: &str, style: &TextStyle, page_width: f64) -> (f64, f64) {
+        let measured = style.family.as_ref().map(|family| {
+            let layout = self.root.create_pango_layout(Some(text));
+            let mut desc = pango::FontDescription::new();
+            desc.set_family(family);
+            desc.set_absolute_size(style.size * f64::from(pango::SCALE));
+            desc.set_weight(if style.bold { pango::Weight::Bold } else { pango::Weight::Normal });
+            desc.set_style(if style.italic { pango::Style::Italic } else { pango::Style::Normal });
+            layout.set_font_description(Some(&desc));
+            // Absolute sizes make Pango's pixels points here.
+            layout.set_width(((page_width * 0.8) * f64::from(pango::SCALE)) as i32);
+            layout.set_wrap(pango::WrapMode::WordChar);
+            let (width, _) = layout.pixel_size();
+            (f64::from(width), usize::try_from(layout.line_count()).unwrap_or(1))
+        });
+        notes::box_size(text, style, measured)
+    }
+
+    /// Put a new text box down, with the words and look the controls show.
+    fn place_text(&self, spot: Spot) {
+        let Some(&page_size) = self.pages.borrow().get(spot.page) else { return };
+        let (text, style) = self.look.borrow().clone();
+        let text = if text.trim().is_empty() { "Text".to_string() } else { text };
+        let size = self.box_size(&text, &style, page_size.0);
+        let text_box = TextBox::new(spot.page, (spot.x, spot.y), size, page_size, text, style);
+        match self.commit(Change { removed: Vec::new(), added: vec![Annotation::TextBox(text_box.clone())] }) {
+            Ok(()) => self.choose(Some(text_box)),
+            Err(error) => self.report(error),
+        }
+    }
+
+    /// Pick a text box, or none: outlined on its page, and shown in the
+    /// controls.
+    fn choose(&self, text_box: Option<TextBox>) {
+        let widgets = self.widgets.borrow();
+        if let Some(old) = self.chosen.borrow().as_ref() {
+            if let Some(widget) = widgets.get(old.page) {
+                widget.set_outline(None);
+            }
+        }
+        if let Some(text_box) = &text_box {
+            if let (Some(widget), Some(&size)) = (widgets.get(text_box.page), self.pages.borrow().get(text_box.page)) {
+                let [x1, y1, x2, y2] = text_box.area;
+                widget.set_outline(Some(shown([x1, y1, x2 - x1, y2 - y1], size, self.rotation.get())));
+            }
+        }
+        drop(widgets);
+        let look = text_box.as_ref().map(|t| (t.text.clone(), t.style.clone()));
+        self.chosen.replace(text_box);
+        if let Some(callback) = self.on_chosen.borrow().as_ref() {
+            callback(look);
+        }
+    }
+
+    fn set_text_look(self: &Rc<Self>, text: String, style: TextStyle) {
+        self.look.replace((text, style));
+        if self.chosen.borrow().is_none() {
+            return;
+        }
+        if let Some(source) = self.restyle.take() {
+            source.remove();
+        }
+        let weak = Rc::downgrade(self);
+        let source = glib::timeout_add_local_once(RESTYLE_PAUSE, move || {
+            if let Some(inner) = weak.upgrade() {
+                inner.restyle.replace(None);
+                inner.apply_restyle();
+            }
+        });
+        self.restyle.replace(Some(source));
+    }
+
+    /// Save a change to the chosen box now, rather than when typing pauses.
+    fn flush_restyle(&self) {
+        if let Some(source) = self.restyle.take() {
+            source.remove();
+            self.apply_restyle();
+        }
+    }
+
+    fn apply_restyle(&self) {
+        let Some(old) = self.chosen.borrow().clone() else { return };
+        let (text, style) = self.look.borrow().clone();
+        // Emptied while typing is not a delete; Remove is for that.
+        if text.trim().is_empty() {
+            return;
+        }
+        let Some(&page_size) = self.pages.borrow().get(old.page) else { return };
+        let size = self.box_size(&text, &style, page_size.0);
+        let new = old.changed(text, style, size, page_size);
+        if new == old {
+            return;
+        }
+        match self.commit(Change { removed: vec![Annotation::TextBox(old)], added: vec![Annotation::TextBox(new.clone())] }) {
+            Ok(()) => {
+                // Still chosen, now as it is in the file; the controls already
+                // show it, so they are not told.
+                let callback = self.on_chosen.take();
+                self.choose(Some(new));
+                self.on_chosen.replace(callback);
+            }
+            Err(error) => self.report(error),
+        }
+    }
+
+    fn remove_chosen(&self) {
+        if let Some(source) = self.restyle.take() {
+            source.remove();
+        }
+        let Some(text_box) = self.chosen.borrow().clone() else { return };
+        self.choose(None);
+        if let Err(error) = self.commit(Change { removed: vec![Annotation::TextBox(text_box)], added: Vec::new() }) {
+            self.report(error);
+        }
     }
 
     /// The top right corner of the last line of the selection: where the
@@ -1614,6 +1977,13 @@ impl Inner {
         self.pinned.borrow_mut().clear();
         self.moving.replace(None);
         self.hovering.set(None);
+        if let Some(source) = self.restyle.take() {
+            source.remove();
+        }
+        self.chosen.replace(None);
+        self.sketch.replace(None);
+        self.sketched.set(None);
+        self.placing.set(None);
         // Taken out first, so nothing is borrowed while GTK removes them.
         let widgets = std::mem::take(&mut *self.widgets.borrow_mut());
         for widget in widgets {
@@ -1646,7 +2016,8 @@ impl Inner {
 fn area_of(annotation: &Annotation) -> [f64; 4] {
     match annotation {
         Annotation::Note(note) => note.area,
-        Annotation::Bubble(bubble) => bubble.area,
+        Annotation::TextBox(text_box) => text_box.area,
+        Annotation::Ink(drawing) => drawing.area(),
         Annotation::Mark(mark) => mark.lines.first().map_or([0.0; 4], |line| line.area),
     }
 }
@@ -1654,8 +2025,8 @@ fn area_of(annotation: &Annotation) -> [f64; 4] {
 fn moved(annotation: &Annotation, by: (f64, f64), page_size: (f64, f64)) -> Annotation {
     match annotation {
         Annotation::Note(note) => Annotation::Note(note.moved(by, page_size)),
-        Annotation::Bubble(bubble) => Annotation::Bubble(bubble.moved(by, page_size)),
-        Annotation::Mark(_) => annotation.clone(),
+        Annotation::TextBox(text_box) => Annotation::TextBox(text_box.moved(by, page_size)),
+        Annotation::Mark(_) | Annotation::Ink(_) => annotation.clone(),
     }
 }
 

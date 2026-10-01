@@ -32,6 +32,9 @@ rawler = "0.8"
 # telling a search match that wraps onto the next line from two matches; GTK
 # 4.14 already needs a newer distribution than that.
 poppler-rs = { version = "0.26", features = ["v21_5"] }
+# Looking up Poppler's newer calls while running, so a Poppler too old for
+# drawing still opens PDFs; already in the tree through poppler-rs.
+libc = "0.2"
 # Colour management. Pure Rust, and `in_place` spares a full copy of a large
 # photograph just to convert it.
 moxcms = { version = "0.8", features = ["in_place"] }
