@@ -11,6 +11,15 @@ const SOURCE_DIR: &str = "data";
 const MANIFEST: &str = "data/glance.gresource.xml";
 
 fn main() {
+    // qpdf, for writing PDFs with passwords and making them smaller. 11.0 is
+    // the oldest with everything used; Ubuntu 24.04 has 11.9.
+    if let Err(error) = pkg_config::Config::new().atleast_version("11.0").probe("libqpdf") {
+        panic!(
+            "qpdf 11 or newer is needed ({error}): install qpdf (Arch), qpdf-devel \
+             (Fedora) or libqpdf-dev (Debian, Ubuntu)."
+        );
+    }
+
     let out_dir = std::env::var("OUT_DIR").expect("cargo always sets OUT_DIR");
     let target = Path::new(&out_dir).join("glance.gresource");
 

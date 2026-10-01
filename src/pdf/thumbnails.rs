@@ -16,6 +16,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
+use super::document::Source;
 use super::layout::Rotation;
 use super::page::Page;
 use super::render::{Job, Rendered, Renderer};
@@ -38,7 +39,7 @@ struct Inner {
     selection: gtk::SingleSelection,
     pages: RefCell<Vec<(f64, f64)>>,
     rotation: Cell<Rotation>,
-    uri: RefCell<Option<String>>,
+    source: RefCell<Option<Source>>,
     renderer: RefCell<Option<Renderer>>,
     /// Bumped per document, so thumbnails drawn for the last one are ignored.
     document: Cell<u64>,
@@ -79,7 +80,7 @@ impl Thumbnails {
             selection,
             pages: RefCell::default(),
             rotation: Cell::new(Rotation::default()),
-            uri: RefCell::default(),
+            source: RefCell::default(),
             renderer: RefCell::default(),
             document: Cell::new(0),
             revision: Cell::new(0),
@@ -164,12 +165,12 @@ impl Thumbnails {
         self.inner.on_pick.replace(Some(Box::new(pick)));
     }
 
-    pub fn show_document(&self, uri: String, pages: Vec<(f64, f64)>) {
+    pub fn show_document(&self, source: Source, pages: Vec<(f64, f64)>) {
         let inner = &self.inner;
         inner.clear();
         let count = pages.len();
         *inner.pages.borrow_mut() = pages;
-        inner.uri.replace(Some(uri));
+        inner.source.replace(Some(source));
         let numbers: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
         let numbers: Vec<&str> = numbers.iter().map(String::as_str).collect();
         inner.syncing.set(true);
@@ -305,9 +306,9 @@ impl Inner {
         if self.renderer.borrow().is_some() {
             return;
         }
-        let Some(uri) = self.uri.borrow().clone() else { return };
+        let Some(source) = self.source.borrow().clone() else { return };
         let (sender, receiver) = async_channel::bounded(8);
-        self.renderer.replace(Some(Renderer::start(uri, self.revision.get(), sender)));
+        self.renderer.replace(Some(Renderer::start(source, self.revision.get(), sender)));
         let id = self.document.get();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
@@ -382,7 +383,7 @@ impl Inner {
         self.bound.borrow_mut().clear();
         self.pages.borrow_mut().clear();
         self.bookmarked.borrow_mut().clear();
-        self.uri.replace(None);
+        self.source.replace(None);
         self.revision.set(0);
         self.rotation.set(Rotation::default());
         self.syncing.set(true);

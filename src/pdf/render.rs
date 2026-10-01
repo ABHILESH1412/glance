@@ -16,7 +16,7 @@
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
-use super::document::{self, Pixels};
+use super::document::{self, Pixels, Source};
 use super::layout::Rotation;
 
 /// A page to draw, at how many device pixels per point, turned how far.
@@ -74,12 +74,12 @@ pub struct Renderer {
 
 impl Renderer {
     /// Start drawing from the file as it is now, calling that `revision`.
-    pub fn start(uri: String, revision: u64, results: async_channel::Sender<Rendered>) -> Self {
+    pub fn start(source: Source, revision: u64, results: async_channel::Sender<Rendered>) -> Self {
         let shared = Arc::new(Shared::default());
         let worker = shared.clone();
         std::thread::Builder::new()
             .name("glance-pdf".into())
-            .spawn(move || run(&uri, revision, &worker, &results))
+            .spawn(move || run(&source, revision, &worker, &results))
             .expect("the system refused to start a thread");
         Renderer { shared }
     }
@@ -108,8 +108,8 @@ impl Drop for Renderer {
     }
 }
 
-fn run(uri: &str, revision: u64, shared: &Shared, results: &async_channel::Sender<Rendered>) {
-    let Ok(mut document) = poppler::Document::from_file(uri, None) else {
+fn run(source: &Source, revision: u64, shared: &Shared, results: &async_channel::Sender<Rendered>) {
+    let Ok(mut document) = source.load() else {
         return; // The window already reported why when it opened the file.
     };
     let mut revision = revision;
@@ -117,7 +117,7 @@ fn run(uri: &str, revision: u64, shared: &Shared, results: &async_channel::Sende
         let job = match work {
             Work::Reload(now) => {
                 // Should the file have gone, keep drawing what is still open.
-                if let Ok(reopened) = poppler::Document::from_file(uri, None) {
+                if let Ok(reopened) = source.load() {
                     document = reopened;
                 }
                 revision = now;

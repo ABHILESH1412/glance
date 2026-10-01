@@ -37,9 +37,9 @@ impl Section {
 
 /// Read a document's information. `current` is the page being read, whose
 /// size is given first. Runs on a worker thread.
-pub fn gather(path: &Path, current: usize) -> Result<Info, String> {
-    let document =
-        poppler::Document::from_file(&super::document::uri(path), None).map_err(|e| e.message().to_string())?;
+pub fn gather(path: &Path, password: Option<&str>, current: usize) -> Result<Info, String> {
+    let document = poppler::Document::from_file(&super::document::uri(path), password)
+        .map_err(|e| e.message().to_string())?;
     let count = document.n_pages().max(0) as usize;
 
     let mut about = Section::new("Document");

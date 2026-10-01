@@ -12,10 +12,10 @@ Tick a box when a feature ships.
 | Area | Glance has | Partial |
 |---|---|---|
 | Images | 25 / 64 | 9 |
-| PDF | 11 / 28 | 1 |
+| PDF | 14 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 2 / 8 | 1 |
-| **Total** | **38 / 122** | **11** |
+| **Total** | **41 / 122** | **11** |
 
 ---
 
@@ -145,10 +145,10 @@ annotations, so every PDF reader shows them.
 
 ## 10. PDF — security and size
 
-- [ ] Password to open
-- [ ] Permissions (block printing, copying or annotating)
+- [x] Password to open — opening protected PDFs, and protecting them with AES-256
+- [x] Permissions (block printing, copying or annotating) — set, and respected when reading
 - [ ] Redact text permanently
-- [ ] Reduce file size — Glance's "aim for a file size" could extend to PDFs
+- [x] Reduce file size — lossless repacking, or photos scaled to 150 or 96 dpi
 - [ ] Lock a file against accidental edits
 
 ---

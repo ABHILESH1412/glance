@@ -14,7 +14,7 @@ use gtk::glib;
 
 use crate::pdf;
 
-pub fn present(parent: &impl IsA<gtk::Widget>, path: PathBuf, current_page: usize) {
+pub fn present(parent: &impl IsA<gtk::Widget>, path: PathBuf, password: Option<String>, current_page: usize) {
     let spinner = gtk::Spinner::builder().spinning(true).width_request(32).height_request(32).build();
     let waiting = gtk::Box::builder().valign(gtk::Align::Center).halign(gtk::Align::Center).vexpand(true).build();
     waiting.append(&spinner);
@@ -36,7 +36,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>, path: PathBuf, current_page: usiz
     std::thread::Builder::new()
         .name("glance-info".into())
         .spawn(move || {
-            let _ = sender.send_blocking(pdf::document_info(&path, current_page));
+            let _ = sender.send_blocking(pdf::document_info(&path, password.as_deref(), current_page));
         })
         .expect("the system refused to start a thread");
     glib::spawn_future_local(async move {

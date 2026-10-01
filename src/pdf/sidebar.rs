@@ -19,6 +19,7 @@ use gtk::prelude::*;
 use super::bookmark_list::{BookmarkList, Request};
 use super::bookmarks::Bookmark;
 use super::contents::Contents;
+use super::document::Source;
 use super::layout::Rotation;
 use super::outline::Heading;
 use super::thumbnails::Thumbnails;
@@ -165,9 +166,9 @@ impl Sidebar {
         self.inner.shown.get() && self.view() == View::Bookmarks
     }
 
-    pub fn show_document(&self, uri: String, pages: Vec<(f64, f64)>, outline: &[Heading]) {
+    pub fn show_document(&self, source: Source, pages: Vec<(f64, f64)>, outline: &[Heading]) {
         let inner = &self.inner;
-        inner.thumbnails.show_document(uri, pages);
+        inner.thumbnails.show_document(source, pages);
         inner.contents.show(outline);
         inner.bookmarks.show(&[], 0);
         inner.wake();

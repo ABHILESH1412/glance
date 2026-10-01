@@ -103,6 +103,23 @@ it, and a read-only file is left untouched.
   colour and background, bold or italic. Click a text box to change it, drag it to
   move it
 
+*Protecting and shrinking*
+
+- **Password-protected PDFs** open after asking for the password, right in the window.
+  What their author does not allow — copying text, marking up — Glance does not do
+  either, unless the document was opened with its permissions password
+- **Password and Permissions** (in the menu): require a password to open the document,
+  and hold back printing, copying, marking up or changing pages behind a separate
+  permissions password. Saved with AES-256, the strongest encryption PDF has. A document
+  someone else restricted asks for its permissions password before any of it changes
+- **Reduce File Size** (in the menu): repack the document without changing anything you
+  can see, or also scale its photos down to 150 or 96 dots per inch. The new size is
+  worked out first, so you see it before deciding. Drawings, charts and screenshots are
+  left sharp, and nothing is saved that came out bigger
+
+Both save over the file or as a copy beside it, and Glance reopens the document at the
+page you were on.
+
 A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
 arrow keys do not step to the next file. PDFs do not appear in an image folder's
 filmstrip either.
@@ -227,18 +244,18 @@ runtime instead of from your system.
 
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
-AVIF, Poppler's GLib library for PDFs, Rust, `make`, and glib's resource compiler, which
-the build uses to put the icons inside the binary. Drawing on PDFs needs Poppler 25.06,
+AVIF, Poppler's GLib library and qpdf for PDFs, Rust, `make`, and glib's resource
+compiler, which the build uses to put the icons inside the binary. Drawing on PDFs needs Poppler 25.06,
 and text boxes in a chosen font 24.12; with an older Poppler, PDFs open and the rest works,
 and those two tools say what they need. Everything else is pure Rust and comes in through Cargo.
 
 ```bash
 # Arch
-sudo pacman -S gtk4 libadwaita libheif poppler-glib glib2 rust make
+sudo pacman -S gtk4 libadwaita libheif poppler-glib qpdf glib2 rust make
 # Fedora
-sudo dnf install gtk4-devel libadwaita-devel libheif-devel poppler-glib-devel glib2-devel cargo make
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel poppler-glib-devel qpdf-devel glib2-devel cargo make
 # Debian, Ubuntu
-sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libpoppler-glib-dev libglib2.0-dev cargo make
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libpoppler-glib-dev libqpdf-dev libglib2.0-dev cargo make
 ```
 
 **2. Get the source.**
@@ -410,7 +427,7 @@ search box. The most used:
   can be undone but not moved. A PDF text box has no underline.
 - A text box in a font of your choosing carries that font inside the file — a few
   hundred kilobytes, once per font per document — so it looks the same everywhere.
-- Password-protected PDFs do not open yet.
+- Glance cannot print yet, so the permission about printing is for other programs.
 
 Wanted, but not built yet: HDR and wide-gamut output, and progressive loading so a 100 MP
 TIFF appears in stages.

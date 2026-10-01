@@ -788,6 +788,7 @@ dependencies = [
  "libc",
  "libheif-rs",
  "moxcms",
+ "pkg-config",
  "poppler-rs",
  "rawler",
  "resvg",

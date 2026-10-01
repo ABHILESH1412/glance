@@ -43,7 +43,7 @@ use crate::images::edit::draw;
 use super::annots::{self, Annotation, Rgb};
 use super::bookmark_list::Request;
 use super::bookmarks::{self, Bookmark};
-use super::document::{self, Opened, Pixels, Spot, Unit};
+use super::document::{self, Allowed, Opened, Pixels, Source, Spot, Unit};
 use super::editor::{Commit, Editor};
 use super::layout::{self, Layout, Mode, Rotation};
 use super::markup::{self, Mark, Style};
@@ -66,6 +66,8 @@ const SETTLE: Duration = Duration::from_millis(120);
 /// quarter of the way down the window. A page moved to the top of the window
 /// is then the current page, as soon as it gets there.
 const READING_LINE: f64 = 0.25;
+/// Said when the author's permissions do not allow marking the file up.
+pub const NOT_ANNOTATABLE: &str = "The author of this document does not allow adding to it.";
 /// Room left above a heading gone to from the table of contents, in pixels.
 const HEADING_ROOM: f64 = 12.0;
 /// One page at a time: how hard to keep scrolling past a page's end before
@@ -187,6 +189,10 @@ struct Inner {
     /// A refit to a new window size is waiting for GTK to finish laying out.
     refit_queued: Cell<bool>,
     uri: RefCell<Option<String>>,
+    /// What opened the document, if it is protected.
+    password: RefCell<Option<String>>,
+    /// What its author allows.
+    allowed: Cell<Allowed>,
     renderer: RefCell<Option<Renderer>>,
     /// The document again, on this thread, for selecting text and reading and
     /// writing annotations. Opened the first time it is needed, not before.
@@ -294,6 +300,8 @@ impl PdfView {
             fit: Cell::new(true),
             refit_queued: Cell::new(false),
             uri: RefCell::default(),
+            password: RefCell::default(),
+            allowed: Cell::new(Allowed::default()),
             renderer: RefCell::default(),
             reader: RefCell::default(),
             document: Cell::new(0),
@@ -410,6 +418,16 @@ impl PdfView {
         self.inner.path()
     }
 
+    /// What the document's author allows.
+    pub fn allowed(&self) -> Allowed {
+        self.inner.allowed.get()
+    }
+
+    /// The password the document was opened with, if it needed one.
+    pub fn password(&self) -> Option<String> {
+        self.inner.password.borrow().clone()
+    }
+
     /// The page being read, counting from zero.
     pub fn current_page(&self) -> usize {
         self.inner.current_page()
@@ -432,7 +450,8 @@ impl PdfView {
                 widget
             })
             .collect();
-        inner.sidebar.show_document(opened.uri.clone(), opened.pages.clone(), &opened.outline);
+        let source = Source { uri: opened.uri.clone(), password: opened.password.clone() };
+        inner.sidebar.show_document(source.clone(), opened.pages.clone(), &opened.outline);
         let key = bookmarks::Key { uri: opened.uri.clone(), id: opened.id.clone() };
         let mut marks = bookmarks::load(&key);
         marks.retain(|mark| mark.page < count);
@@ -444,13 +463,15 @@ impl PdfView {
         *inner.widgets.borrow_mut() = widgets;
         *inner.rendered.borrow_mut() = vec![0.0; count];
         inner.uri.replace(Some(opened.uri.clone()));
+        inner.password.replace(opened.password.clone());
+        inner.allowed.set(opened.allowed);
 
         inner.fit.set(true);
         inner.apply_scale(inner.fitted().unwrap_or(layout::ACTUAL));
         inner.scroll_to(Some(0.0), Some(0.0));
 
         let (sender, receiver) = async_channel::bounded(4);
-        inner.renderer.replace(Some(Renderer::start(opened.uri, inner.revision.get(), sender)));
+        inner.renderer.replace(Some(Renderer::start(source, inner.revision.get(), sender)));
         let weak = Rc::downgrade(inner);
         glib::spawn_future_local(async move {
             while let Ok(rendered) = receiver.recv().await {
@@ -682,6 +703,9 @@ impl PdfView {
     /// Copy the selected text to the clipboard. False if nothing is selected.
     pub fn copy_selection(&self) -> bool {
         let inner = &self.inner;
+        if !inner.allowed.get().copy {
+            return false;
+        }
         let Some(text) = inner.selected_text().filter(|text| !text.trim().is_empty()) else {
             return false;
         };
@@ -1348,14 +1372,18 @@ impl Inner {
     /// The document on this thread, opened the first time it is needed.
     fn reader(&self) -> Option<poppler::Document> {
         if self.reader.borrow().is_none() {
-            let uri = self.uri.borrow().clone()?;
-            self.reader.replace(poppler::Document::from_file(&uri, None).ok());
+            let source = self.source()?;
+            self.reader.replace(source.load().ok());
         }
         self.reader.borrow().clone()
     }
 
     fn path(&self) -> Option<PathBuf> {
         self.uri.borrow().as_deref().and_then(|uri| gio::File::for_uri(uri).path())
+    }
+
+    fn source(&self) -> Option<Source> {
+        Some(Source { uri: self.uri.borrow().clone()?, password: self.password.borrow().clone() })
     }
 
     /// The page the header says is being read, counting from zero.
@@ -1442,8 +1470,7 @@ impl Inner {
         self.mark_all();
 
         let query = query.trim();
-        let uri = self.uri.borrow().clone();
-        let (Some(uri), false) = (uri, query.is_empty()) else {
+        let (Some(source), false) = (self.source(), query.is_empty()) else {
             self.search_done.set(true);
             self.emit_search_status();
             return;
@@ -1451,7 +1478,7 @@ impl Inner {
         self.search_done.set(false);
         self.search_from.set(self.current_page());
         let (sender, receiver) = async_channel::bounded(16);
-        self.searcher.replace(Some(Searcher::start(uri, query.to_string(), sender)));
+        self.searcher.replace(Some(Searcher::start(source, query.to_string(), sender)));
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             while let Ok(found) = receiver.recv().await {
@@ -1690,6 +1717,9 @@ impl Inner {
             }
         };
         let path = self.path().ok_or_else(|| "Only a file on this computer can be marked up.".to_string())?;
+        if !self.allowed.get().annotate {
+            return Err(NOT_ANNOTATABLE.to_string());
+        }
         let mut pages: Vec<usize> = take.iter().chain(put).map(Annotation::page).collect();
         pages.sort_unstable();
         pages.dedup();
@@ -2177,6 +2207,8 @@ impl Inner {
         self.shown.set(0);
         self.rotation.set(Rotation::default());
         self.uri.replace(None);
+        self.password.replace(None);
+        self.allowed.set(Allowed::default());
         self.pending.set((None, None));
         self.jumped.set(None);
         self.last_status.set(None);

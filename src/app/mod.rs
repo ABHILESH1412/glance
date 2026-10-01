@@ -11,9 +11,12 @@
 pub mod colour;
 pub mod doc_info;
 pub mod filmstrip;
+pub mod locked;
 pub mod menus;
 pub mod pdf_tools;
 pub mod playlist;
 pub mod prefs;
+pub mod protect;
 pub mod shortcuts;
+pub mod shrink;
 pub mod window;

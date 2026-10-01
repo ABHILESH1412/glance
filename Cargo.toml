@@ -39,6 +39,10 @@ libc = "0.2"
 # photograph just to convert it.
 moxcms = { version = "0.8", features = ["in_place"] }
 
+[build-dependencies]
+# Finding qpdf to link against; already in the tree through GTK's own build.
+pkg-config = "0.3"
+
 [dependencies.image]
 version = "0.25"
 default-features = false

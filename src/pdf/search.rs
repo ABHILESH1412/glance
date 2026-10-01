@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use gtk::glib;
 
+use super::document::Source;
+
 /// One match: the areas it covers, as x, y, width, height in points from the
 /// page's top-left corner. Usually one area; two or more when the words wrap
 /// onto the next line.
@@ -33,12 +35,12 @@ pub struct Searcher {
 }
 
 impl Searcher {
-    pub fn start(uri: String, query: String, results: async_channel::Sender<Found>) -> Self {
+    pub fn start(source: Source, query: String, results: async_channel::Sender<Found>) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let worker = stop.clone();
         std::thread::Builder::new()
             .name("glance-search".into())
-            .spawn(move || run(&uri, &query, &worker, &results))
+            .spawn(move || run(&source, &query, &worker, &results))
             .expect("the system refused to start a thread");
         Searcher { stop }
     }
@@ -50,8 +52,8 @@ impl Drop for Searcher {
     }
 }
 
-fn run(uri: &str, query: &str, stop: &AtomicBool, results: &async_channel::Sender<Found>) {
-    let Ok(document) = poppler::Document::from_file(uri, None) else {
+fn run(source: &Source, query: &str, stop: &AtomicBool, results: &async_channel::Sender<Found>) {
+    let Ok(document) = source.load() else {
         let _ = results.send_blocking(Found::Done);
         return;
     };

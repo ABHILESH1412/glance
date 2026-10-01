@@ -156,6 +156,13 @@ pub fn pdf_menu() -> gio::Menu {
             item("Document _Info", "win.document-info"),
         ]),
     );
+    menu.append_section(
+        None,
+        &section(&[
+            item("_Password and Permissions…", "win.protect"),
+            item("_Reduce File Size…", "win.reduce-size"),
+        ]),
+    );
 
     let layouts = gio::Menu::new();
     layouts.append_item(&item("_Continuous Scroll", "win.pdf-layout::continuous"));

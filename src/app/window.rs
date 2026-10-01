@@ -38,6 +38,8 @@ const EDGE_REVEAL: f64 = 64.0;
 enum Loaded {
     Image(loader::LoadedImage),
     Pdf(pdf::Opened),
+    /// A PDF that needs a password; `tried` when the one given was wrong.
+    Locked { tried: bool },
 }
 
 pub struct Shown {
@@ -82,6 +84,13 @@ mod imp {
         pub content: gtk::Stack,
         /// The document on screen is a PDF, so zoom and paging go to it.
         pub showing_pdf: Cell<bool>,
+        /// Asks for a protected PDF's password.
+        pub locked: crate::app::locked::LockedPage,
+        /// The password to try on the next PDF opened, then forgotten.
+        pub password: RefCell<Option<String>>,
+        /// The page to show when the next PDF opens: the one being read
+        /// before the file was rewritten.
+        pub reopen_at: Cell<Option<usize>>,
         pub toolbar: adw::ToolbarView,
         pub fullscreen_button: gtk::Button,
         pub delete_button: gtk::Button,
@@ -209,6 +218,9 @@ mod imp {
                 pdf_menu: gio::Menu::new(),
                 content: gtk::Stack::new(),
                 showing_pdf: Cell::new(false),
+                locked: crate::app::locked::LockedPage::new(),
+                password: RefCell::default(),
+                reopen_at: Cell::new(None),
                 toolbar: adw::ToolbarView::new(),
                 fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
                 delete_button: gtk::Button::from_icon_name("user-trash-symbolic"),
@@ -341,6 +353,16 @@ impl Window {
         content.set_hexpand(true);
         content.add_named(imp.view.widget(), Some("image"));
         content.add_named(imp.pdf_view.widget(), Some("pdf"));
+        content.add_named(&imp.locked.root, Some("locked"));
+        imp.locked.connect_unlock(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |password| {
+                let Some(path) = window.imp().current.borrow().clone() else { return };
+                window.imp().password.replace(Some(password));
+                window.load(path, false);
+            }
+        ));
         content.set_visible_child_name("image");
         // The page sidebar sits over the reader on a narrow window and beside it
         // on a wide one. Images never show it.
@@ -1023,6 +1045,8 @@ impl Window {
                 let imp = window.imp();
                 if !imp.showing_pdf.get() {
                     window.copy_to_clipboard();
+                } else if !imp.pdf_view.allowed().copy {
+                    window.toast("The author of this document does not allow copying its text.");
                 } else if imp.pdf_view.copy_selection() {
                     window.toast("Text copied.");
                 } else {
@@ -1077,6 +1101,10 @@ impl Window {
                 move |_, _| {
                     let imp = window.imp();
                     if !imp.showing_pdf.get() {
+                        return;
+                    }
+                    if !imp.pdf_view.allowed().annotate {
+                        window.toast(pdf::NOT_ANNOTATABLE);
                         return;
                     }
                     match imp.pdf_view.mark(style, imp.reader_prefs.get().highlight) {
@@ -1377,17 +1405,25 @@ impl Window {
             .unwrap_or_else(|| "Image".to_string());
         imp.title.set_title(&name);
         imp.title.set_subtitle("Loading…");
-        imp.content.set_visible_child_name("image");
-        imp.view.show_loading();
+        // Trying a password: the padlock stays until the document opens.
+        if imp.password.borrow().is_none() {
+            imp.content.set_visible_child_name("image");
+            imp.view.show_loading();
+        }
 
         let (sender, receiver) = async_channel::bounded(1);
         let scan_path = path.clone();
+        let password = imp.password.take();
         std::thread::spawn(move || {
             // Both the decode and the directory listing are filesystem work, so
             // they belong on this side of the channel.
             let is_pdf = pdf::is_pdf(&scan_path);
             let decoded = if is_pdf {
-                pdf::open(&scan_path).map(Loaded::Pdf)
+                match pdf::open(&scan_path, password.as_deref()) {
+                    Ok(opened) => Ok(Loaded::Pdf(opened)),
+                    Err(pdf::OpenError::Locked { tried }) => Ok(Loaded::Locked { tried }),
+                    Err(pdf::OpenError::Failed(message)) => Err(message),
+                }
             } else {
                 loader::decode(&scan_path).map(Loaded::Image)
             };
@@ -1422,6 +1458,7 @@ impl Window {
 
                 match result {
                     Ok(Loaded::Pdf(opened)) => window.show_pdf(opened, name),
+                    Ok(Loaded::Locked { tried }) => window.show_locked(&name, tried),
                     Ok(Loaded::Image(image)) => {
                         window.leave_pdf();
                         // A vector's size is its natural size, not whatever
@@ -1780,11 +1817,34 @@ impl Window {
         imp.search_bar.set_search_mode(false);
         imp.search_entry.set_text("");
         imp.pdf_view.show(opened);
+        if let Some(page) = imp.reopen_at.take() {
+            imp.pdf_view.go_to_page(page);
+        }
         imp.content.set_visible_child_name("pdf");
 
         imp.rotate_button.set_sensitive(true);
         imp.edit_button.set_sensitive(false);
         self.show_chrome(true);
+    }
+
+    /// A protected PDF, waiting for its password.
+    fn show_locked(&self, name: &str, tried: bool) {
+        self.leave_pdf();
+        let imp = self.imp();
+        imp.view.show_idle();
+        imp.title.set_title(name);
+        imp.title.set_subtitle("Locked PDF");
+        imp.shown.replace(Some(Shown { name: name.to_string(), subtitle: "Locked PDF".to_string() }));
+        imp.action_bar.set_visible(false);
+        for button in [&imp.delete_button, &imp.copy_button] {
+            button.set_sensitive(false);
+        }
+        imp.edit_button.set_sensitive(false);
+        // Nothing to copy or turn until it is open.
+        imp.copy_button.set_visible(false);
+        imp.rotate_button.set_visible(false);
+        imp.content.set_visible_child_name("locked");
+        imp.locked.show(name, tried);
     }
 
     /// The header and bars for the kind of document on screen. Images keep
@@ -1957,6 +2017,10 @@ impl Window {
                     Some("bubble-here") => (pdf::Pinned::Bubble, true),
                     _ => return,
                 };
+                if !imp.pdf_view.allowed().annotate {
+                    window.toast(pdf::NOT_ANNOTATABLE);
+                    return;
+                }
                 imp.pdf_view.pin(kind, here);
             }
         ));
@@ -1971,6 +2035,10 @@ impl Window {
             move |action, value| {
                 let Some(open) = value.and_then(|v| v.get::<bool>()) else { return };
                 let open = open && window.imp().showing_pdf.get();
+                if open && !window.imp().pdf_view.allowed().annotate {
+                    window.toast(pdf::NOT_ANNOTATABLE);
+                    return;
+                }
                 action.set_state(&open.to_variant());
                 if let Some(tools) = window.imp().pdf_tools.get() {
                     tools.set_open(open);
@@ -1997,11 +2065,86 @@ impl Window {
                     return;
                 }
                 if let Some(path) = imp.pdf_view.path() {
-                    crate::app::doc_info::present(&window, path, imp.pdf_view.current_page());
+                    crate::app::doc_info::present(&window, path, imp.pdf_view.password(), imp.pdf_view.current_page());
                 }
             }
         ));
         self.add_action(&info);
+
+        let protect = gio::SimpleAction::new("protect", None);
+        protect.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                let Some(path) = imp.pdf_view.path().filter(|_| imp.showing_pdf.get()) else { return };
+                let allowed = imp.pdf_view.allowed();
+                let shown = path.clone();
+                crate::app::protect::present(&window, path, imp.pdf_view.password(), allowed, glib::clone!(
+                    #[weak]
+                    window,
+                    move |outcome| match outcome {
+                        crate::app::protect::Outcome::Replaced { password } => {
+                            window.toast(if password.is_some() {
+                                "Saved. It now needs its password to open."
+                            } else {
+                                "Saved with the new permissions."
+                            });
+                            window.reopen(&shown, password);
+                        }
+                        crate::app::protect::Outcome::Copied(copy) => {
+                            window.toast(&format!("Saved a protected copy, “{}”.", file_name(&copy)));
+                        }
+                    }
+                ));
+            }
+        ));
+        self.add_action(&protect);
+
+        let reduce = gio::SimpleAction::new("reduce-size", None);
+        reduce.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                let Some(path) = imp.pdf_view.path().filter(|_| imp.showing_pdf.get()) else { return };
+                if !imp.pdf_view.allowed().everything {
+                    window.toast("The author of this document does not allow changing it.");
+                    return;
+                }
+                let password = imp.pdf_view.password();
+                let shown = path.clone();
+                crate::app::shrink::present(&window, path, password.clone(), glib::clone!(
+                    #[weak]
+                    window,
+                    move |outcome| {
+                        use crate::app::shrink::{readable, Outcome};
+                        match outcome {
+                            Outcome::Replaced { before, after } => {
+                                window.toast(&format!("Saved: {} → {}.", readable(before), readable(after)));
+                                window.reopen(&shown, password.clone());
+                            }
+                            Outcome::Copied { path, before, after } => window.toast(&format!(
+                                "Saved “{}”: {} → {}.",
+                                file_name(&path),
+                                readable(before),
+                                readable(after)
+                            )),
+                        }
+                    }
+                ));
+            }
+        ));
+        self.add_action(&reduce);
+    }
+
+    /// Open the document on screen again, after it was rewritten, at the page
+    /// it was on.
+    fn reopen(&self, path: &std::path::Path, password: Option<String>) {
+        let imp = self.imp();
+        imp.password.replace(password);
+        imp.reopen_at.set(Some(imp.pdf_view.current_page()));
+        self.load(path.to_path_buf(), false);
     }
 
     /// The menu's check follows the page being read.
@@ -2250,4 +2393,9 @@ impl Window {
             crate::apply_accels(&app, typing, self.imp().showing_pdf.get());
         }
     }
+}
+
+/// A file's name, for messages.
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }

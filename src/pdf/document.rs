@@ -17,11 +17,76 @@ use gtk::{cairo, gio, glib};
 use super::layout::{self, Rotation};
 use super::outline::{self, Heading};
 
+/// Where a document is, and the password it was opened with, if it needed
+/// one: everything a thread needs to open it again for itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Source {
+    /// Poppler opens files by URI.
+    pub uri: String,
+    pub password: Option<String>,
+}
+
+impl Source {
+    pub fn load(&self) -> Result<poppler::Document, glib::Error> {
+        poppler::Document::from_file(&self.uri, self.password.as_deref())
+    }
+}
+
+/// Why a document did not open.
+#[derive(Debug, PartialEq)]
+pub enum OpenError {
+    /// It needs a password: none was given, or the one given was wrong.
+    Locked { tried: bool },
+    /// Anything else, said in a sentence for the reader.
+    Failed(String),
+}
+
+/// What a document's author allows. Whoever opened it with its permissions
+/// password, or a document with no restrictions, may do everything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Allowed {
+    pub copy: bool,
+    pub annotate: bool,
+    pub print: bool,
+    /// Nothing is held back, so its protection may be changed.
+    pub everything: bool,
+}
+
+impl Default for Allowed {
+    fn default() -> Self {
+        Allowed { copy: true, annotate: true, print: true, everything: true }
+    }
+}
+
+impl Allowed {
+    pub fn of(document: &poppler::Document) -> Self {
+        use poppler::Permissions as P;
+        let granted = document.permissions();
+        // Printing at full quality is left out: Poppler never grants it on
+        // an older kind of encryption, even to the document's owner.
+        let all = P::OK_TO_PRINT
+            | P::OK_TO_MODIFY
+            | P::OK_TO_COPY
+            | P::OK_TO_ADD_NOTES
+            | P::OK_TO_FILL_FORM
+            | P::OK_TO_EXTRACT_CONTENTS
+            | P::OK_TO_ASSEMBLE;
+        Allowed {
+            copy: granted.contains(P::OK_TO_COPY),
+            annotate: granted.contains(P::OK_TO_ADD_NOTES),
+            print: granted.contains(P::OK_TO_PRINT),
+            everything: granted.contains(all),
+        }
+    }
+}
+
 /// What the window needs to lay out a document before any page is drawn.
 pub struct Opened {
     pub path: PathBuf,
-    /// Poppler opens files by URI.
     pub uri: String,
+    /// What opened it, if it is protected.
+    pub password: Option<String>,
+    pub allowed: Allowed,
     /// Every page's size in points, with its rotation already applied.
     pub pages: Vec<(f64, f64)>,
     /// The table of contents, if it has one.
@@ -54,13 +119,18 @@ pub fn uri(path: &Path) -> String {
     gio::File::for_path(path).uri().to_string()
 }
 
-/// Open a document for its page sizes. Runs on a worker thread.
-pub fn open(path: &Path) -> Result<Opened, String> {
+/// Open a document for its page sizes, with its password if it has one.
+/// Runs on a worker thread.
+pub fn open(path: &Path, password: Option<&str>) -> Result<Opened, OpenError> {
     let uri = uri(path);
-    let document = poppler::Document::from_file(&uri, None).map_err(|e| describe(path, &e))?;
+    let source = Source { uri: uri.clone(), password: password.map(str::to_string) };
+    let document = source.load().map_err(|e| match e.kind::<poppler::Error>() {
+        Some(poppler::Error::Encrypted) => OpenError::Locked { tried: password.is_some() },
+        _ => OpenError::Failed(describe(path, &e)),
+    })?;
     let count = document.n_pages();
     if count <= 0 {
-        return Err(format!("“{}” has no pages.", name(path)));
+        return Err(OpenError::Failed(format!("“{}” has no pages.", name(path))));
     }
     let pages = (0..count)
         // A page Poppler cannot read is laid out at US Letter rather than
@@ -68,7 +138,7 @@ pub fn open(path: &Path) -> Result<Opened, String> {
         .map(|i| document.page(i).map_or((612.0, 792.0), |page| page.size()))
         .collect::<Vec<_>>();
     let outline = outline::read(&document, &pages);
-    Ok(Opened { path: path.to_path_buf(), uri, outline, id: permanent_id(&document), pages })
+    Ok(Opened { path: path.to_path_buf(), uri, password: source.password, allowed: Allowed::of(&document), outline, id: permanent_id(&document), pages })
 }
 
 /// The first half of the document's `/ID`, which stays the same through
@@ -233,9 +303,6 @@ fn describe(path: &Path, error: &glib::Error) -> String {
     eprintln!("glance: {}: {}", path.display(), error.message());
     let name = name(path);
     match error.kind::<poppler::Error>() {
-        Some(poppler::Error::Encrypted) => {
-            format!("“{name}” is password-protected. Glance cannot open protected PDFs yet.")
-        }
         Some(poppler::Error::OpenFile) => format!("Could not open “{name}”."),
         Some(poppler::Error::Damaged | poppler::Error::BadCatalog | poppler::Error::Invalid) => {
             format!("“{name}” is damaged and cannot be opened.")
