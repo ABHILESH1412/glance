@@ -69,7 +69,7 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   found, as one match. The first match shown is the first from the page you are on
 - **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
   Ctrl+Shift+X, or from the right-click menu. Pick the highlighter's colour from the
-  pen button in the header — six to hand, or any other. The marks are ordinary PDF
+  row of colours in the menu — six to hand, or any other. The marks are ordinary PDF
   annotations saved straight into the file, so every other PDF reader shows them too.
   Ctrl+Z and Ctrl+Shift+Z undo and redo; marking text the same way again takes the mark
   off. A read-only file is left untouched
@@ -77,7 +77,7 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   note is a sticky-note icon that opens when clicked; a speech bubble writes its words
   on the page, with a tail pointing at the spot. Click either to edit or delete it,
   drag it to move it, and undo any of it
-- **Draw and write on pages** (Ctrl+E, or the pencil button): the image editor's pen,
+- **Draw and write on pages** (Ctrl+E, or Draw and Write in the menu): the image editor's pen,
   highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, and text
   boxes in any font, size, colour and background, bold or italic. Click a text box to
   change it, drag it to move it. Everything is saved into the PDF as it is made, and
@@ -85,10 +85,13 @@ a short one does. Zooming redraws the pages sharp once it stops moving.
   on an older Poppler those tools say so and the rest works as usual
 - **Night mode** from the menu: black pages, white text, and colours that keep their
   hue, so a red heading stays red
-- **Document info** (Ctrl+I, or the ⓘ button): title, author, dates, the program that
+- **Document info** (Ctrl+I, or the menu): title, author, dates, the program that
   made it, PDF version, page sizes by name (A4, Letter…), fonts, restrictions and more
 - **Rotate** the pages a quarter turn at a time — for reading, the file is left alone
 - The wheel scrolls; Ctrl + wheel or a pinch zooms
+- A **quiet header**: pages, open, the page box, search and the menu — nothing else.
+  Zoom, rotate and fullscreen sit as a row of icons at the top of the menu, and the
+  rest in a few short groups
 
 A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
 arrow keys do not step to the next file. PDFs do not appear in an image folder's
@@ -343,6 +346,10 @@ file, and four CC0 camera raws covering different decode paths.
 
 ## Keyboard shortcuts
 
+All of them are listed in the app itself: **Keyboard Shortcuts** in the menu, or
+`Ctrl+?`, opens a window with every key, split into General, Pictures and PDFs, with a
+search box. The most used:
+
 | Key | Action |
 |---|---|
 | `Ctrl+O` | Open an image |
@@ -367,6 +374,7 @@ file, and four CC0 camera raws covering different decode paths.
 | `Ctrl+I` | In a PDF: document info |
 | `Ctrl+E` | In a PDF: the Draw and Text panel |
 | `Ctrl+W` `Ctrl+Q` | Close window / quit |
+| `Ctrl+?` | All keyboard shortcuts |
 
 ## Known limitations
 

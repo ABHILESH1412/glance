@@ -20,6 +20,7 @@ use gtk::{gdk, gio, glib};
 use crate::images::edit::adjust::Adjustments;
 use crate::images::view::ImageView;
 use crate::app::filmstrip::{self, FilmStrip};
+use crate::app::menus;
 use crate::app::prefs;
 use crate::images::loader;
 use crate::app::playlist::{self, Playlist};
@@ -70,12 +71,6 @@ mod imp {
         pub search_previous: gtk::Button,
         pub search_next: gtk::Button,
         pub search_button: gtk::ToggleButton,
-        /// The highlighter: its colour, shown as a stripe under its icon.
-        pub highlight_button: gtk::MenuButton,
-        pub highlight_swatch: gtk::DrawingArea,
-        pub info_button: gtk::Button,
-        /// Opens the Draw and Text panel beside a PDF.
-        pub annotate_button: gtk::ToggleButton,
         pub pdf_tools: std::cell::OnceCell<crate::app::pdf_tools::PdfTools>,
         /// Highlight colour, night mode and layout, as last chosen.
         pub reader_prefs: Cell<prefs::Reader>,
@@ -208,10 +203,6 @@ mod imp {
                 search_previous: gtk::Button::from_icon_name("go-up-symbolic"),
                 search_next: gtk::Button::from_icon_name("go-down-symbolic"),
                 search_button: gtk::ToggleButton::new(),
-                highlight_button: gtk::MenuButton::new(),
-                highlight_swatch: gtk::DrawingArea::new(),
-                info_button: gtk::Button::from_icon_name("glance-info-symbolic"),
-                annotate_button: gtk::ToggleButton::new(),
                 pdf_tools: std::cell::OnceCell::new(),
                 reader_prefs: Cell::new(prefs::Reader::load()),
                 image_menu: gio::Menu::new(),
@@ -367,11 +358,6 @@ impl Window {
             move |status| window.show_pdf_status(status)
         ));
         self.build_pdf_context_menu();
-        self.build_highlighter();
-        let info_button = &imp.info_button;
-        info_button.set_tooltip_text(Some("Document Info (Ctrl+I)"));
-        info_button.set_action_name(Some("win.document-info"));
-        info_button.set_visible(false);
         imp.pdf_view.connect_error(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -386,122 +372,20 @@ impl Window {
         let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
         body.append(&pdf_tools.root);
         let _ = imp.pdf_tools.set(pdf_tools);
-        let annotate = &imp.annotate_button;
-        annotate.set_icon_name("document-edit-symbolic");
-        annotate.set_tooltip_text(Some("Draw and Write (Ctrl+E)"));
-        annotate.set_visible(false);
-        annotate.connect_toggled(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |button| {
-                if let Some(tools) = window.imp().pdf_tools.get() {
-                    tools.set_open(button.is_active());
-                }
-            }
-        ));
         imp.toasts.set_child(Some(&body));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
         open_button.set_tooltip_text(Some("Open (Ctrl+O)"));
         open_button.set_action_name(Some("win.open"));
 
-        let edit_section = gio::Menu::new();
-        edit_section.append(Some("_Edit…"), Some("win.edit"));
-        edit_section.append(Some("_Save"), Some("win.save"));
-        edit_section.append(Some("_Export…"), Some("win.export"));
-
-        let clipboard_section = gio::Menu::new();
-        clipboard_section.append(Some("_Copy Image"), Some("win.copy"));
-
-        let file_section = gio::Menu::new();
-        file_section.append(Some("_Delete Image…"), Some("win.delete"));
-
-        let view_section = gio::Menu::new();
-        view_section.append(Some("_Fullscreen"), Some("win.fullscreen"));
-
-        let theme_section = gio::Menu::new();
-        theme_section.append(Some("Follow _System"), Some("app.theme::system"));
-        theme_section.append(Some("_Light"), Some("app.theme::light"));
-        theme_section.append(Some("_Dark"), Some("app.theme::dark"));
-
-        let navigate_section = gio::Menu::new();
-        navigate_section.append(Some("_Previous Image"), Some("win.previous-image"));
-        navigate_section.append(Some("_Next Image"), Some("win.next-image"));
-
-        let zoom_section = gio::Menu::new();
-        zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
-        zoom_section.append(Some("Zoom _Out"), Some("win.zoom-out"));
-        zoom_section.append(Some("_Fit to Window"), Some("win.zoom-fit"));
-        zoom_section.append(Some("_Actual Size"), Some("win.zoom-actual"));
-
-        let rotate_section = gio::Menu::new();
-        rotate_section.append(Some("Rotate and _Flip…"), Some("win.transform-open"));
-        // Everything below is the quick version that does not need the panel.
-        rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
-        rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
-        rotate_section.append(Some("Flip _Horizontally"), Some("win.flip-horizontal"));
-        rotate_section.append(Some("Flip _Vertically"), Some("win.flip-vertical"));
-        rotate_section.append(Some("Reset Rotation"), Some("win.rotate-reset"));
-
-        let about_section = gio::Menu::new();
-        about_section.append(Some("_About Glance"), Some("win.about"));
-
+        // Built in `menus`; copied into the two models the menu button
+        // switches between.
+        for (model, built) in [(&imp.image_menu, menus::image_menu()), (&imp.pdf_menu, menus::pdf_menu())] {
+            for i in 0..built.n_items() {
+                model.append_item(&gio::MenuItem::from_model(&built, i));
+            }
+        }
         let menu = &imp.image_menu;
-        menu.append_section(None, &clipboard_section);
-        menu.append_section(None, &edit_section);
-        menu.append_section(None, &file_section);
-        menu.append_section(None, &view_section);
-        menu.append_section(None, &navigate_section);
-        menu.append_section(None, &zoom_section);
-        menu.append_section(None, &rotate_section);
-        menu.append_section(Some("Appearance"), &theme_section);
-        menu.append_section(None, &about_section);
-
-        // A PDF's menu: its pages, and nothing about editing or flipping
-        // pictures, which do not apply.
-        let pages_section = gio::Menu::new();
-        pages_section.append(Some("Show _Pages"), Some("win.show-pages"));
-        pages_section.append(Some("Document _Info"), Some("win.document-info"));
-        let layouts = gio::Menu::new();
-        layouts.append(Some("_Continuous Scroll"), Some("win.pdf-layout::continuous"));
-        layouts.append(Some("_Single Page"), Some("win.pdf-layout::single"));
-        layouts.append(Some("_Two Pages"), Some("win.pdf-layout::double"));
-        let layout_section = gio::Menu::new();
-        layout_section.append_submenu(Some("Page _Layout"), &layouts);
-        layout_section.append(Some("_Night Mode"), Some("win.night-mode"));
-        let notes_section = gio::Menu::new();
-        notes_section.append(Some("Add _Note"), Some("win.pin::note"));
-        notes_section.append(Some("Add Speech _Bubble"), Some("win.pin::bubble"));
-        let text_section = gio::Menu::new();
-        text_section.append(Some("_Find…"), Some("win.find"));
-        text_section.append(Some("_Copy Selected Text"), Some("win.copy"));
-        let markup_section = gio::Menu::new();
-        markup_section.append(Some("_Highlight"), Some("win.mark-highlight"));
-        markup_section.append(Some("_Underline"), Some("win.mark-underline"));
-        markup_section.append(Some("_Strike Through"), Some("win.mark-strike"));
-        let history_section = gio::Menu::new();
-        history_section.append(Some("_Undo"), Some("win.undo-mark"));
-        history_section.append(Some("_Redo"), Some("win.redo-mark"));
-        let pdf_zoom_section = gio::Menu::new();
-        pdf_zoom_section.append(Some("Zoom _In"), Some("win.zoom-in"));
-        pdf_zoom_section.append(Some("Zoom _Out"), Some("win.zoom-out"));
-        pdf_zoom_section.append(Some("_Fit Width"), Some("win.zoom-fit"));
-        pdf_zoom_section.append(Some("_Actual Size"), Some("win.zoom-actual"));
-        let pdf_rotate_section = gio::Menu::new();
-        pdf_rotate_section.append(Some("Rotate _Left"), Some("win.rotate-left"));
-        pdf_rotate_section.append(Some("Rotate _Right"), Some("win.rotate-right"));
-        let pdf_menu = &imp.pdf_menu;
-        pdf_menu.append_section(None, &pages_section);
-        pdf_menu.append_section(None, &text_section);
-        pdf_menu.append_section(None, &markup_section);
-        pdf_menu.append_section(None, &notes_section);
-        pdf_menu.append_section(None, &history_section);
-        pdf_menu.append_section(None, &layout_section);
-        pdf_menu.append_section(None, &view_section);
-        pdf_menu.append_section(None, &pdf_zoom_section);
-        pdf_menu.append_section(None, &pdf_rotate_section);
-        pdf_menu.append_section(Some("Appearance"), &theme_section);
-        pdf_menu.append_section(None, &about_section);
 
         let menu_button = &imp.menu_button;
         menu_button.set_icon_name("open-menu-symbolic");
@@ -602,9 +486,6 @@ impl Window {
         header.pack_end(fullscreen_button);
         header.pack_end(copy_button);
         header.pack_end(&imp.search_button);
-        header.pack_end(&imp.info_button);
-        header.pack_end(&imp.highlight_button);
-        header.pack_end(&imp.annotate_button);
 
         let action_bar = &imp.action_bar;
         action_bar.add_css_class("toolbar");
@@ -955,8 +836,7 @@ impl Window {
             move |_, _| {
                 // A PDF's Draw and Text panel takes the image editor's key.
                 if window.imp().showing_pdf.get() {
-                    let button = &window.imp().annotate_button;
-                    button.set_active(!button.is_active());
+                    window.set_draw_panel(!window.draw_panel_open());
                     return;
                 }
                 let button = &window.imp().edit_button;
@@ -1290,8 +1170,8 @@ impl Window {
                 // The search bar first: it is the last thing opened.
                 if window.imp().search_bar.is_search_mode() {
                     window.imp().search_bar.set_search_mode(false);
-                } else if window.imp().annotate_button.is_active() {
-                    window.imp().annotate_button.set_active(false);
+                } else if window.draw_panel_open() {
+                    window.set_draw_panel(false);
                 } else if window.is_fullscreen() {
                     window.unfullscreen();
                 } else {
@@ -1905,11 +1785,12 @@ impl Window {
         imp.sidebar_button.set_visible(pdf);
         imp.page_box.set_visible(pdf);
         imp.search_button.set_visible(pdf);
-        imp.highlight_button.set_visible(pdf);
-        imp.info_button.set_visible(pdf);
-        imp.annotate_button.set_visible(pdf);
+        // A PDF keeps its header to finding its way round: the rest is in
+        // the menu. Pictures keep their own buttons.
+        imp.rotate_button.set_visible(!pdf);
+        imp.fullscreen_button.set_visible(!pdf);
         if !pdf {
-            imp.annotate_button.set_active(false);
+            self.set_draw_panel(false);
         }
         if !pdf {
             imp.search_bar.set_search_mode(false);
@@ -1971,8 +1852,6 @@ impl Window {
                 action.set_state(&rgb.hex().to_variant());
                 let imp = window.imp();
                 window.update_prefs(|prefs| prefs.highlight = rgb);
-                imp.highlight_swatch.queue_draw();
-                imp.highlight_button.popdown();
                 // Choosing a colour with text selected highlights it in that
                 // colour, as in Preview.
                 if imp.showing_pdf.get() {
@@ -1989,7 +1868,6 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _| {
-                window.imp().highlight_button.popdown();
                 let dialog = gtk::ColorDialog::builder().title("Highlight Colour").with_alpha(false).build();
                 let current = window.imp().reader_prefs.get().highlight.to_rgba();
                 dialog.choose_rgba(
@@ -2061,6 +1939,31 @@ impl Window {
         ));
         self.add_action(&pin);
 
+        // The Draw and Text panel, open or not: a check in the menu, Ctrl+E,
+        // and the panel's own close button.
+        let draw_panel = gio::SimpleAction::new_stateful("draw-panel", None, &false.to_variant());
+        draw_panel.connect_change_state(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |action, value| {
+                let Some(open) = value.and_then(|v| v.get::<bool>()) else { return };
+                let open = open && window.imp().showing_pdf.get();
+                action.set_state(&open.to_variant());
+                if let Some(tools) = window.imp().pdf_tools.get() {
+                    tools.set_open(open);
+                }
+            }
+        ));
+        self.add_action(&draw_panel);
+
+        let shortcuts = gio::SimpleAction::new("show-shortcuts", None);
+        shortcuts.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| crate::app::shortcuts::present(&window, window.imp().showing_pdf.get())
+        ));
+        self.add_action(&shortcuts);
+
         let info = gio::SimpleAction::new("document-info", None);
         info.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -2086,108 +1989,12 @@ impl Window {
         prefs.save();
     }
 
-    /// The highlighter in the header: a menu of colours, the chosen one shown
-    /// as a stripe under the pen.
-    fn build_highlighter(&self) {
-        const PALETTE: &[(&str, &str)] = &[
-            ("Yellow", "#ffe400"),
-            ("Green", "#7ee36b"),
-            ("Blue", "#6ec6ff"),
-            ("Pink", "#ff8ad8"),
-            ("Purple", "#c7a3ff"),
-            ("Orange", "#ffa94d"),
-        ];
-        let imp = self.imp();
-        let swatch = &imp.highlight_swatch;
-        swatch.set_content_width(16);
-        swatch.set_content_height(3);
-        swatch.set_draw_func(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_, cr, w, h| {
-                let colour = window.imp().reader_prefs.get().highlight.to_rgba();
-                cr.set_source_rgb(f64::from(colour.red()), f64::from(colour.green()), f64::from(colour.blue()));
-                cr.rectangle(0.0, 0.0, f64::from(w), f64::from(h));
-                let _ = cr.fill();
-            }
-        ));
-        let face = gtk::Box::new(gtk::Orientation::Vertical, 1);
-        face.set_valign(gtk::Align::Center);
-        face.append(&gtk::Image::from_icon_name("glance-highlighter-symbolic"));
-        face.append(swatch);
+    fn draw_panel_open(&self) -> bool {
+        self.action_state("draw-panel").and_then(|state| state.get::<bool>()).unwrap_or(false)
+    }
 
-        let colours = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let mut dots = Vec::new();
-        for &(name, hex) in PALETTE {
-            let Some(rgb) = pdf::Rgb::from_hex(hex) else { continue };
-            let dot = gtk::DrawingArea::builder().content_width(26).content_height(26).build();
-            dot.set_draw_func(glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |dot, cr, w, h| {
-                    let c = rgb.to_rgba();
-                    let (cx, cy) = (f64::from(w) / 2.0, f64::from(h) / 2.0);
-                    let r = f64::from(w.min(h)) / 2.0;
-                    let chosen = window.imp().reader_prefs.get().highlight == rgb;
-                    // The chosen colour is ringed, in the text colour.
-                    if chosen {
-                        let ink = dot.color();
-                        cr.set_source_rgb(f64::from(ink.red()), f64::from(ink.green()), f64::from(ink.blue()));
-                        cr.arc(cx, cy, r - 1.0, 0.0, std::f64::consts::TAU);
-                        cr.set_line_width(2.0);
-                        let _ = cr.stroke();
-                    }
-                    cr.arc(cx, cy, r - 5.0, 0.0, std::f64::consts::TAU);
-                    cr.set_source_rgb(f64::from(c.red()), f64::from(c.green()), f64::from(c.blue()));
-                    let _ = cr.fill_preserve();
-                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.25);
-                    cr.set_line_width(1.0);
-                    let _ = cr.stroke();
-                }
-            ));
-            dots.push(dot.clone());
-            let button = gtk::ToggleButton::builder().child(&dot).tooltip_text(name).css_classes(["circular", "flat"]).build();
-            button.set_action_name(Some("win.highlight-colour"));
-            button.set_action_target_value(Some(&rgb.hex().to_variant()));
-            colours.append(&button);
-        }
-        let custom = gtk::Button::builder().label("Other Colour…").action_name("win.pick-highlight-colour").css_classes(["flat"]).build();
-        let heading = gtk::Label::builder().label("Highlight Colour").xalign(0.0).css_classes(["heading"]).build();
-        let marks = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        for (label, action) in [
-            ("Highlight Selection", "win.mark-highlight"),
-            ("Underline Selection", "win.mark-underline"),
-            ("Strike Through Selection", "win.mark-strike"),
-        ] {
-            let button = gtk::Button::builder().label(label).action_name(action).css_classes(["flat"]).build();
-            if let Some(text) = button.child().and_downcast::<gtk::Label>() {
-                text.set_xalign(0.0);
-            }
-            marks.append(&button);
-        }
-        let body = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        body.set_margin_top(6);
-        body.set_margin_bottom(6);
-        body.set_margin_start(6);
-        body.set_margin_end(6);
-        body.append(&heading);
-        body.append(&colours);
-        body.append(&custom);
-        body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-        body.append(&marks);
-
-        let button = &imp.highlight_button;
-        button.set_child(Some(&face));
-        let popover = gtk::Popover::builder().child(&body).build();
-        // The ring goes round whichever colour is chosen now.
-        popover.connect_show(move |_| {
-            for dot in &dots {
-                dot.queue_draw();
-            }
-        });
-        button.set_popover(Some(&popover));
-        button.set_tooltip_text(Some("Highlight and Colour"));
-        button.set_visible(false);
+    fn set_draw_panel(&self, open: bool) {
+        gio::prelude::ActionGroupExt::change_action_state(self, "draw-panel", &open.to_variant());
     }
 
     /// A right-click on a page offers what can be done with the selection.

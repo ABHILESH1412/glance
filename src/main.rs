@@ -206,6 +206,7 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.undo-mark", idle: &[], typing: &[] },
     Accel { action: "win.redo-mark", idle: &[], typing: &[] },
     Accel { action: "win.document-info", idle: &[], typing: &[] },
+    Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document
@@ -245,18 +246,29 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.document-info", &["<Primary>i"]),
 ];
 
+/// An action's keys, while typing or not, with a PDF open or not.
+fn keys_for(accel: &Accel, typing: bool, pdf: bool) -> &'static [&'static str] {
+    if typing {
+        accel.typing
+    } else if pdf {
+        PDF_KEYS.iter().find(|(action, _)| *action == accel.action).map_or(accel.idle, |(_, keys)| keys)
+    } else {
+        accel.idle
+    }
+}
+
+/// Every key bound when nothing is being typed, for a picture or a PDF: what
+/// the Keyboard Shortcuts window is checked against.
+#[cfg(test)]
+pub(crate) fn bound_keys(pdf: bool) -> Vec<&'static str> {
+    ACCELS.iter().flat_map(|accel| keys_for(accel, false, pdf).iter().copied()).collect()
+}
+
 /// Swap the whole set over when focus moves into or out of a text box, or
 /// between an image and a PDF.
 pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool) {
     for accel in ACCELS {
-        let keys = if typing {
-            accel.typing
-        } else if pdf {
-            PDF_KEYS.iter().find(|(action, _)| *action == accel.action).map_or(accel.idle, |(_, keys)| keys)
-        } else {
-            accel.idle
-        };
-        app.set_accels_for_action(accel.action, keys);
+        app.set_accels_for_action(accel.action, keys_for(accel, typing, pdf));
     }
 }
 

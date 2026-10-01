@@ -221,6 +221,18 @@ impl PdfTools {
         }
         words.append(&controls.hint);
 
+        // Its name and a way out, now that nothing in the header opens it.
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let title = gtk::Label::builder().label("Draw and Write").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
+        let close = gtk::Button::builder()
+            .icon_name("window-close-symbolic")
+            .tooltip_text("Close (Ctrl+E)")
+            .action_name("win.draw-panel")
+            .css_classes(["flat", "circular"])
+            .build();
+        top.append(&title);
+        top.append(&close);
+        column.append(&top);
         column.append(&draw_toggle);
         column.append(&strokes);
         column.append(&text_toggle);
@@ -230,6 +242,10 @@ impl PdfTools {
         let root = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .width_request(300)
+            // The title row stretches to push the close button right; said
+            // here, so that stretch stays inside the panel instead of taking
+            // half the window.
+            .hexpand(false)
             .child(&column)
             .visible(false)
             .build();
