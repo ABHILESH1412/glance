@@ -31,12 +31,8 @@ pub(crate) fn section_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
 
 /// A colour well that lets the alpha channel be set, so "no background" is a
 /// colour you can choose rather than a separate switch.
-pub(crate) fn colour_button(initial: gdk::RGBA) -> gtk::ColorDialogButton {
-    let dialog = gtk::ColorDialog::new();
-    dialog.set_with_alpha(true);
-    let button = gtk::ColorDialogButton::new(Some(dialog));
-    button.set_rgba(&initial);
-    button
+pub(crate) fn colour_button(initial: gdk::RGBA) -> crate::app::colour::ColourButton {
+    crate::app::colour::ColourButton::new(initial, true)
 }
 
 /// A pixel-dimension entry. Wide range, typed or stepped.
@@ -437,6 +433,7 @@ impl Window {
         let colour_caption = gtk::Label::new(Some("Colour"));
         colour_caption.add_css_class("dim-label");
         imp.draw_colour.set_tooltip_text(Some("Colour of the ink"));
+        imp.draw_colour.set_title("Ink Colour");
         imp.draw_colour.connect_rgba_notify(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -570,6 +567,8 @@ impl Window {
             colour_row.append(button);
         }
         words.append(&colour_row);
+        imp.text_colour.set_title("Text Colour");
+        imp.text_background.set_title("Background Colour");
 
         let text_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         text_actions.set_homogeneous(true);

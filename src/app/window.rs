@@ -110,7 +110,7 @@ mod imp {
         pub draw_toggle: gtk::ToggleButton,
         pub draw_options: gtk::Box,
         pub draw_tools: RefCell<Vec<gtk::ToggleButton>>,
-        pub draw_colour: gtk::ColorDialogButton,
+        pub draw_colour: crate::app::colour::ColourButton,
         pub draw_width: gtk::SpinButton,
         pub draw_hint: gtk::Label,
         pub text_toggle: gtk::ToggleButton,
@@ -120,8 +120,8 @@ mod imp {
         pub text_bold: gtk::ToggleButton,
         pub text_italic: gtk::ToggleButton,
         pub text_underline: gtk::ToggleButton,
-        pub text_colour: gtk::ColorDialogButton,
-        pub text_background: gtk::ColorDialogButton,
+        pub text_colour: crate::app::colour::ColourButton,
+        pub text_background: crate::app::colour::ColourButton,
         pub text_font: gtk::FontDialogButton,
         pub text_hint: gtk::Label,
         pub adjust_toggle: gtk::ToggleButton,
@@ -1868,24 +1868,15 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _| {
-                let dialog = gtk::ColorDialog::builder().title("Highlight Colour").with_alpha(false).build();
                 let current = window.imp().reader_prefs.get().highlight.to_rgba();
-                dialog.choose_rgba(
-                    Some(&window),
-                    Some(&current),
-                    gio::Cancellable::NONE,
-                    glib::clone!(
-                        #[weak]
-                        window,
-                        move |chosen| {
-                            let Ok(rgba) = chosen else { return };
-                            let hex = pdf::Rgb::from_rgba(&rgba).hex().to_variant();
-                            gio::prelude::ActionGroupExt::change_action_state(&window, "highlight-colour", &hex);
-                        }
-                    ),
-                );
-            }
-        ));
+                let weak = window.downgrade();
+                crate::app::colour::choose(&window, "Highlight Colour", &current, false, move |rgba| {
+                    if let Some(window) = weak.upgrade() {
+                        let hex = pdf::Rgb::from_rgba(&rgba).hex().to_variant();
+                        gio::prelude::ActionGroupExt::change_action_state(&window, "highlight-colour", &hex);
+                    }
+                });
+            }        ));
         self.add_action(&pick);
 
         let layout = gio::SimpleAction::new_stateful(

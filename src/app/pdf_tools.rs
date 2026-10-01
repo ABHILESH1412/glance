@@ -35,8 +35,8 @@ struct TextControls {
     size: gtk::SpinButton,
     bold: gtk::ToggleButton,
     italic: gtk::ToggleButton,
-    colour: gtk::ColorDialogButton,
-    background: gtk::ColorDialogButton,
+    colour: crate::app::colour::ColourButton,
+    background: crate::app::colour::ColourButton,
     remove: gtk::Button,
     hint: gtk::Label,
     /// Set while the controls are being filled from a chosen box, so that
@@ -137,6 +137,7 @@ impl PdfTools {
         width.set_tooltip_text(Some("Line thickness, in points"));
         let ink = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0));
         ink.set_tooltip_text(Some("Colour of the ink"));
+        ink.set_title("Ink Colour");
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         for (caption, widget) in [("Width", width.upcast_ref::<gtk::Widget>()), ("Colour", ink.upcast_ref())] {
             let label = gtk::Label::new(Some(caption));
@@ -170,6 +171,8 @@ impl PdfTools {
             hint: hint(""),
             syncing: Rc::new(Cell::new(false)),
         };
+        controls.colour.set_title("Text Colour");
+        controls.background.set_title("Background Colour");
         controls.font.set_level(gtk::FontLevel::Family);
         controls.font.set_use_font(true);
         controls.font.set_font_desc(&pango::FontDescription::from_string("Sans"));
