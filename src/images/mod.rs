@@ -10,6 +10,7 @@ pub mod decoders;
 pub mod exif;
 pub mod edit;
 pub mod format;
+pub mod live_layer;
 pub mod loader;
 pub mod resolution;
 pub mod scene;

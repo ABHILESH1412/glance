@@ -63,6 +63,15 @@ camera, lens, when it was taken, shutter speed, aperture, ISO, focal length, fla
 where, if the photo has GPS. It reads EXIF from JPEG, PNG, WebP, TIFF, HEIF and camera raw,
 and follows along as you browse.
 
+**Live Text** — `Ctrl+Shift+T`, or the button in the header, finds the text in a picture
+so it can be selected and copied: drag across it, double-click a word, `Ctrl+A` for all
+of it, `Ctrl+C` to copy. It reads screenshots, photographed pages, signs and blurry text,
+in English and about 45 other languages written in the Latin alphabet, using PaddleOCR's
+PP-OCRv6 models. Nothing is sent anywhere: the reading happens on your computer, in a
+small helper program that runs only while it is needed and gives all its memory back
+when it stops. The engine and models, 42.5 MB, are downloaded the first time, after
+asking, checked against fixed checksums, and kept in `~/.local/share/glance/ocr`.
+
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and
 held in memory, so a long document costs about what a short one does. Zooming redraws
@@ -319,18 +328,19 @@ runtime instead of from your system.
 
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
-AVIF, Poppler's GLib library and qpdf for PDFs, Rust, `make`, and glib's resource
+AVIF, Poppler's GLib library and qpdf for PDFs, libsoup 3 for downloading Live Text's
+parts when first used, Rust 1.92 or newer, `make`, and glib's resource
 compiler, which the build uses to put the icons inside the binary. Drawing on PDFs needs Poppler 25.06,
 and text boxes in a chosen font 24.12; with an older Poppler, PDFs open and the rest works,
 and those two tools say what they need. Everything else is pure Rust and comes in through Cargo.
 
 ```bash
 # Arch
-sudo pacman -S gtk4 libadwaita libheif poppler-glib qpdf glib2 rust make
+sudo pacman -S gtk4 libadwaita libheif poppler-glib qpdf libsoup3 glib2 rust make
 # Fedora
-sudo dnf install gtk4-devel libadwaita-devel libheif-devel poppler-glib-devel qpdf-devel glib2-devel cargo make
+sudo dnf install gtk4-devel libadwaita-devel libheif-devel poppler-glib-devel qpdf-devel libsoup3-devel glib2-devel cargo make
 # Debian, Ubuntu
-sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libpoppler-glib-dev libqpdf-dev libglib2.0-dev cargo make
+sudo apt install libgtk-4-dev libadwaita-1-dev libheif-dev libpoppler-glib-dev libqpdf-dev libsoup-3.0-dev libglib2.0-dev cargo make
 ```
 
 **2. Get the source.**
@@ -476,6 +486,7 @@ search box. The most used:
 | `F11` | Fullscreen |
 | `F5` | Slideshow; `Space` pauses it |
 | `Ctrl+I` | Image info |
+| `Ctrl+Shift+T` `Ctrl+A` | Live Text: select text in the picture, all of it |
 | `F9` `,` `.` `K` | An animation's frames: show them, previous / next frame, play or pause |
 | `Delete` | Delete the current image |
 | `Esc` | Leave fullscreen, close the panel, or cancel editing |

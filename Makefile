@@ -15,6 +15,9 @@ CARGO   ?= cargo
 PKGNAME ?= glance
 
 BINDIR   = $(DESTDIR)$(PREFIX)/bin
+# Live Text's helper is started by Glance, not by people, so it lives out of
+# the way, where Glance looks for it.
+HELPERDIR = $(DESTDIR)$(PREFIX)/libexec/glance
 DATADIR  = $(DESTDIR)$(PREFIX)/share
 ICONDIR  = $(DATADIR)/icons/hicolor
 
@@ -38,6 +41,7 @@ install:
 		echo "target/release/glance is missing — run 'make' first, as your own user."; \
 		exit 1; }
 	install -Dm755 target/release/glance $(BINDIR)/glance
+	install -Dm755 target/release/glance-ocr $(HELPERDIR)/glance-ocr
 	install -Dm644 data/$(APPID).desktop $(DATADIR)/applications/$(APPID).desktop
 	install -Dm644 data/$(APPID).metainfo.xml $(DATADIR)/metainfo/$(APPID).metainfo.xml
 	install -Dm644 data/icons/hicolor/scalable/apps/$(APPID).svg \
@@ -54,6 +58,8 @@ endif
 
 uninstall:
 	rm -f $(BINDIR)/glance
+	rm -f $(HELPERDIR)/glance-ocr
+	-rmdir $(HELPERDIR)
 	rm -f $(DATADIR)/applications/$(APPID).desktop
 	rm -f $(DATADIR)/metainfo/$(APPID).metainfo.xml
 	rm -f $(ICONDIR)/scalable/apps/$(APPID).svg

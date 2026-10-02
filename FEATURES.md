@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 38 / 64 | 7 |
+| Images | 39 / 64 | 7 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **58 / 122** | **10** |
+| **Total** | **59 / 122** | **10** |
 
 ---
 
@@ -34,7 +34,7 @@ Tick a box when a feature ships.
 - [x] Inspector with file details
 - [x] EXIF / camera metadata (camera, lens, shutter, ISO, date) — JPEG, PNG, WebP, TIFF, HEIF and camera raw
 - [ ] Show where a photo was taken on a map (GPS) — *partial:* the coordinates and altitude are in the inspector, but there is no map
-- [ ] Live Text — select and copy text inside a photo (OCR)
+- [x] Live Text — select and copy text inside a photo (OCR) — English and about 45 other Latin-alphabet languages; Hindi to come
 - [ ] Loupe — magnify one region under the pointer
 
 ## 2. Images — editing

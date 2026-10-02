@@ -43,6 +43,10 @@ finish-args:
   # cannot do any of that. This is the same access every folder-browsing image
   # viewer asks for, and the reason it is asked for.
   - --filesystem=host
+  # Live Text's text engine and models are downloaded the first time it is
+  # used, after asking, rather than making every download of Glance 41 MB
+  # bigger. Pictures are never sent anywhere.
+  - --share=network
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin

@@ -144,6 +144,7 @@ pub fn image_menu() -> gio::Menu {
         item("_Actual Size", "win.zoom-actual"),
         item("_Fullscreen", "win.fullscreen"),
         item("_Slideshow", "win.slideshow"),
+        item("Select _Text in Image", "win.live-text"),
         item("Image _Info", "win.inspector"),
         item("Show F_rames", "win.show-pages"),
     ]);

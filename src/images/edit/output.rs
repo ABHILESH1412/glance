@@ -14,7 +14,7 @@ use crate::images::edit::export;
 use crate::app::window::Window;
 
 /// A texture's pixels, as straight-alpha RGBA the editor can work on.
-fn pixels_of(texture: &gdk::Texture) -> image::DynamicImage {
+pub(crate) fn pixels_of(texture: &gdk::Texture) -> image::DynamicImage {
     let mut downloader = gdk::TextureDownloader::new(texture);
     downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
     let (bytes, stride) = downloader.download_bytes();

@@ -15,6 +15,7 @@ pub mod doc_info;
 pub mod filmstrip;
 pub mod frames;
 pub mod inspector;
+pub mod live_text;
 pub mod locked;
 pub mod menus;
 pub mod pdf_tools;

@@ -24,6 +24,7 @@ use crate::images::edit::adjust::Adjustments;
 use crate::images::edit::draw::{Mark, Tool};
 use crate::images::edit::text::{Patch, TextItem};
 use crate::images::decoders::svg;
+use crate::images::live_layer::{LiveLayer, Place};
 use crate::images::loader::VectorSource;
 
 /// Past this, zooming stops being informative.
@@ -52,6 +53,14 @@ mod imp {
         pub on_frame_changed: RefCell<Option<Box<dyn Fn(usize, bool)>>>,
         /// No pointer over the picture: a slideshow wants nothing on it.
         pub cursor_hidden: Cell<bool>,
+        /// Live Text: the lines found on the picture and what is selected,
+        /// in the picture's own units. `None` while Live Text is off.
+        pub live: RefCell<Option<LiveLayer>>,
+        /// A drag is selecting text rather than panning.
+        pub live_selecting: Cell<bool>,
+        /// When and where the last press on text landed, to tell a double
+        /// click (select the word) from two separate presses.
+        pub live_last_press: Cell<Option<(std::time::Instant, (f64, f64))>>,
         /// The image's size in its own units. For a photograph this is simply
         /// the pixel size, but for a vector it is the natural size and the
         /// texture behind it may be rendered at any resolution. Keeping the two
@@ -453,6 +462,141 @@ impl ImageCanvas {
         }
     }
 
+    // -- Live Text --------------------------------------------------------
+
+    /// Show the lines of text found on the picture, in its own units, or
+    /// none, which also ends Live Text on it.
+    pub fn set_live_text(&self, layer: Option<LiveLayer>) {
+        let imp = self.imp();
+        imp.live.replace(layer);
+        imp.live_selecting.set(false);
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    /// The picture as it is drawn now: for an animation, the frame on screen.
+    pub fn texture(&self) -> Option<gdk::Texture> {
+        self.imp().texture.borrow().clone()
+    }
+
+    pub fn has_live_text(&self) -> bool {
+        self.imp().live.borrow().is_some()
+    }
+
+    /// The picture's size in its own units, which Live Text's lines are in.
+    pub fn logical_size(&self) -> Option<(f64, f64)> {
+        self.texture_size()
+    }
+
+    pub fn live_selected_text(&self) -> Option<String> {
+        self.imp().live.borrow().as_ref().and_then(LiveLayer::selected_text)
+    }
+
+    pub fn live_all_text(&self) -> Option<String> {
+        self.imp().live.borrow().as_ref().map(LiveLayer::all_text).filter(|text| !text.is_empty())
+    }
+
+    pub fn live_select_all(&self) {
+        if let Some(layer) = self.imp().live.borrow_mut().as_mut() {
+            layer.select_all();
+        }
+        self.queue_draw();
+    }
+
+    /// A widget point in the picture's own units, as it is drawn now.
+    fn live_point(&self, point: (f64, f64)) -> [f64; 2] {
+        let imp = self.imp();
+        let (x, y) = self.to_image(point, imp.scale.get(), imp.rotation.get(), imp.centre.get());
+        [x, y]
+    }
+
+    /// Text under a widget point, while Live Text is on and no editing tool
+    /// wants the pointer.
+    fn live_hit(&self, point: (f64, f64)) -> Option<Place> {
+        let imp = self.imp();
+        if imp.draw_tool.get().is_some() || imp.text_tool.get() || imp.cropping.get() || imp.resizing.get() {
+            return None;
+        }
+        let p = self.live_point(point);
+        imp.live.borrow().as_ref()?.hit(p)
+    }
+
+    /// A press: on text it starts a selection (or, twice in quick
+    /// succession, picks the word), and says so; elsewhere it lets go of the
+    /// selection and leaves the drag to pan.
+    fn live_press(&self, point: (f64, f64)) -> bool {
+        let imp = self.imp();
+        if !self.has_live_text() {
+            return false;
+        }
+        let Some(place) = self.live_hit(point) else {
+            if let Some(layer) = imp.live.borrow_mut().as_mut() {
+                layer.clear_selection();
+            }
+            imp.live_last_press.set(None);
+            self.queue_draw();
+            return false;
+        };
+        let now = std::time::Instant::now();
+        let twice = imp.live_last_press.get().is_some_and(|(when, at)| {
+            now.duration_since(when) < Duration::from_millis(400) && (at.0 - point.0).abs() < 6.0 && (at.1 - point.1).abs() < 6.0
+        });
+        imp.live_last_press.set(Some((now, point)));
+        if let Some(layer) = imp.live.borrow_mut().as_mut() {
+            if twice {
+                layer.select_word(place);
+            } else {
+                layer.anchor = Some(place);
+                layer.focus = Some(place);
+            }
+        }
+        imp.live_selecting.set(!twice);
+        self.queue_draw();
+        true
+    }
+
+    /// The drag moved on: the selection reaches to the nearest place.
+    fn live_drag(&self, point: (f64, f64)) {
+        let p = self.live_point(point);
+        if let Some(layer) = self.imp().live.borrow_mut().as_mut() {
+            if let Some(place) = layer.nearest(p) {
+                layer.focus = Some(place);
+            }
+        }
+        self.queue_draw();
+    }
+
+    /// Every line softly, and what is selected strongly, drawn in the frame
+    /// the picture itself was drawn in so they move with it.
+    fn draw_live_text(&self, snapshot: &gtk::Snapshot, scale: f64, logical: (f64, f64)) {
+        let live = self.imp().live.borrow();
+        let Some(layer) = live.as_ref() else { return };
+        let local = |p: [f64; 2]| ((p[0] - logical.0 / 2.0) * scale, (p[1] - logical.1 / 2.0) * scale);
+        let fill = |quad: &[[f64; 2]; 4], colour: &gdk::RGBA| {
+            let builder = gsk::PathBuilder::new();
+            for (i, corner) in quad.iter().enumerate() {
+                let (x, y) = local(*corner);
+                if i == 0 {
+                    builder.move_to(x as f32, y as f32);
+                } else {
+                    builder.line_to(x as f32, y as f32);
+                }
+            }
+            builder.close();
+            snapshot.append_fill(&builder.to_path(), gsk::FillRule::Winding, colour);
+        };
+        // Adwaita's blue: faint over everything that can be selected,
+        // strong over what is.
+        let faint = gdk::RGBA::new(0.21, 0.52, 0.89, 0.16);
+        let strong = gdk::RGBA::new(0.21, 0.52, 0.89, 0.45);
+        for line in &layer.lines {
+            fill(&line.quad, &faint);
+        }
+        for (i, start, end) in layer.selected_spans() {
+            fill(&layer.lines[i].span(start, end), &strong);
+        }
+    }
+
     /// Hide the pointer over the picture, or bring it back.
     pub fn set_cursor_hidden(&self, hidden: bool) {
         if self.imp().cursor_hidden.replace(hidden) != hidden {
@@ -574,6 +718,9 @@ impl ImageCanvas {
         imp.scene.replace(None);
         imp.adjust.set(Adjustments::default());
         imp.toned.replace(None);
+        // The text found belongs to the picture being replaced.
+        imp.live.replace(None);
+        imp.live_selecting.set(false);
         imp.texts.borrow_mut().clear();
         imp.selected_text.set(None);
         imp.text_tool.set(false);
@@ -1935,6 +2082,10 @@ impl ImageCanvas {
             self.set_cursor_from_name(Some("none"));
             return;
         }
+        if self.live_hit(self.imp().pointer.get()).is_some() {
+            self.set_cursor_from_name(Some("text"));
+            return;
+        }
         if self.imp().draw_tool.get().is_some() {
             self.set_cursor_from_name(Some("crosshair"));
             return;
@@ -2152,6 +2303,7 @@ impl ImageCanvas {
             snapshot.scale((scale * rx) as f32, (scale * ry) as f32);
             snapshot.append_node(scene);
             snapshot.restore();
+            self.draw_live_text(snapshot, scale, (logical_w, logical_h));
             snapshot.restore();
             if toned {
                 snapshot.pop();
@@ -2200,6 +2352,7 @@ impl ImageCanvas {
             }
             None => snapshot.append_scaled_texture(&texture, filter, &base_rect),
         }
+        self.draw_live_text(snapshot, scale, (logical_w, logical_h));
         snapshot.restore();
         if toned {
             snapshot.pop();
@@ -2459,6 +2612,7 @@ impl ImageCanvas {
                 if canvas.imp().cropping.get()
                     || canvas.imp().resizing.get()
                     || canvas.imp().text_tool.get()
+                    || canvas.has_live_text()
                 {
                     canvas.update_cursor();
                 }
@@ -2526,6 +2680,11 @@ impl ImageCanvas {
                 imp.dragging.set(false);
                 imp.drag_origin.set(imp.centre.get());
 
+                // Live Text: a drag that starts on text selects it.
+                if canvas.live_press((start_x, start_y)) {
+                    return;
+                }
+
                 if imp.draw_tool.get().is_some() {
                     canvas.begin_mark((start_x, start_y));
                     return;
@@ -2582,6 +2741,13 @@ impl ImageCanvas {
             self,
             move |gesture, dx, dy| {
                 let imp = canvas.imp();
+
+                if imp.live_selecting.get() {
+                    if let Some((start_x, start_y)) = gesture.start_point() {
+                        canvas.live_drag((start_x + dx, start_y + dy));
+                    }
+                    return;
+                }
 
                 if imp.draw_tool.get().is_some() && imp.drawing.borrow().is_some() {
                     // `dx` is measured from where the press landed, so the
@@ -2671,6 +2837,7 @@ impl ImageCanvas {
             move |_, _, _| {
                 canvas.finish_mark();
                 canvas.imp().dragging.set(false);
+                canvas.imp().live_selecting.set(false);
                 canvas.update_cursor();
                 // Panning moves the visible region, so a vector may need a
                 // fresh tile even though the zoom has not changed.
@@ -2690,6 +2857,11 @@ impl ImageCanvas {
             self,
             move |_, presses, x, y| {
                 if presses != 2 || !canvas.has_image() {
+                    return;
+                }
+                // On Live Text, a double click picks the word (see
+                // `live_press`) rather than zooming.
+                if canvas.live_hit((x, y)).is_some() {
                     return;
                 }
                 if canvas.is_fitted() {

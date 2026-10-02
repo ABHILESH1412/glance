@@ -3,6 +3,7 @@
 
 mod app;
 mod images;
+mod live_text;
 mod model3d;
 mod pdf;
 
@@ -88,6 +89,8 @@ fn load_css() {
         scale.temperature trough highlight, scale.tint trough highlight { background: transparent; }
         /* The edit panel's tone sliders line up, whatever their numbers. */
         scale.tone value { min-width: 2.6em; }
+        /* Live Text says it is reading, floating over the top of the picture. */
+        .live-status { padding: 6px 14px; border-radius: 999px; }
         .filmstrip-current {
             outline: 2px solid @accent_bg_color;
             outline-offset: -2px;
@@ -233,6 +236,8 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.frame-previous", idle: &["comma"], typing: &[] },
     Accel { action: "win.frame-next", idle: &["period"], typing: &[] },
     Accel { action: "win.frame-play", idle: &["k"], typing: &[] },
+    Accel { action: "win.live-text", idle: &["<Primary><Shift>t"], typing: &[] },
+    Accel { action: "win.live-select-all", idle: &["<Primary>a"], typing: &[] },
     Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
 ];
 
@@ -283,6 +288,8 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.frame-previous", &[]),
     ("win.frame-next", &[]),
     ("win.frame-play", &[]),
+    ("win.live-text", &[]),
+    ("win.live-select-all", &[]),
 ];
 
 /// During a slideshow Space pauses it, as in every slideshow and video

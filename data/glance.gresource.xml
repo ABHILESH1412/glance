@@ -22,5 +22,7 @@
   <gresource prefix="/io/github/abhilesh1412/Glance/icons/scalable/actions">
     <file alias="glance-levels-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-levels-symbolic.svg</file>
+    <file alias="glance-live-text-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-live-text-symbolic.svg</file>
   </gresource>
 </gresources>

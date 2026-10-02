@@ -173,6 +173,12 @@ mod imp {
         /// Whether the frames were last left open, to open them again for
         /// the next animation.
         pub frames_wanted: Cell<bool>,
+        /// Live Text: on or off, the helper while it is wanted, and what it
+        /// has read.
+        pub live_on: Cell<bool>,
+        pub live_button: gtk::ToggleButton,
+        pub live_status: gtk::Revealer,
+        pub live: RefCell<crate::app::live_text::LiveState>,
         /// The person agreed to close with unsaved work, so do not ask again.
         pub closing_confirmed: Cell<bool>,
         /// Close the window once the save under way has worked.
@@ -360,6 +366,10 @@ mod imp {
                 picture: RefCell::new(None),
                 frames: crate::app::frames::FramesPane::new(),
                 frames_wanted: Cell::new(false),
+                live_on: Cell::new(false),
+                live_button: gtk::ToggleButton::new(),
+                live_status: gtk::Revealer::new(),
+                live: RefCell::new(Default::default()),
                 closing_confirmed: Cell::new(false),
                 close_after_save: Cell::new(false),
                 slideshow: Cell::new(false),
@@ -533,6 +543,7 @@ impl Window {
         let stage = gtk::Overlay::new();
         stage.set_child(Some(&body));
         stage.add_overlay(&imp.slideshow_controls);
+        stage.add_overlay(&imp.live_status);
         imp.toasts.set_child(Some(&stage));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
@@ -649,6 +660,11 @@ impl Window {
         info_button.set_tooltip_text(Some("Image Info (Ctrl+I)"));
         info_button.set_action_name(Some("win.inspector"));
         header.pack_end(info_button);
+        let live_button = &imp.live_button;
+        live_button.set_icon_name("glance-live-text-symbolic");
+        live_button.set_tooltip_text(Some("Select Text in Image (Ctrl+Shift+T)"));
+        live_button.set_action_name(Some("win.live-text"));
+        header.pack_end(live_button);
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
         header.pack_end(copy_button);
@@ -990,6 +1006,13 @@ impl Window {
                     }
                 }
                 window.imp().info_button.set_sensitive(!open);
+                // Editing changes the pixels the text was read from.
+                if open {
+                    window.live_stop();
+                }
+                if let Some(action) = window.lookup_action("live-text").and_downcast::<gio::SimpleAction>() {
+                    action.set_enabled(!open && window.imp().view.canvas().has_image());
+                }
                 if open {
                     // Decode once, when editing actually starts, rather than
                     // holding a full-resolution buffer for every image browsed.
@@ -1226,7 +1249,12 @@ impl Window {
             move |_, _| {
                 let imp = window.imp();
                 if !imp.showing_pdf.get() {
-                    window.copy_to_clipboard();
+                    // Selected Live Text is what Copy means while there is some.
+                    if imp.view.canvas().live_selected_text().is_some() {
+                        window.copy_live_text(false);
+                    } else {
+                        window.copy_to_clipboard();
+                    }
                 } else if !imp.pdf_view.allowed().copy {
                     window.toast("The author of this document does not allow copying its text.");
                 } else if imp.pdf_view.copy_selection() {
@@ -1403,6 +1431,8 @@ impl Window {
                     window.imp().search_bar.set_search_mode(false);
                 } else if window.imp().slideshow.get() {
                     window.stop_slideshow();
+                } else if window.imp().live_on.get() {
+                    window.live_stop();
                 } else if window.imp().inspector.root.is_visible() {
                     if let Some(action) = window.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
                         action.change_state(&false.to_variant());
@@ -2066,6 +2096,7 @@ impl Window {
         let imp = self.imp();
         imp.action_bar.set_visible(!pdf);
         imp.info_button.set_visible(!pdf);
+        imp.live_button.set_visible(!pdf);
         if pdf {
             // The sidebar is the document's pages again, not an animation's
             // frames.

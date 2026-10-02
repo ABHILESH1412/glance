@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Live Text: lines of text inside the corners of a viewfinder. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" d="M 1 1 h 4 v 1.5 h -2.5 v 2.5 h -1.5 z M 15 1 v 4 h -1.5 v -2.5 h -2.5 v -1.5 z M 15 15 h -4 v -1.5 h 2.5 v -2.5 h 1.5 z M 1 15 v -4 h 1.5 v 2.5 h 2.5 v 1.5 z"/>
+  <path fill="#222222" d="M 4.5 5 h 7 v 1.5 h -7 z M 4.5 7.25 h 7 v 1.5 h -7 z M 4.5 9.5 h 4.5 v 1.5 h -4.5 z"/>
+</svg>

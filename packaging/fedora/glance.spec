@@ -15,7 +15,7 @@ Source0:        %{url}/archive/refs/tags/v%{version}/%{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.xz
 
 BuildRequires:  cargo
-BuildRequires:  rust >= 1.75
+BuildRequires:  rust >= 1.92
 BuildRequires:  make
 # For glib-compile-resources, which build.rs uses to put the icons in the binary.
 BuildRequires:  glib2-devel
@@ -23,6 +23,8 @@ BuildRequires:  pkgconfig(gtk4) >= 4.14
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.5
 BuildRequires:  pkgconfig(libheif)
 BuildRequires:  pkgconfig(poppler-glib)
+BuildRequires:  pkgconfig(libqpdf) >= 11
+BuildRequires:  pkgconfig(libsoup-3.0)
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 
@@ -69,6 +71,7 @@ appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/%{appid}.metai
 %license %{_datadir}/licenses/%{name}/LICENSE
 %doc README.md
 %{_bindir}/%{name}
+%{_libexecdir}/glance/glance-ocr
 %{_datadir}/applications/%{appid}.desktop
 %{_metainfodir}/%{appid}.metainfo.xml
 %{_datadir}/icons/hicolor/scalable/apps/%{appid}.svg

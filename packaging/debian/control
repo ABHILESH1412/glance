@@ -8,11 +8,13 @@ Maintainer: Abhilesh Singh <sabhilesh260@gmail.com>
 # icons into the binary, so the program finds its own icon before installation.
 Build-Depends: debhelper-compat (= 13),
                cargo,
-               rustc (>= 1.75),
+               rustc (>= 1.92),
                libgtk-4-dev (>= 4.14),
                libadwaita-1-dev (>= 1.5),
                libheif-dev,
                libpoppler-glib-dev,
+               libqpdf-dev (>= 11),
+               libsoup-3.0-dev,
                pkgconf,
                make,
                libglib2.0-dev

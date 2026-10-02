@@ -39,6 +39,16 @@ libc = "0.2"
 # photograph just to convert it.
 moxcms = { version = "0.8", features = ["in_place"] }
 
+# ONNX Runtime, for Live Text. Only the glance-ocr helper uses it, and it is
+# loaded from a file at run time (the library is downloaded on first use),
+# so nothing of it is built into Glance or needed to build it.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "api-20"] }
+# Downloading Live Text's parts: GNOME's own HTTP library, which knows the
+# desktop's proxy settings and certificates. And unpacking ONNX Runtime's
+# .tgz, already in the tree through the PNG decoder.
+soup3 = "0.9"
+flate2 = "1"
+
 [build-dependencies]
 # Finding qpdf to link against; already in the tree through GTK's own build.
 pkg-config = "0.3"

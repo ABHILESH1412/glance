@@ -114,6 +114,8 @@ pub const PAGES: &[Page] = &[
                     key("Previous frame", "comma"),
                     key("Next frame", "period"),
                     key("Play or pause an animation", "k"),
+                    key("Select text in the picture (Live Text)", "<Primary><Shift>t"),
+                    key("Select all its text", "<Primary>a"),
                 ],
             },
             Group {

@@ -90,9 +90,56 @@ impl Window {
         ));
         self.add_action(&play);
 
+        // Live Text: on until turned off, reading each picture shown.
+        let live_text = gio::SimpleAction::new_stateful("live-text", None, &false.to_variant());
+        live_text.set_enabled(false);
+        live_text.connect_change_state(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, state| {
+                if let Some(on) = state.and_then(|state| state.get::<bool>()) {
+                    window.want_live_text(on);
+                }
+            }
+        ));
+        self.add_action(&live_text);
+        for (name, all) in [("copy-text", false), ("copy-all-text", true)] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(false);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| window.copy_live_text(all)
+            ));
+            self.add_action(&action);
+        }
+        let select_all = gio::SimpleAction::new("live-select-all", None);
+        select_all.set_enabled(false);
+        select_all.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.imp().view.canvas().live_select_all()
+        ));
+        self.add_action(&select_all);
+        self.build_live_status();
+
         // The frames list and the picture keep each other in step.
         let frames = imp.frames.clone();
-        imp.view.canvas().connect_frame_changed(move |index, playing| frames.set_current(index, playing));
+        let window = self.downgrade();
+        imp.view.canvas().connect_frame_changed(move |index, playing| {
+            frames.set_current(index, playing);
+            // Live Text reads the frame held on screen; a playing animation
+            // has no one frame to read, so it ends Live Text.
+            if let Some(window) = window.upgrade() {
+                if window.imp().live_on.get() {
+                    if playing {
+                        window.live_stop();
+                    } else {
+                        window.live_read_current();
+                    }
+                }
+            }
+        });
         imp.frames.connect_chosen(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -110,8 +157,9 @@ impl Window {
         // One for a still picture and one for an animation, each made with
         // its menu: a menu swapped into a popover after it is made comes up
         // a row too short.
-        let popovers = [false, true].map(|animated| {
-            let popover = gtk::PopoverMenu::from_model(Some(&Self::picture_menu(animated)));
+        // Still or animated, Live Text off or on.
+        let popovers = [(false, false), (true, false), (false, true), (true, true)].map(|(animated, live)| {
+            let popover = gtk::PopoverMenu::from_model(Some(&Self::picture_menu(animated, live)));
             popover.set_parent(&canvas);
             popover.set_has_arrow(false);
             popover.set_halign(gtk::Align::Start);
@@ -134,7 +182,7 @@ impl Window {
                     return;
                 }
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                let popover = &popovers[usize::from(canvas.frame_count() > 1)];
+                let popover = &popovers[usize::from(canvas.frame_count() > 1) + 2 * usize::from(imp.live_on.get())];
                 popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 popover.popup();
             }
@@ -144,10 +192,16 @@ impl Window {
 
     /// The menu for a picture: "Copy This Frame" for an animation, which is
     /// what Copy then copies.
-    fn picture_menu(animated: bool) -> gio::Menu {
+    fn picture_menu(animated: bool, live: bool) -> gio::Menu {
         let copy = gio::Menu::new();
+        if live {
+            copy.append(Some("_Copy Text"), Some("win.copy-text"));
+            copy.append(Some("Copy A_ll Text"), Some("win.copy-all-text"));
+            copy.append(Some("Select _All Text"), Some("win.live-select-all"));
+        }
         copy.append(Some(if animated { "_Copy This Frame" } else { "_Copy Image" }), Some("win.copy"));
         let look = gio::Menu::new();
+        look.append(Some("Select _Text in Image"), Some("win.live-text"));
         look.append(Some("Image _Info"), Some("win.inspector"));
         if animated {
             look.append(Some("Show F_rames"), Some("win.show-pages"));
@@ -170,8 +224,10 @@ impl Window {
     pub(crate) fn picture_shown(&self, picture: Picture) {
         let imp = self.imp();
         imp.picture.replace(Some(picture));
-        if let Some(action) = self.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
-            action.set_enabled(true);
+        for name in ["inspector", "live-text"] {
+            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
+                action.set_enabled(true);
+            }
         }
         self.refresh_inspector();
 
@@ -202,6 +258,12 @@ impl Window {
             self.update_slideshow_position();
             self.schedule_slide();
         }
+        if imp.live_on.get() {
+            if animated {
+                canvas.set_playing(false);
+            }
+            self.live_read_current();
+        }
     }
 
     /// Nothing is on screen, or a PDF is: the picture tools have nothing to
@@ -211,7 +273,8 @@ impl Window {
         imp.picture.replace(None);
         imp.inspector.clear();
         imp.frames.set_frames(&[]);
-        for name in ["inspector", "frame-previous", "frame-next", "frame-play"] {
+        self.live_stop();
+        for name in ["inspector", "live-text", "frame-previous", "frame-next", "frame-play"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 if name == "inspector" {
                     action.change_state(&false.to_variant());
@@ -342,6 +405,7 @@ impl Window {
             imp.split.shows_sidebar(),
             self.is_fullscreen(),
         ));
+        self.live_stop();
         imp.slideshow.set(true);
         imp.slideshow_paused.set(false);
         for name in ["inspector", "show-pages"] {
