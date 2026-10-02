@@ -219,7 +219,9 @@ and shrinks to fit whichever is showing.
 That last one is the unusual bit: give it a number and it will compress *or* inflate the
 file to hit it, which is what people normally hand to a shady upload site to get done.
 
-Nothing is written until you say so, and saving over the original asks first.
+Nothing is written until you say so, and saving over the original asks first. Closing
+the window or quitting with unsaved edits, unapplied redactions or unsaved combined pages
+asks first too, with Save offered for edits.
 
 **Formats**
 

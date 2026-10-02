@@ -8,6 +8,7 @@
 //! Today the window only opens images; `Window::load` is where a PDF or a 3D
 //! model will be handed to its own module instead.
 
+pub mod closing;
 pub mod colour;
 pub mod combine;
 pub mod doc_info;

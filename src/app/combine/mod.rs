@@ -378,6 +378,11 @@ impl Combine {
         &self.inner.root
     }
 
+    /// Pages put together and not yet saved, which closing would lose.
+    pub fn has_unsaved(&self) -> bool {
+        self.inner.changed.get() && !self.inner.sheets.borrow().is_empty()
+    }
+
     /// Called when leaving, with a saved file to open if the reader asked.
     pub fn connect_close(&self, f: impl Fn(Option<PathBuf>) + 'static) {
         self.inner.on_close.replace(Some(Rc::new(f)));

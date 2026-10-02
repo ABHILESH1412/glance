@@ -282,6 +282,7 @@ impl Window {
         self.load_working();
         let Some(image) = self.rendered() else {
             self.toast("Nothing to save yet.");
+            self.saved_for_closing(false);
             return;
         };
 
@@ -323,9 +324,16 @@ impl Window {
                             window.update_edit_state();
                         }
                         window.toast(&format!("Saved {shown}"));
+                        window.saved_for_closing(true);
                     }
-                    Ok(Err(message)) => window.toast(&message),
-                    Err(_) => window.toast("The exporter stopped unexpectedly."),
+                    Ok(Err(message)) => {
+                        window.toast(&message);
+                        window.saved_for_closing(false);
+                    }
+                    Err(_) => {
+                        window.toast("The exporter stopped unexpectedly.");
+                        window.saved_for_closing(false);
+                    }
                 }
             }
         ));

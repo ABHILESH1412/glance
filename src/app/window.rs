@@ -173,6 +173,10 @@ mod imp {
         /// Whether the frames were last left open, to open them again for
         /// the next animation.
         pub frames_wanted: Cell<bool>,
+        /// The person agreed to close with unsaved work, so do not ask again.
+        pub closing_confirmed: Cell<bool>,
+        /// Close the window once the save under way has worked.
+        pub close_after_save: Cell<bool>,
         /// The slideshow: running, paused, the pointer on its controls.
         pub slideshow: Cell<bool>,
         pub slideshow_paused: Cell<bool>,
@@ -356,6 +360,8 @@ mod imp {
                 picture: RefCell::new(None),
                 frames: crate::app::frames::FramesPane::new(),
                 frames_wanted: Cell::new(false),
+                closing_confirmed: Cell::new(false),
+                close_after_save: Cell::new(false),
                 slideshow: Cell::new(false),
                 slideshow_paused: Cell::new(false),
                 slideshow_hovered: Cell::new(false),
@@ -426,6 +432,7 @@ mod imp {
             self.obj().build_ui();
             self.obj().install_actions();
             self.obj().install_viewing_actions();
+            self.obj().install_close_guard();
         }
     }
 

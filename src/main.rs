@@ -354,8 +354,13 @@ fn main() -> glib::ExitCode {
         let quit = gio::SimpleAction::new("quit", None);
         let app_weak = app.downgrade();
         quit.connect_activate(move |_, _| {
+            // Each window is closed as if its close button were pressed, so
+            // one with unsaved work can ask first; the program ends with the
+            // last of them.
             if let Some(app) = app_weak.upgrade() {
-                app.quit();
+                for window in app.windows() {
+                    window.close();
+                }
             }
         });
         app.add_action(&quit);
