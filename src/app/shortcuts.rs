@@ -105,6 +105,18 @@ pub const PAGES: &[Page] = &[
                 ],
             },
             Group {
+                title: "Looking",
+                shortcuts: &[
+                    key("Slideshow", "F5"),
+                    local("Pause or carry on the slideshow", "space"),
+                    key("Image info", "<Primary>i <Alt>Return"),
+                    key("Frames of an animation", "F9"),
+                    key("Previous frame", "comma"),
+                    key("Next frame", "period"),
+                    key("Play or pause an animation", "k"),
+                ],
+            },
+            Group {
                 title: "Editing",
                 shortcuts: &[
                     key("Edit", "<Primary>e"),

@@ -49,10 +49,18 @@ Decoding never runs on the main thread, so a huge file cannot freeze the window.
 **Viewing** — fit to window, 100%, free zoom to 32×. Zoom anchors on the pointer, so the
 pixel under the cursor stays under it. Two fingers on a touchpad pan and the wheel zooms —
 the hardware says which is which, so there is no modifier to remember. Pinch works too.
-Animated GIF and WebP play, and keep playing while you zoom or rotate.
+Animated GIF and WebP play, and keep playing while you zoom or rotate; `F9` lists every
+frame down the side with how long it shows, to pause on one or step through them.
 
 **Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
-and the folder is watched so files added elsewhere show up.
+and the folder is watched so files added elsewhere show up. `F5` plays the folder as a
+slideshow, full screen, every 2 to 30 seconds; Space pauses it.
+
+**Image Info** — `Ctrl+I` opens a panel beside the picture with the file's details (kind,
+size, dates, dimensions, print resolution, frames) and what the camera wrote into it:
+camera, lens, when it was taken, shutter speed, aperture, ISO, focal length, flash, and
+where, if the photo has GPS. It reads EXIF from JPEG, PNG, WebP, TIFF, HEIF and camera raw,
+and follows along as you browse.
 
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and
@@ -463,6 +471,9 @@ search box. The most used:
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |
 | `Ctrl+C` | Copy the image, or a PDF's selected text |
 | `F11` | Fullscreen |
+| `F5` | Slideshow; `Space` pauses it |
+| `Ctrl+I` | Image info |
+| `F9` `,` `.` `K` | An animation's frames: show them, previous / next frame, play or pause |
 | `Delete` | Delete the current image |
 | `Esc` | Leave fullscreen, close the panel, or cancel editing |
 | `Page Up` `Page Down` `Space` | In a PDF: back / forward a screen |

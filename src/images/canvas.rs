@@ -46,6 +46,12 @@ mod imp {
         pub frames: RefCell<Vec<(gdk::Texture, Duration)>>,
         pub frame_index: Cell<usize>,
         pub frame_timer: RefCell<Option<glib::SourceId>>,
+        /// Whether an animation is running, or held on one frame.
+        pub playing: Cell<bool>,
+        /// Told the frame on screen, and whether it is playing.
+        pub on_frame_changed: RefCell<Option<Box<dyn Fn(usize, bool)>>>,
+        /// No pointer over the picture: a slideshow wants nothing on it.
+        pub cursor_hidden: Cell<bool>,
         /// The image's size in its own units. For a photograph this is simply
         /// the pixel size, but for a vector it is the natural size and the
         /// texture behind it may be rendered at any resolution. Keeping the two
@@ -370,7 +376,88 @@ impl ImageCanvas {
         let imp = self.imp();
         imp.frames.replace(frames);
         imp.frame_index.set(0);
+        imp.playing.set(true);
         self.schedule_frame();
+        self.notify_frame();
+    }
+
+    /// The frames of the animation on screen, with how long each is shown.
+    /// Empty for a still picture.
+    pub fn frames(&self) -> Vec<(gdk::Texture, Duration)> {
+        self.imp().frames.borrow().clone()
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.imp().frames.borrow().len()
+    }
+
+    /// Which frame is on screen.
+    pub fn frame(&self) -> usize {
+        self.imp().frame_index.get()
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.imp().playing.get()
+    }
+
+    /// Run the animation, or hold it on the frame it is on.
+    pub fn set_playing(&self, playing: bool) {
+        let imp = self.imp();
+        if self.frame_count() < 2 || imp.playing.replace(playing) == playing {
+            return;
+        }
+        if let Some(timer) = imp.frame_timer.take() {
+            timer.remove();
+        }
+        if playing {
+            self.schedule_frame();
+        }
+        self.notify_frame();
+    }
+
+    /// Hold the animation on frame `index`.
+    pub fn show_frame(&self, index: usize) {
+        let imp = self.imp();
+        let count = self.frame_count();
+        if count == 0 {
+            return;
+        }
+        if let Some(timer) = imp.frame_timer.take() {
+            timer.remove();
+        }
+        imp.playing.set(false);
+        let index = index % count;
+        imp.frame_index.set(index);
+        let texture = imp.frames.borrow()[index].0.clone();
+        imp.texture.replace(Some(texture));
+        self.queue_draw();
+        self.notify_frame();
+    }
+
+    /// Hold the animation `delta` frames on, wrapping round at either end.
+    pub fn step_frame(&self, delta: isize) {
+        let count = self.frame_count() as isize;
+        if count > 0 {
+            self.show_frame((self.frame() as isize + delta).rem_euclid(count) as usize);
+        }
+    }
+
+    pub fn connect_frame_changed(&self, f: impl Fn(usize, bool) + 'static) {
+        self.imp().on_frame_changed.replace(Some(Box::new(f)));
+    }
+
+    fn notify_frame(&self) {
+        let imp = self.imp();
+        if let Some(callback) = imp.on_frame_changed.borrow().as_ref() {
+            callback(imp.frame_index.get(), imp.playing.get());
+        }
+    }
+
+    /// Hide the pointer over the picture, or bring it back.
+    pub fn set_cursor_hidden(&self, hidden: bool) {
+        if self.imp().cursor_hidden.replace(hidden) != hidden {
+            self.update_cursor();
+        }
     }
 
     fn stop_animation(&self) {
@@ -380,6 +467,7 @@ impl ImageCanvas {
         }
         imp.frames.replace(Vec::new());
         imp.frame_index.set(0);
+        imp.playing.set(false);
     }
 
     fn schedule_frame(&self) {
@@ -420,6 +508,7 @@ impl ImageCanvas {
         imp.texture.replace(Some(texture));
         self.queue_draw();
         self.schedule_frame();
+        self.notify_frame();
     }
 
     /// Show a vector image, keeping its source so the view can sharpen it.
@@ -1842,6 +1931,10 @@ impl ImageCanvas {
     }
 
     fn update_cursor(&self) {
+        if self.imp().cursor_hidden.get() {
+            self.set_cursor_from_name(Some("none"));
+            return;
+        }
         if self.imp().draw_tool.get().is_some() {
             self.set_cursor_from_name(Some("crosshair"));
             return;

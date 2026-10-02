@@ -163,6 +163,30 @@ mod imp {
         pub tint_scale: gtk::Scale,
         pub sepia_scale: gtk::Scale,
         pub sharpness_scale: gtk::Scale,
+        /// The panel saying what the picture on screen is, and its toggle.
+        pub inspector: std::rc::Rc<crate::app::inspector::Inspector>,
+        pub info_button: gtk::ToggleButton,
+        /// What is known of the picture on screen, for the inspector.
+        pub picture: RefCell<Option<crate::app::inspector::Picture>>,
+        /// An animation's frames, in the sidebar.
+        pub frames: std::rc::Rc<crate::app::frames::FramesPane>,
+        /// Whether the frames were last left open, to open them again for
+        /// the next animation.
+        pub frames_wanted: Cell<bool>,
+        /// The slideshow: running, paused, the pointer on its controls.
+        pub slideshow: Cell<bool>,
+        pub slideshow_paused: Cell<bool>,
+        pub slideshow_hovered: Cell<bool>,
+        /// Moves on to the next picture.
+        pub slideshow_timer: RefCell<Option<glib::SourceId>>,
+        /// Hides the controls and the pointer when left alone.
+        pub slideshow_linger: RefCell<Option<glib::SourceId>>,
+        pub slideshow_controls: gtk::Revealer,
+        pub slideshow_play: gtk::Button,
+        pub slideshow_position: gtk::Label,
+        pub slideshow_every: gtk::DropDown,
+        /// The inspector, the sidebar and full screen as they were before.
+        pub slideshow_restore: Cell<(bool, bool, bool)>,
         pub levels_toggle: gtk::ToggleButton,
         pub levels_options: gtk::Box,
         pub levels_graph: crate::images::edit::levels::LevelsGraph,
@@ -327,6 +351,21 @@ mod imp {
                 tint_scale: tone_scale(),
                 sepia_scale: crate::images::edit::tone_panel::one_sided_scale(),
                 sharpness_scale: tone_scale(),
+                inspector: crate::app::inspector::Inspector::new(),
+                info_button: gtk::ToggleButton::new(),
+                picture: RefCell::new(None),
+                frames: crate::app::frames::FramesPane::new(),
+                frames_wanted: Cell::new(false),
+                slideshow: Cell::new(false),
+                slideshow_paused: Cell::new(false),
+                slideshow_hovered: Cell::new(false),
+                slideshow_timer: RefCell::new(None),
+                slideshow_linger: RefCell::new(None),
+                slideshow_controls: gtk::Revealer::new(),
+                slideshow_play: gtk::Button::new(),
+                slideshow_position: gtk::Label::new(None),
+                slideshow_every: gtk::DropDown::new(None::<gio::ListModel>, None::<gtk::Expression>),
+                slideshow_restore: Cell::new((false, false, false)),
                 levels_toggle: section_toggle("glance-levels-symbolic", "Levels"),
                 levels_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 levels_graph: crate::images::edit::levels::LevelsGraph::new(),
@@ -386,6 +425,7 @@ mod imp {
             self.parent_constructed();
             self.obj().build_ui();
             self.obj().install_actions();
+            self.obj().install_viewing_actions();
         }
     }
 
@@ -481,7 +521,12 @@ impl Window {
         let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
         body.append(&pdf_tools.root);
         let _ = imp.pdf_tools.set(pdf_tools);
-        imp.toasts.set_child(Some(&body));
+        body.append(&imp.inspector.root);
+        // The slideshow's controls float over the picture.
+        let stage = gtk::Overlay::new();
+        stage.set_child(Some(&body));
+        stage.add_overlay(&imp.slideshow_controls);
+        imp.toasts.set_child(Some(&stage));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
         open_button.set_tooltip_text(Some("Open (Ctrl+O)"));
@@ -592,6 +637,11 @@ impl Window {
         header.pack_start(&open_button);
         header.pack_start(&imp.page_box);
         header.pack_end(menu_button);
+        let info_button = &imp.info_button;
+        info_button.set_icon_name("document-properties-symbolic");
+        info_button.set_tooltip_text(Some("Image Info (Ctrl+I)"));
+        info_button.set_action_name(Some("win.inspector"));
+        header.pack_end(info_button);
         header.pack_end(rotate_button);
         header.pack_end(fullscreen_button);
         header.pack_end(copy_button);
@@ -645,7 +695,13 @@ impl Window {
         self.connect_focus_widget_notify(|window| window.refresh_accels());
 
         // Fullscreen means the picture and nothing else, so the bars fold away.
-        self.connect_fullscreened_notify(|window| window.sync_fullscreen());
+        self.connect_fullscreened_notify(|window| {
+            window.sync_fullscreen();
+            // Leaving full screen, however it was done, ends a slideshow.
+            if !window.is_fullscreen() {
+                window.stop_slideshow();
+            }
+        });
 
         // ...but they come back when the pointer reaches an edge, so there is
         // always a visible way out rather than only a key to guess at.
@@ -654,6 +710,11 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _, y| {
+                // A slideshow has its own controls, and keeps the bars away.
+                if window.imp().slideshow.get() {
+                    window.wake_slideshow_controls();
+                    return;
+                }
                 if !window.is_fullscreen() {
                     return;
                 }
@@ -735,11 +796,13 @@ impl Window {
     }
 
     /// Match the chrome and the button to whether we are fullscreen.
-    fn sync_fullscreen(&self) {
+    pub(crate) fn sync_fullscreen(&self) {
         let imp = self.imp();
         let full = self.is_fullscreen();
-        imp.toolbar.set_reveal_top_bars(!full);
-        imp.toolbar.set_reveal_bottom_bars(!full);
+        // A slideshow is the picture alone, even where full screen is refused.
+        let bare = full || imp.slideshow.get();
+        imp.toolbar.set_reveal_top_bars(!bare);
+        imp.toolbar.set_reveal_bottom_bars(!bare);
         imp.fullscreen_button.set_icon_name(if full {
             "view-restore-symbolic"
         } else {
@@ -913,6 +976,13 @@ impl Window {
             move |button| {
                 let open = button.is_active();
                 window.imp().edit_panel.set_visible(open);
+                // One panel beside the picture at a time: the editor's.
+                if open {
+                    if let Some(action) = window.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
+                        action.change_state(&false.to_variant());
+                    }
+                }
+                window.imp().info_button.set_sensitive(!open);
                 if open {
                     // Decode once, when editing actually starts, rather than
                     // holding a full-resolution buffer for every image browsed.
@@ -1173,7 +1243,12 @@ impl Window {
                 action.set_state(&show.to_variant());
                 let imp = window.imp();
                 imp.split.set_show_sidebar(show);
-                imp.pdf_view.set_sidebar_active(show);
+                if imp.showing_pdf.get() {
+                    imp.pdf_view.set_sidebar_active(show);
+                } else if imp.view.canvas().frame_count() > 1 && !imp.slideshow.get() {
+                    // Remembered for the next animation.
+                    imp.frames_wanted.set(show);
+                }
             }
         ));
         self.add_action(&show_pages);
@@ -1319,6 +1394,8 @@ impl Window {
                 // The search bar first: it is the last thing opened.
                 if window.imp().search_bar.is_search_mode() {
                     window.imp().search_bar.set_search_mode(false);
+                } else if window.imp().slideshow.get() {
+                    window.stop_slideshow();
                 } else if window.draw_panel_open() {
                     window.set_draw_panel(false);
                 } else if window.is_fullscreen() {
@@ -1581,7 +1658,16 @@ impl Window {
                         let subtitle = format!("{} · {shown_w} × {shown_h}", image.label);
                         window.imp().title.set_subtitle(&subtitle);
                         window.imp().shown.replace(Some(Shown { name, subtitle }));
+                        let picture = crate::app::inspector::Picture {
+                            label: image.label.clone(),
+                            width: shown_w,
+                            height: shown_h,
+                            animation: (image.animation.len() > 1).then(|| {
+                                (image.animation.len(), image.animation.iter().map(|frame| frame.delay).sum())
+                            }),
+                        };
                         window.imp().view.show_image(image);
+                        window.picture_shown(picture);
                         window.imp().rotate_button.set_sensitive(true);
                         window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
@@ -1830,6 +1916,7 @@ impl Window {
         imp.edit_button.set_active(false);
         imp.edit_button.set_sensitive(false);
         imp.action_bar.set_visible(false);
+        self.picture_gone();
         self.update_navigation();
     }
 
@@ -1841,7 +1928,7 @@ impl Window {
         let imp = self.imp();
         let busy = imp.edit_button.is_active();
         let enabled = imp.playlist.borrow().is_some() && !busy && !imp.showing_pdf.get();
-        for name in ["next-image", "previous-image"] {
+        for name in ["next-image", "previous-image", "slideshow"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(enabled);
             }
@@ -1867,6 +1954,7 @@ impl Window {
         // A failed open leaves whatever was on screen before, PDF or not.
         imp.content.set_visible_child_name(if imp.showing_pdf.get() { "pdf" } else { "image" });
         self.toast(message);
+        self.slideshow_skip();
     }
 
     pub(crate) fn toast(&self, message: &str) {
@@ -1910,6 +1998,7 @@ impl Window {
         imp.edit_button.set_active(false);
         // Let go of the last picture: nothing on screen needs it now.
         imp.view.canvas().set_texture(None);
+        self.picture_gone();
 
         // Read on its own: no neighbours, no filmstrip, no watching the folder.
         imp.monitor.replace(None);
@@ -1965,6 +2054,13 @@ impl Window {
     fn show_chrome(&self, pdf: bool) {
         let imp = self.imp();
         imp.action_bar.set_visible(!pdf);
+        imp.info_button.set_visible(!pdf);
+        if pdf {
+            // The sidebar is the document's pages again, not an animation's
+            // frames.
+            imp.split.set_sidebar(Some(imp.pdf_view.sidebar()));
+            imp.sidebar_button.set_tooltip_text(Some("Sidebar (F9)"));
+        }
         imp.copy_button.set_visible(!pdf);
         imp.sidebar_button.set_visible(pdf);
         imp.page_box.set_visible(pdf);
@@ -2610,7 +2706,7 @@ impl Window {
         }
     }
 
-    fn update_prefs(&self, change: impl FnOnce(&mut prefs::Reader)) {
+    pub(crate) fn update_prefs(&self, change: impl FnOnce(&mut prefs::Reader)) {
         let imp = self.imp();
         let mut prefs = imp.reader_prefs.get();
         change(&mut prefs);
@@ -2823,7 +2919,7 @@ impl Window {
             .is_some_and(|widget| widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>());
         if let Some(app) = self.application().and_downcast::<adw::Application>() {
             let imp = self.imp();
-            crate::apply_accels(&app, typing, imp.showing_pdf.get(), imp.combining.get());
+            crate::apply_accels(&app, typing, imp.showing_pdf.get(), imp.combining.get(), imp.slideshow.get());
         }
     }
 }

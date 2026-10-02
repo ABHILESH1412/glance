@@ -21,6 +21,8 @@ pub struct Reader {
     pub sidebar: SidebarView,
     /// The paper pictures go on when combined into a PDF, once chosen.
     pub paper: Option<Paper>,
+    /// Seconds each picture stays up in a slideshow.
+    pub slideshow: u32,
 }
 
 impl Default for Reader {
@@ -31,6 +33,7 @@ impl Default for Reader {
             mode: Mode::Continuous,
             sidebar: SidebarView::Pages,
             paper: None,
+            slideshow: 5,
         }
     }
 }
@@ -72,6 +75,9 @@ impl Reader {
                 "layout" => reader.mode = mode_from(value).unwrap_or(reader.mode),
                 "sidebar" => reader.sidebar = SidebarView::from_name(value).unwrap_or(reader.sidebar),
                 "paper" => reader.paper = Paper::from_name(value).or(reader.paper),
+                "slideshow" => {
+                    reader.slideshow = value.parse().ok().filter(|s| (1..=600).contains(s)).unwrap_or(reader.slideshow)
+                }
                 _ => {}
             }
         }
@@ -80,11 +86,12 @@ impl Reader {
 
     fn text(&self) -> String {
         format!(
-            "highlight={}\nnight={}\nlayout={}\nsidebar={}\n{}",
+            "highlight={}\nnight={}\nlayout={}\nsidebar={}\nslideshow={}\n{}",
             self.highlight.hex(),
             self.night,
             mode_name(self.mode),
             self.sidebar.name(),
+            self.slideshow,
             self.paper.map(|p| format!("paper={}\n", p.name())).unwrap_or_default()
         )
     }
@@ -110,12 +117,16 @@ mod tests {
             mode: Mode::Double,
             sidebar: SidebarView::Contents,
             paper: Some(Paper::Letter),
+            slideshow: 10,
         };
         assert_eq!(Reader::parse(&reader.text()), reader);
     }
 
     #[test]
     fn nonsense_falls_back_to_the_defaults() {
-        assert_eq!(Reader::parse("highlight=blue\nlayout=sideways\nsidebar=left\nnoise"), Reader::default());
+        assert_eq!(
+            Reader::parse("highlight=blue\nlayout=sideways\nsidebar=left\nslideshow=0\nnoise"),
+            Reader::default()
+        );
     }
 }

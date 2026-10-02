@@ -225,6 +225,14 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.bookmark", idle: &[], typing: &[] },
     Accel { action: "win.mark-redact", idle: &[], typing: &[] },
     Accel { action: "win.print", idle: &["<Primary>p"], typing: &["<Primary>p"] },
+    // Looking at pictures: a slideshow, the inspector, and an animation's
+    // frames one at a time.
+    Accel { action: "win.slideshow", idle: &["F5"], typing: &["F5"] },
+    Accel { action: "win.slideshow-pause", idle: &[], typing: &[] },
+    Accel { action: "win.inspector", idle: &["<Primary>i", "<Alt>Return"], typing: &[] },
+    Accel { action: "win.frame-previous", idle: &["comma"], typing: &[] },
+    Accel { action: "win.frame-next", idle: &["period"], typing: &[] },
+    Accel { action: "win.frame-play", idle: &["k"], typing: &[] },
     Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
 ];
 
@@ -269,12 +277,33 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     // picture rotation to reset.
     ("win.rotate-reset", &[]),
     ("win.mark-redact", &["<Primary><Shift>r"]),
+    // Picture things; Ctrl+I is the document's info instead.
+    ("win.slideshow", &[]),
+    ("win.inspector", &[]),
+    ("win.frame-previous", &[]),
+    ("win.frame-next", &[]),
+    ("win.frame-play", &[]),
+];
+
+/// During a slideshow Space pauses it, as in every slideshow and video
+/// player, rather than skipping on; the arrows still step.
+const SLIDESHOW_KEYS: &[(&str, &[&str])] = &[
+    ("win.next-image", &["Right", "Page_Down"]),
+    ("win.slideshow-pause", &["space"]),
 ];
 
 /// An action's keys, while typing or not, with a PDF open or not.
+#[cfg(test)]
 fn keys_for(accel: &Accel, typing: bool, pdf: bool) -> &'static [&'static str] {
+    keys_in(accel, typing, pdf, false)
+}
+
+/// The same, and during a slideshow or not.
+fn keys_in(accel: &Accel, typing: bool, pdf: bool, slideshow: bool) -> &'static [&'static str] {
     if typing {
         accel.typing
+    } else if let Some((_, keys)) = SLIDESHOW_KEYS.iter().find(|(action, _)| slideshow && *action == accel.action) {
+        keys
     } else if pdf {
         PDF_KEYS.iter().find(|(action, _)| *action == accel.action).map_or(accel.idle, |(_, keys)| keys)
     } else {
@@ -295,9 +324,13 @@ const COMBINING_KEYS: &[&str] = &["win.close", "app.quit", "win.show-shortcuts"]
 
 /// Swap the whole set over when focus moves into or out of a text box, or
 /// between an image and a PDF, or into combining pages.
-pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool, combining: bool) {
+pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool, combining: bool, slideshow: bool) {
     for accel in ACCELS {
-        let keys = if combining && !COMBINING_KEYS.contains(&accel.action) { &[] } else { keys_for(accel, typing, pdf) };
+        let keys = if combining && !COMBINING_KEYS.contains(&accel.action) {
+            &[]
+        } else {
+            keys_in(accel, typing, pdf, slideshow)
+        };
         app.set_accels_for_action(accel.action, keys);
     }
 }
@@ -330,7 +363,7 @@ fn main() -> glib::ExitCode {
 
         load_css();
 
-        apply_accels(app, false, false, false);
+        apply_accels(app, false, false, false, false);
     });
 
     app.connect_activate(|app| {

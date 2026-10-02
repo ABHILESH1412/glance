@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 34 / 64 | 7 |
+| Images | 38 / 64 | 7 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **54 / 122** | **10** |
+| **Total** | **58 / 122** | **10** |
 
 ---
 
@@ -27,13 +27,13 @@ Tick a box when a feature ships.
 - [x] Rotate the view
 - [x] Play animated GIFs
 - [x] Copy the image to the clipboard
-- [ ] Step through an animated GIF frame by frame in a sidebar
+- [x] Step through an animated GIF frame by frame in a sidebar — every frame with its delay; play, pause, step
 - [ ] Thumbnail sidebar — *partial:* Glance has a filmstrip along the bottom
 - [ ] Contact sheet (grid of all open images)
-- [ ] Slideshow
-- [ ] Inspector with file details — *partial:* format, dimensions and zoom show in the header
-- [ ] EXIF / camera metadata (camera, lens, shutter, ISO, date)
-- [ ] Show where a photo was taken on a map (GPS)
+- [x] Slideshow — full screen, every 2 to 30 seconds, pause with Space
+- [x] Inspector with file details
+- [x] EXIF / camera metadata (camera, lens, shutter, ISO, date) — JPEG, PNG, WebP, TIFF, HEIF and camera raw
+- [ ] Show where a photo was taken on a map (GPS) — *partial:* the coordinates and altitude are in the inspector, but there is no map
 - [ ] Live Text — select and copy text inside a photo (OCR)
 - [ ] Loupe — magnify one region under the pointer
 
@@ -232,15 +232,12 @@ Things Glance does that Preview doesn't:
 
 Roughly in order of value for effort:
 
-1. **Richer image adjustments** (section 2) — exposure, highlights/shadows, temperature,
-   sharpness and levels all fit the existing adjust pipeline.
-2. **EXIF panel** (section 1) — small, and people expect it.
-3. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
+1. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
    drawn once and placed anywhere, building on the pen the Draw panel already has.
-4. **The rest of PDF pages** (section 9) — a blank page, cropping, and effects over a
+2. **The rest of PDF pages** (section 9) — a blank page, cropping, and effects over a
    whole document, all at home in Combine into PDF.
-5. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
-6. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
+3. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
+4. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.
 
 ---

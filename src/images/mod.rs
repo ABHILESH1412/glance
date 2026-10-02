@@ -7,6 +7,7 @@
 pub mod canvas;
 pub mod colour;
 pub mod decoders;
+pub mod exif;
 pub mod edit;
 pub mod format;
 pub mod loader;

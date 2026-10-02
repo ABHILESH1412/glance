@@ -140,7 +140,13 @@ pub fn image_menu() -> gio::Menu {
         item("Flip _Vertically", "win.flip-vertical"),
         item("Reset Rotation", "win.rotate-reset"),
     ]);
-    let view = section(&[item("_Actual Size", "win.zoom-actual"), item("_Fullscreen", "win.fullscreen")]);
+    let view = section(&[
+        item("_Actual Size", "win.zoom-actual"),
+        item("_Fullscreen", "win.fullscreen"),
+        item("_Slideshow", "win.slideshow"),
+        item("Image _Info", "win.inspector"),
+        item("Show F_rames", "win.show-pages"),
+    ]);
     view.append_submenu(Some("Rotate and _Flip"), &turns);
     view.append_submenu(Some("_Appearance"), &appearance());
     menu.append_section(None, &view);
