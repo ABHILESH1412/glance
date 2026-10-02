@@ -58,6 +58,14 @@ pub struct Picked {
     pub grips: Vec<(f64, f64)>,
 }
 
+/// Text read from a picture on the page: each line's corners, and the
+/// selected parts', in fractions of the page as it is shown.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PageText {
+    pub lines: Vec<[(f64, f64); 4]>,
+    pub selected: Vec<[(f64, f64); 4]>,
+}
+
 mod imp {
     use super::*;
 
@@ -83,6 +91,7 @@ mod imp {
         /// Areas marked for redaction, as fractions of the page.
         pub redactions: RefCell<Vec<[f64; 4]>>,
         pub picked: RefCell<Option<Picked>>,
+        pub text: RefCell<Option<PageText>>,
     }
 
     #[glib::object_subclass]
@@ -151,6 +160,23 @@ mod imp {
             }
             if night {
                 snapshot.pop();
+            }
+            if let Some(text) = self.text.borrow().as_ref() {
+                // Adwaita's blue, as over a picture: faint over what can be
+                // selected, strong over what is.
+                let faint = gdk::RGBA::new(0.21, 0.52, 0.89, 0.16);
+                let strong = gdk::RGBA::new(0.21, 0.52, 0.89, 0.45);
+                for (quads, colour) in [(&text.lines, faint), (&text.selected, strong)] {
+                    for quad in quads {
+                        let builder = gsk::PathBuilder::new();
+                        builder.move_to((quad[0].0 as f32) * w, (quad[0].1 as f32) * h);
+                        for corner in &quad[1..] {
+                            builder.line_to((corner.0 as f32) * w, (corner.1 as f32) * h);
+                        }
+                        builder.close();
+                        snapshot.append_fill(&builder.to_path(), gsk::FillRule::Winding, &colour);
+                    }
+                }
             }
             if let Some(picked) = picked.as_ref() {
                 let (fw, fh) = (f64::from(w), f64::from(h));
@@ -266,6 +292,14 @@ impl Page {
     pub fn set_sketch(&self, sketch: Option<crate::images::edit::draw::Mark>) {
         let had = self.imp().sketch.replace(sketch).is_some();
         if had || self.imp().sketch.borrow().is_some() {
+            self.queue_draw();
+        }
+    }
+
+    /// Show text read from a picture on the page, or `None` to take it away.
+    pub fn set_text(&self, text: Option<PageText>) {
+        if *self.imp().text.borrow() != text {
+            self.imp().text.replace(text);
             self.queue_draw();
         }
     }

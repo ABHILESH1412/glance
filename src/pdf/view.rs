@@ -36,7 +36,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
-use gtk::{gdk, gio, glib, graphene, pango};
+use gtk::{cairo, gdk, gio, glib, graphene, pango};
 
 use crate::images::edit::draw;
 use crate::images::edit::shape::{self, Grip, Outline};
@@ -52,7 +52,8 @@ use super::ink::{self, Drawing};
 use super::notes::{self, Note, TextBox, TextStyle};
 use super::outline::{self, Heading};
 use super::redact::Area as RedactArea;
-use super::page::{Page, Picked};
+use super::page::{Page, PageText, Picked};
+use crate::images::live_layer::{LiveLayer, Place, TextLine};
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
 use super::sidebar::{Event as SidebarEvent, Sidebar, View as SidebarView};
@@ -170,6 +171,28 @@ pub struct PdfView {
     inner: Rc<Inner>,
 }
 
+/// A picture on a page: which page, Poppler's number for it there, and the
+/// area it covers, x1, y1, x2, y2 in points from the page's top-left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PageImage {
+    pub page: usize,
+    pub id: i32,
+    pub area: [f64; 4],
+}
+
+/// A picture's area drawn for reading: its pixels, RGBA, and how many of
+/// them there are to a point.
+pub struct ImagePixels {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub per_point: f64,
+}
+
+/// Pictures are drawn for reading at no fewer pixels than this to a point,
+/// whatever their own resolution: small type needs the room.
+const READ_PER_POINT: f64 = 2.0;
+
 /// A bookmark added or taken away, for the window to tell the reader about.
 pub enum BookmarkEvent {
     /// `seen` when the bookmarks were on screen, where it shows for itself.
@@ -244,6 +267,9 @@ struct Inner {
     /// The drawings on each page looked at, read from the file once per
     /// version of it.
     inked: RefCell<HashMap<usize, Vec<Drawing>>>,
+    /// The pictures on each page looked at, and where they are: finding
+    /// them goes through the whole page, too slow to do as the pointer moves.
+    images: RefCell<HashMap<usize, Vec<PageImage>>>,
     /// The drawing picked up with the Select tool.
     picked: RefCell<Option<Drawing>>,
     /// The page showing it, to clear when it is put down.
@@ -251,9 +277,15 @@ struct Inner {
     reshaping: RefCell<Option<Reshaping>>,
     /// A new colour and thickness for the picked drawing, waiting for the
     /// controls to be still.
+    #[allow(clippy::type_complexity)]
     reink: RefCell<Option<(glib::SourceId, gdk::RGBA, f64)>>,
     #[allow(clippy::type_complexity)]
     on_picked: RefCell<Option<Box<dyn Fn(Option<(gdk::RGBA, f64)>)>>>,
+    /// Text read from a picture with Live Text: the picture, and the text,
+    /// in points on its page.
+    text: RefCell<Option<(PageImage, LiveLayer)>>,
+    /// A drag is selecting that text rather than the page's own.
+    text_selecting: Cell<bool>,
     status: RefCell<Option<Box<dyn Fn(Status)>>>,
     last_status: Cell<Option<Status>>,
     searcher: RefCell<Option<Searcher>>,
@@ -352,11 +384,14 @@ impl PdfView {
             moving: RefCell::default(),
             hovering: Cell::new(None),
             inked: RefCell::default(),
+            images: RefCell::default(),
             picked: RefCell::default(),
             picked_page: Cell::new(None),
             reshaping: RefCell::default(),
             reink: RefCell::default(),
             on_picked: RefCell::default(),
+            text: RefCell::default(),
+            text_selecting: Cell::new(false),
             status: RefCell::default(),
             last_status: Cell::new(None),
             searcher: RefCell::default(),
@@ -689,6 +724,7 @@ impl PdfView {
             inner.show_redactions(page);
         }
         inner.show_picked();
+        inner.show_text();
         inner.emit_status();
     }
 
@@ -801,6 +837,80 @@ impl PdfView {
             return true;
         }
         false
+    }
+
+    /// The picture under where the context menu was opened, if any.
+    pub fn menu_image(&self) -> Option<PageImage> {
+        let inner = &self.inner;
+        inner.menu_spot().and_then(|spot| inner.image_at(spot))
+    }
+
+    /// A picture as it is kept in the file, at its own size.
+    pub fn image_texture(&self, image: &PageImage) -> Option<gdk::Texture> {
+        let reader = self.inner.reader()?;
+        let page = annots::page(&reader, image.page)?;
+        let surface = cairo::ImageSurface::try_from(page.image(image.id)?).ok()?;
+        surface_texture(&surface)
+    }
+
+    /// A picture's area as the page shows it, drawn for reading: at its own
+    /// resolution or `READ_PER_POINT`, whichever is finer, and no more than
+    /// `longest` pixels on its longest side.
+    pub fn image_pixels(&self, image: &PageImage, longest: u32) -> Option<ImagePixels> {
+        let reader = self.inner.reader()?;
+        let page = annots::page(&reader, image.page)?;
+        let [x1, y1, x2, y2] = image.area;
+        let (w, h) = ((x2 - x1).max(1.0), (y2 - y1).max(1.0));
+        let own = page.image(image.id).and_then(|s| cairo::ImageSurface::try_from(s).ok()).map_or(0.0, |s| f64::from(s.width()) / w);
+        let per_point = own.max(READ_PER_POINT).min(f64::from(longest) / w.max(h));
+        let (width, height) = ((w * per_point).round().max(1.0) as i32, (h * per_point).round().max(1.0) as i32);
+        let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height).ok()?;
+        {
+            let cr = cairo::Context::new(&surface).ok()?;
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.paint().ok()?;
+            cr.scale(per_point, per_point);
+            cr.translate(-x1, -y1);
+            page.render(&cr);
+        }
+        surface.flush();
+        let stride = usize::try_from(surface.stride()).ok()?;
+        let data = surface.data().ok()?;
+        let (uw, uh) = (width as usize, height as usize);
+        let mut rgba = Vec::with_capacity(uw * uh * 4);
+        for row in data.chunks(stride).take(uh) {
+            for px in row[..uw * 4].as_chunks::<4>().0 {
+                // Cairo's native-endian ARGB, on white, so never see-through.
+                let [b, g, r, _] = u32::from_ne_bytes(*px).to_le_bytes();
+                rgba.extend_from_slice(&[r, g, b, 255]);
+            }
+        }
+        Some(ImagePixels { width: width as u32, height: height as u32, rgba, per_point })
+    }
+
+    /// Show text read from a picture, over it on its page, to select and
+    /// copy; `None` takes it away.
+    pub fn set_image_text(&self, image: PageImage, lines: Option<Vec<TextLine>>) {
+        let inner = &self.inner;
+        inner.text.replace(lines.map(|lines| (image, LiveLayer::new(lines))));
+        inner.text_selecting.set(false);
+        inner.show_text();
+    }
+
+    /// Take away text read from a picture. False if there was none.
+    pub fn clear_image_text(&self) -> bool {
+        let had = self.inner.text.borrow().is_some();
+        if had {
+            self.inner.text.replace(None);
+            self.inner.text_selecting.set(false);
+            self.inner.show_text();
+        }
+        had
+    }
+
+    /// The selected part of text read from a picture, if any is selected.
+    pub fn image_selected_text(&self) -> Option<String> {
+        self.inner.text.borrow().as_ref().and_then(|(_, layer)| layer.selected_text())
     }
 
     /// Put down the picked drawing. False if nothing was picked.
@@ -1015,6 +1125,11 @@ impl Inner {
             }
             let unit = inner.count_press(x, y);
             let selecting = inner.tool.get() == Tool::Select;
+            if selecting && inner.text_press(spot, unit) {
+                inner.pick(None);
+                inner.set_selection(None);
+                return;
+            }
             if unit == Unit::Glyph {
                 // A handle of the drawing picked up, then a note, then a
                 // drawing to pick up.
@@ -1047,6 +1162,10 @@ impl Inner {
                 inner.extend_sketch(head);
                 return;
             }
+            if inner.text_selecting.get() {
+                inner.text_drag(head);
+                return;
+            }
             if inner.reshaping.borrow().is_some() {
                 let shift = gesture.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
                 inner.drag_picked(head, shift);
@@ -1071,6 +1190,9 @@ impl Inner {
             let Some(inner) = weak.upgrade() else { return };
             if inner.sketch.borrow().is_some() {
                 inner.finish_sketch();
+                return;
+            }
+            if inner.text_selecting.replace(false) {
                 return;
             }
             if let Some(reshaping) = inner.reshaping.take() {
@@ -1975,6 +2097,18 @@ impl Inner {
         if self.pinned_at(spot).is_some() || (selecting && self.drawing_at(spot).is_some()) {
             return Some("pointer");
         }
+        // A picture is not text to select: the ordinary pointer, unless its
+        // text has been read, and then the text cursor on or near it.
+        let reach = 8.0 / self.pixels_per_point(spot.page);
+        let near_text = self.text.borrow().as_ref().is_some_and(|(image, layer)| {
+            selecting && image.page == spot.page && layer.near([spot.x, spot.y], reach)
+        });
+        if near_text {
+            return Some("text");
+        }
+        if matches!(self.tool.get(), Tool::Select | Tool::RedactText) && self.image_at(spot).is_some() {
+            return Some("default");
+        }
         None
     }
 
@@ -2028,6 +2162,110 @@ impl Inner {
         let (gx, gy) = self.shown_point(page, at);
         let (pw, ph) = self.layout.borrow().size(page);
         shape::cursor(grip, ((gx - mx) * pw, (gy - my) * ph))
+    }
+
+    /// The picture under a spot, the one drawn last if they overlap.
+    fn image_at(&self, spot: Spot) -> Option<PageImage> {
+        use glib::translate::ToGlibPtr;
+        let reader = self.reader()?;
+        let mut images = self.images.borrow_mut();
+        let here = images.entry(spot.page).or_insert_with(|| {
+            let Some(page) = annots::page(&reader, spot.page) else { return Vec::new() };
+            page.image_mapping()
+                .iter()
+                .map(|mapping| {
+                    let raw: *const poppler::ffi::PopplerImageMapping = mapping.to_glib_none().0;
+                    // SAFETY: a mapping Poppler made, read while it is held.
+                    let (id, a) = unsafe { ((*raw).image_id, (*raw).area) };
+                    // Poppler gives the area from the page's top-left already.
+                    let area = [a.x1.min(a.x2), a.y1.min(a.y2), a.x1.max(a.x2), a.y1.max(a.y2)];
+                    PageImage { page: spot.page, id, area }
+                })
+                .collect()
+        });
+        here.iter()
+            .rev()
+            .find(|image| {
+                let [x1, y1, x2, y2] = image.area;
+                (x1..=x2).contains(&spot.x) && (y1..=y2).contains(&spot.y)
+            })
+            .copied()
+    }
+
+    /// A press on text read from a picture: select from there, a word on a
+    /// double click, the line on a triple. False when it is not on that text,
+    /// which leaves the press to the page.
+    fn text_press(&self, spot: Spot, unit: Unit) -> bool {
+        let hit = {
+            let mut text = self.text.borrow_mut();
+            let Some((image, layer)) = text.as_mut() else { return false };
+            let [x1, y1, x2, y2] = image.area;
+            let inside = image.page == spot.page && (x1..=x2).contains(&spot.x) && (y1..=y2).contains(&spot.y);
+            // On the text, or anywhere else in the picture for a drag: the
+            // page has nothing of its own to select there.
+            let place = (image.page == spot.page)
+                .then(|| layer.hit([spot.x, spot.y]))
+                .flatten()
+                .or_else(|| (inside && unit == Unit::Glyph).then(|| layer.nearest([spot.x, spot.y])).flatten());
+            match place {
+                Some(place) => {
+                    match unit {
+                        Unit::Glyph => {
+                            layer.anchor = Some(place);
+                            layer.focus = Some(place);
+                        }
+                        Unit::Word => layer.select_word(place),
+                        Unit::Line => {
+                            let end = layer.lines[place.line].chars.len();
+                            layer.anchor = Some(Place { line: place.line, gap: 0 });
+                            layer.focus = Some(Place { line: place.line, gap: end });
+                        }
+                    }
+                    true
+                }
+                None => {
+                    layer.clear_selection();
+                    false
+                }
+            }
+        };
+        self.text_selecting.set(hit && unit == Unit::Glyph);
+        self.show_text();
+        hit
+    }
+
+    fn text_drag(&self, to: Spot) {
+        {
+            let mut text = self.text.borrow_mut();
+            let Some((image, layer)) = text.as_mut() else { return };
+            if image.page != to.page {
+                return;
+            }
+            layer.focus = layer.nearest([to.x, to.y]).or(layer.focus);
+        }
+        self.show_text();
+    }
+
+    /// Show the text read from a picture on its page, and what of it is
+    /// selected; or take it away from every page.
+    fn show_text(&self) {
+        let text = self.text.borrow();
+        let widgets = self.widgets.borrow();
+        for (index, widget) in widgets.iter().enumerate() {
+            let Some((image, layer)) = text.as_ref().filter(|(image, _)| image.page == index) else {
+                widget.set_text(None);
+                continue;
+            };
+            let quad = |corners: [[f64; 2]; 4]| corners.map(|[x, y]| self.shown_point(image.page, (x, y)));
+            widget.set_text(Some(PageText {
+                lines: layer.lines.iter().map(|line| quad(line.quad)).collect(),
+                selected: layer
+                    .selected_spans()
+                    .into_iter()
+                    .map(|(i, start, end)| quad(layer.lines[i].span(start, end)))
+                    .collect(),
+            }));
+        }
     }
 
     /// Pick a drawing up, or put down the one picked.
@@ -2644,10 +2882,13 @@ impl Inner {
         self.highlighted.borrow_mut().clear();
         self.pinned.borrow_mut().clear();
         self.inked.borrow_mut().clear();
+        self.images.borrow_mut().clear();
         self.cancel_reink();
         self.picked.replace(None);
         self.picked_page.set(None);
         self.reshaping.replace(None);
+        self.text.replace(None);
+        self.text_selecting.set(false);
         self.moving.replace(None);
         self.hovering.set(None);
         if let Some(source) = self.restyle.take() {
@@ -2721,6 +2962,26 @@ fn shown(area: [f64; 4], size: (f64, f64), rotation: Rotation) -> [f64; 4] {
     [x1.min(x2) / turned_w, y1.min(y2) / turned_h, (x1 - x2).abs() / turned_w, (y1 - y2).abs() / turned_h]
 }
 
+/// A Cairo image as a texture, its pixels copied.
+fn surface_texture(surface: &cairo::ImageSurface) -> Option<gdk::Texture> {
+    surface.flush();
+    let (width, height) = (surface.width(), surface.height());
+    let stride = usize::try_from(surface.stride()).ok()?;
+    // Cairo's formats are native-endian words per pixel.
+    #[cfg(target_endian = "little")]
+    let (opaque, clear) = (gdk::MemoryFormat::B8g8r8x8, gdk::MemoryFormat::B8g8r8a8Premultiplied);
+    #[cfg(target_endian = "big")]
+    let (opaque, clear) = (gdk::MemoryFormat::X8r8g8b8, gdk::MemoryFormat::A8r8g8b8Premultiplied);
+    let format = match surface.format() {
+        cairo::Format::Rgb24 => opaque,
+        cairo::Format::ARgb32 => clear,
+        _ => return None,
+    };
+    let mut data = Vec::new();
+    surface.with_data(|bytes| data = bytes.to_vec()).ok()?;
+    (width > 0 && height > 0).then(|| gdk::MemoryTexture::new(width, height, format, &glib::Bytes::from_owned(data), stride).upcast())
+}
+
 pub(super) fn texture(pixels: Pixels) -> gdk::Texture {
     // Cairo's ARGB32 is one native-endian word per pixel.
     #[cfg(target_endian = "little")]
@@ -2729,4 +2990,58 @@ pub(super) fn texture(pixels: Pixels) -> gdk::Texture {
     let format = gdk::MemoryFormat::A8r8g8b8Premultiplied;
     let bytes = glib::Bytes::from_owned(pixels.data);
     gdk::MemoryTexture::new(pixels.width, pixels.height, format, &bytes, pixels.stride).upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A picture copied off a page comes out as it is kept in the file,
+    /// pixel for pixel.
+    #[test]
+    fn a_picture_is_copied_at_its_own_size_and_colours() {
+        // A 2 by 1 picture, red then blue, placed up near the top of a page.
+        let img = [255u8, 0, 0, 0, 0, 255];
+        let content = b"q 100 0 0 50 50 700 cm /Im Do Q";
+        let objects: [Vec<u8>; 5] = [
+            b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> >> >>".to_vec(),
+            [format!("<< /Length {} >>\nstream\n", content.len()).into_bytes(), content.to_vec(), b"\nendstream".to_vec()].concat(),
+            [b"<< /Type /XObject /Subtype /Image /Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 6 >>\nstream\n".to_vec(), img.to_vec(), b"\nendstream".to_vec()].concat(),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n", i + 1).bytes());
+            out.extend(object);
+            out.extend(b"\nendobj\n");
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+        let document = poppler::Document::from_bytes(&glib::Bytes::from_owned(out), None).unwrap();
+        let page = document.page(0).unwrap();
+
+        // Where Poppler says it is: from the top-left, as the page is read.
+        let mappings = page.image_mapping();
+        assert_eq!(mappings.len(), 1);
+        use glib::translate::ToGlibPtr;
+        let raw: *const poppler::ffi::PopplerImageMapping = mappings[0].to_glib_none().0;
+        // SAFETY: a mapping Poppler made, read while it is held.
+        let (id, a) = unsafe { ((*raw).image_id, (*raw).area) };
+        assert_eq!([a.x1, a.y1, a.x2, a.y2].map(|v| v.round()), [50.0, 92.0, 150.0, 142.0]);
+
+        let surface = cairo::ImageSurface::try_from(page.image(id).unwrap()).unwrap();
+        let texture = surface_texture(&surface).unwrap();
+        assert_eq!((texture.width(), texture.height()), (2, 1));
+        let mut downloader = gdk::TextureDownloader::new(&texture);
+        downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+        let (bytes, _) = downloader.download_bytes();
+        assert_eq!(bytes[..8], [255, 0, 0, 255, 0, 0, 255, 255]);
+    }
 }

@@ -34,7 +34,7 @@ Tick a box when a feature ships.
 - [x] Inspector with file details
 - [x] EXIF / camera metadata (camera, lens, shutter, ISO, date) — JPEG, PNG, WebP, TIFF, HEIF and camera raw
 - [ ] Show where a photo was taken on a map (GPS) — *partial:* the coordinates and altitude are in the inspector, but there is no map
-- [x] Live Text — select and copy text inside a photo (OCR) — English and about 45 other Latin-alphabet languages; Hindi to come
+- [x] Live Text — select and copy text inside a photo (OCR) — English and about 45 other Latin-alphabet languages; Hindi to come. In a PDF, any picture on a page can be read, or copied, from its right-click menu
 - [ ] Loupe — magnify one region under the pointer
 
 ## 2. Images — editing

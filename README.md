@@ -72,6 +72,8 @@ small helper program that runs only while it is needed and gives all its memory 
 when it stops. The engine and models, 42.5 MB, are downloaded the first time, after
 asking, checked against fixed checksums, and kept in `~/.local/share/glance/ocr`.
 **Preferences** (`Ctrl+,`) shows what is there and how much room it takes, and removes it.
+In a PDF, right-click a picture on a page for **Copy Image**, **Select Text in Image** or
+**Copy Text from Image**: only that picture is read, which is what a scanned page is.
 
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and

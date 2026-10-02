@@ -63,6 +63,19 @@ impl TextLine {
         (t, (across / height).abs())
     }
 
+    /// How far `p` is from the line, in the picture's own units: nothing on
+    /// it, and from its nearest edge or end off it.
+    fn distance(&self, p: Point) -> f64 {
+        let (t, off) = self.locate(p);
+        let span = |a: Point, b: Point| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+        let mid = |a: Point, b: Point| [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+        let length = span(mid(self.quad[0], self.quad[3]), mid(self.quad[1], self.quad[2]));
+        let height = ((span(self.quad[0], self.quad[3]) + span(self.quad[1], self.quad[2])) / 2.0).max(1.0);
+        let along = if t < 0.0 { -t * length } else { (t - 1.0).max(0.0) * length };
+        let across = (off * height - height / 2.0).max(0.0);
+        along.hypot(across)
+    }
+
     /// The gap nearest to `t` of the way along.
     fn gap_at(&self, t: f64) -> usize {
         let mut best = 0;
@@ -101,6 +114,11 @@ impl LiveLayer {
             let (t, off) = line.locate(p);
             ((-0.02..=1.02).contains(&t) && off <= 0.6).then(|| Place { line: i, gap: line.gap_at(t) })
         })
+    }
+
+    /// Whether `p` is on a line, or within `reach` of one.
+    pub fn near(&self, p: Point, reach: f64) -> bool {
+        self.lines.iter().any(|line| line.distance(p) <= reach)
     }
 
     /// The place nearest to `p`, on or off the text: for dragging a
@@ -226,6 +244,16 @@ mod tests {
         assert_eq!(layer.selected_spans(), vec![(0, 6, 11), (1, 0, 3)]);
         layer.focus = layer.anchor;
         assert_eq!(layer.selected_text(), None, "nothing between a place and itself");
+    }
+
+    #[test]
+    fn near_the_text_is_on_it_or_a_little_way_off() {
+        let layer = layer();
+        assert!(layer.near([150.0, 110.0], 0.0), "on it");
+        assert!(layer.near([150.0, 123.0], 4.0), "just under it");
+        assert!(!layer.near([150.0, 130.0], 4.0), "further under it");
+        assert!(layer.near([95.0, 110.0], 6.0), "just before it");
+        assert!(!layer.near([300.0, 110.0], 6.0), "well past its end");
     }
 
     #[test]

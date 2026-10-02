@@ -1260,6 +1260,10 @@ impl Window {
                     }
                 } else if !imp.pdf_view.allowed().copy {
                     window.toast("The author of this document does not allow copying its text.");
+                } else if let Some(text) = imp.pdf_view.image_selected_text() {
+                    // Text selected in a picture, read with Live Text.
+                    window.clipboard().set_text(&text);
+                    window.toast("Text copied.");
                 } else if imp.pdf_view.copy_selection() {
                     window.toast("Text copied.");
                 } else {
@@ -1391,6 +1395,45 @@ impl Window {
         ));
         self.add_action(&delete_key);
 
+        // A picture on a PDF's page, from the menu opened over it.
+        let copy_image = gio::SimpleAction::new("pdf-copy-image", None);
+        copy_image.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let view = &window.imp().pdf_view;
+                let Some(image) = view.menu_image() else { return };
+                if !view.allowed().copy {
+                    window.toast("The author of this document does not allow copying from it.");
+                    return;
+                }
+                match view.image_texture(&image) {
+                    Some(texture) => {
+                        window.clipboard().set_texture(&texture);
+                        window.toast("Image copied.");
+                    }
+                    None => window.toast("This picture could not be copied."),
+                }
+            }
+        ));
+        self.add_action(&copy_image);
+        let image_text = gio::SimpleAction::new("pdf-image-text", Some(glib::VariantTy::STRING));
+        image_text.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, how| {
+                let view = &window.imp().pdf_view;
+                let Some(image) = view.menu_image() else { return };
+                if !view.allowed().copy {
+                    window.toast("The author of this document does not allow copying from it.");
+                    return;
+                }
+                let copy = how.and_then(|v| v.str().map(|s| s == "copy")).unwrap_or(false);
+                window.read_pdf_image(image, copy);
+            }
+        ));
+        self.add_action(&image_text);
+
         let fullscreen = gio::SimpleAction::new("fullscreen", None);
         fullscreen.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -1450,6 +1493,8 @@ impl Window {
                     window.stop_slideshow();
                 } else if window.imp().live_on.get() {
                     window.live_stop();
+                } else if window.imp().pdf_view.clear_image_text() {
+                    // Text read from a picture on the page goes first.
                 } else if window.imp().pdf_view.drop_picked() || window.imp().view.canvas().drop_picked() {
                     // Put down what was picked up, leaving the tool in hand.
                 } else if window.imp().inspector.root.is_visible() {
@@ -2799,36 +2844,53 @@ impl Window {
         let unmark = gio::Menu::new();
         unmark.append(Some("Remove Redaction _Mark"), Some("win.unredact-here"));
         unmark.append(Some("Unmark _All Redactions"), Some("win.unredact-all"));
-        let menu = gio::Menu::new();
-        menu.append_section(None, &clipboard);
-        menu.append_section(None, &marks);
-        menu.append_section(None, &pins);
-        menu.append_section(None, &unmark);
+        // Over a picture, what can be done with it comes first.
+        let picture = gio::Menu::new();
+        picture.append(Some("Copy _Image"), Some("win.pdf-copy-image"));
+        picture.append(Some("Select _Text in Image"), Some("win.pdf-image-text::select"));
+        picture.append(Some("Copy Te_xt from Image"), Some("win.pdf-image-text::copy"));
 
+        // One popover each, with and without the picture's items: a popover
+        // given a new model keeps the old one's height, a row short.
         let reader = self.imp().pdf_view.widget();
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-        popover.set_parent(reader);
-        popover.set_has_arrow(false);
-        popover.set_halign(gtk::Align::Start);
-        // Not a child the scrolled window knows about, so it is let go of by
-        // hand, or GTK complains when the window closes.
-        reader.connect_destroy(glib::clone!(
-            #[weak]
-            popover,
-            move |_| popover.unparent()
-        ));
+        let popovers: Vec<gtk::PopoverMenu> = [false, true]
+            .into_iter()
+            .map(|over_picture| {
+                let menu = gio::Menu::new();
+                if over_picture {
+                    menu.append_section(None, &picture);
+                }
+                menu.append_section(None, &clipboard);
+                menu.append_section(None, &marks);
+                menu.append_section(None, &pins);
+                menu.append_section(None, &unmark);
+                let popover = gtk::PopoverMenu::from_model(Some(&menu));
+                popover.set_parent(reader);
+                popover.set_has_arrow(false);
+                popover.set_halign(gtk::Align::Start);
+                // Not a child the scrolled window knows about, so it is let
+                // go of by hand, or GTK complains when the window closes.
+                reader.connect_destroy(glib::clone!(
+                    #[weak]
+                    popover,
+                    move |_| popover.unparent()
+                ));
+                popover
+            })
+            .collect();
 
         let click = gtk::GestureClick::new();
         click.set_button(gdk::BUTTON_SECONDARY);
         click.connect_pressed(glib::clone!(
-            #[weak]
-            popover,
             #[weak(rename_to = window)]
             self,
             move |gesture, _, x, y| {
                 gesture.set_state(gtk::EventSequenceState::Claimed);
-                // So "Add Note Here" knows where here is.
-                window.imp().pdf_view.set_menu_point(x, y);
+                // So "Add Note Here" knows where here is, and the picture's
+                // items which picture.
+                let view = &window.imp().pdf_view;
+                view.set_menu_point(x, y);
+                let popover = &popovers[usize::from(view.menu_image().is_some())];
                 popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
                 popover.popup();
             }

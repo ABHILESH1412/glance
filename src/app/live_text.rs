@@ -35,15 +35,32 @@ const GONE: u64 = u64::MAX;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Key {
     path: PathBuf,
+    /// The frame of an animation, or the page of a PDF.
     frame: usize,
     modified: Option<SystemTime>,
+    /// For a picture on a PDF's page, where it is, in hundredths of a point.
+    area: Option<[i64; 4]>,
+}
+
+/// What to do with text once it has been read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Use {
+    /// Show it over the picture on screen.
+    Picture,
+    /// Show it over a picture on a PDF's page, to select and copy.
+    PdfShow(crate::pdf::PageImage),
+    /// Copy all of it, from a picture on a PDF's page.
+    PdfCopy,
 }
 
 struct Pending {
     id: u64,
     key: Key,
-    /// From the pixels sent to the picture's own units.
+    /// From the pixels sent to the picture's own units, and where those
+    /// start: a picture on a page is measured in the page's points.
     scale: (f64, f64),
+    offset: (f64, f64),
+    then: Use,
     lines: Vec<protocol::Line>,
 }
 
@@ -324,7 +341,7 @@ impl Window {
         let imp = self.imp();
         let path = imp.current.borrow().clone()?;
         let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        Some(Key { path, frame: imp.view.canvas().frame(), modified })
+        Some(Key { path, frame: imp.view.canvas().frame(), modified, area: None })
     }
 
     /// Read the picture on screen, or show what was read from it before.
@@ -381,7 +398,7 @@ impl Window {
                 let imp = window.imp();
                 let (width, height) = pixels.dimensions();
                 let scale = (logical.0 / f64::from(width), logical.1 / f64::from(height));
-                let pending = Pending { id, key, scale, lines: Vec::new() };
+                let pending = Pending { id, key, scale, offset: (0.0, 0.0), then: Use::Picture, lines: Vec::new() };
                 imp.live.borrow_mut().waiting = Some(Waiting { pending, width, height, rgba: pixels.into_raw() });
                 window.live_send();
             }
@@ -466,6 +483,7 @@ impl Window {
                 };
                 let Some(pending) = finished else { return };
                 let (sx, sy) = pending.scale;
+                let (ox, oy) = pending.offset;
                 let lines: Vec<TextLine> = pending
                     .lines
                     .iter()
@@ -477,7 +495,7 @@ impl Window {
                             && !(line.text.trim().chars().count() <= 2 && line.score < 0.8)
                     })
                     .map(|line| {
-                        let quad = line.quad.map(|[x, y]| [f64::from(x) * sx, f64::from(y) * sy]);
+                        let quad = line.quad.map(|[x, y]| [ox + f64::from(x) * sx, oy + f64::from(y) * sy]);
                         TextLine::new(&line.text, quad, line.cuts.iter().map(|&c| f64::from(c)).collect())
                     })
                     .collect();
@@ -488,10 +506,18 @@ impl Window {
                     }
                     state.read.insert(pending.key.clone(), lines.clone());
                 }
-                // Still the picture it was read for?
-                if imp.live_on.get() && self.live_key() == Some(pending.key) {
-                    imp.live_status.set_reveal_child(false);
-                    self.live_show(lines);
+                match pending.then {
+                    // Still the picture it was read for?
+                    Use::Picture => {
+                        if imp.live_on.get() && self.live_key() == Some(pending.key) {
+                            imp.live_status.set_reveal_child(false);
+                            self.live_show(lines);
+                        }
+                    }
+                    then => {
+                        imp.live_status.set_reveal_child(false);
+                        self.pdf_text_read(&pending.key, then, lines);
+                    }
                 }
                 // On to the next, if one is waiting.
                 self.live_send();
@@ -568,6 +594,74 @@ impl Window {
         state.waiting = None;
         state.helper = None;
         state.paths = None;
+    }
+
+    /// Read the text in a picture on a PDF's page: to show over it, or to
+    /// copy straight away.
+    pub(crate) fn read_pdf_image(&self, image: crate::pdf::PageImage, copy: bool) {
+        self.with_live_text(move |window, paths| {
+            window.imp().live.borrow_mut().paths = Some(paths);
+            window.pdf_image_read(image, copy);
+        });
+    }
+
+    fn pdf_image_read(&self, image: crate::pdf::PageImage, copy: bool) {
+        let imp = self.imp();
+        let Some(path) = imp.pdf_view.path() else { return };
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let area = image.area.map(|v| (v * 100.0).round() as i64);
+        let key = Key { path, frame: image.page, modified, area: Some(area) };
+        let then = if copy { Use::PdfCopy } else { Use::PdfShow(image) };
+        if let Some(lines) = imp.live.borrow().read.get(&key).cloned() {
+            self.pdf_text_read(&key, then, lines);
+            return;
+        }
+        let Some(program) = client::helper_path() else {
+            self.toast("Live Text cannot start: its reader, glance-ocr, is not installed with Glance.");
+            return;
+        };
+        if !self.live_ensure_helper(&program) {
+            return;
+        }
+        let Some(pixels) = imp.pdf_view.image_pixels(&image, SEND_SIDE) else {
+            self.toast("This picture could not be read.");
+            self.live_schedule_idle();
+            return;
+        };
+        let id = {
+            let mut state = imp.live.borrow_mut();
+            state.next_id += 1;
+            state.next_id
+        };
+        let step = 1.0 / pixels.per_point;
+        let pending =
+            Pending { id, key, scale: (step, step), offset: (image.area[0], image.area[1]), then, lines: Vec::new() };
+        imp.live.borrow_mut().waiting = Some(Waiting { pending, width: pixels.width, height: pixels.height, rgba: pixels.rgba });
+        imp.live_status.set_reveal_child(true);
+        self.live_send();
+    }
+
+    /// Text read from a picture on a PDF's page, shown or copied, if that
+    /// PDF is still the one open.
+    fn pdf_text_read(&self, key: &Key, then: Use, lines: Vec<TextLine>) {
+        let imp = self.imp();
+        if !imp.showing_pdf.get() || imp.pdf_view.path().as_ref() != Some(&key.path) {
+            return;
+        }
+        match then {
+            Use::PdfCopy if lines.is_empty() => self.toast("No text found in this picture."),
+            Use::PdfCopy => {
+                let text: Vec<String> = lines.iter().map(|line| line.chars.iter().collect()).collect();
+                self.clipboard().set_text(&text.join("\n"));
+                self.toast("Text copied.");
+            }
+            Use::PdfShow(_) if lines.is_empty() => self.toast("No text found in this picture."),
+            Use::PdfShow(image) => {
+                imp.pdf_view.set_image_text(image, Some(lines));
+                self.toast("Drag across the text to select it, then copy it with Ctrl+C.");
+            }
+            Use::Picture => {}
+        }
     }
 
     /// Copy the selected text, if any is selected.
