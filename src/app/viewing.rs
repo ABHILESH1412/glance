@@ -113,6 +113,14 @@ impl Window {
             ));
             self.add_action(&action);
         }
+        let preferences = gio::SimpleAction::new("preferences", None);
+        preferences.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.show_preferences()
+        ));
+        self.add_action(&preferences);
+
         let select_all = gio::SimpleAction::new("live-select-all", None);
         select_all.set_enabled(false);
         select_all.connect_activate(glib::clone!(

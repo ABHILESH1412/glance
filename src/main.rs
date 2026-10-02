@@ -239,6 +239,7 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.live-text", idle: &["<Primary><Shift>t"], typing: &[] },
     Accel { action: "win.live-select-all", idle: &["<Primary>a"], typing: &[] },
     Accel { action: "win.show-shortcuts", idle: &["<Primary>question"], typing: &["<Primary>question"] },
+    Accel { action: "win.preferences", idle: &["<Primary>comma"], typing: &["<Primary>comma"] },
 ];
 
 /// While a PDF is open, the keys every reader uses to move through a document

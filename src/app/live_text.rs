@@ -557,6 +557,19 @@ impl Window {
         ));
     }
 
+    /// Let the reader go now, rather than after it has idled: its files are
+    /// about to be taken away. What it read before is still remembered.
+    pub(crate) fn live_forget_helper(&self) {
+        let mut state = self.imp().live.borrow_mut();
+        if let Some(timer) = state.idle.take() {
+            timer.remove();
+        }
+        state.reading = None;
+        state.waiting = None;
+        state.helper = None;
+        state.paths = None;
+    }
+
     /// Copy the selected text, if any is selected.
     pub(crate) fn copy_live_text(&self, all: bool) {
         let canvas = self.imp().view.canvas();

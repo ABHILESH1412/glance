@@ -60,6 +60,7 @@ pub const PAGES: &[Page] = &[
                     key("Quit", "<Primary>q"),
                     key("Print", "<Primary>p"),
                     key("Keyboard shortcuts", "<Primary>question"),
+                    key("Preferences", "<Primary>comma"),
                 ],
             },
             Group {

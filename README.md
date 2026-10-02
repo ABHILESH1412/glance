@@ -71,6 +71,7 @@ PP-OCRv6 models. Nothing is sent anywhere: the reading happens on your computer,
 small helper program that runs only while it is needed and gives all its memory back
 when it stops. The engine and models, 42.5 MB, are downloaded the first time, after
 asking, checked against fixed checksums, and kept in `~/.local/share/glance/ocr`.
+**Preferences** (`Ctrl+,`) shows what is there and how much room it takes, and removes it.
 
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and

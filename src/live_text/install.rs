@@ -132,6 +132,20 @@ pub fn installed() -> Option<Paths> {
     })
 }
 
+/// How much room a part takes once kept, if it is there.
+pub fn kept_size(part: &Part) -> Option<u64> {
+    let folder = folder();
+    is_there(&folder, part).then(|| std::fs::metadata(folder.join(part.file)).map(|m| m.len()).ok()).flatten()
+}
+
+/// Take it all away again: everything in the Live Text folder.
+pub fn remove() -> std::io::Result<()> {
+    match std::fs::remove_dir_all(folder()) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
 /// How the download is getting on: bytes so far, and in all.
 pub type Progress = Box<dyn Fn(u64, u64) + Send>;
 

@@ -79,7 +79,11 @@ fn appearance() -> gio::Menu {
 }
 
 fn closing() -> gio::Menu {
-    section(&[item("_Keyboard Shortcuts", "win.show-shortcuts"), item("_About Glance", "win.about")])
+    section(&[
+        item("_Preferences", "win.preferences"),
+        item("_Keyboard Shortcuts", "win.show-shortcuts"),
+        item("_About Glance", "win.about"),
+    ])
 }
 
 /// Where the row of view buttons goes, by the name `view_buttons` uses.

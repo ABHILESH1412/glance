@@ -20,6 +20,7 @@ pub mod locked;
 pub mod menus;
 pub mod pdf_tools;
 pub mod playlist;
+pub mod preferences;
 pub mod prefs;
 pub mod print;
 pub mod protect;
