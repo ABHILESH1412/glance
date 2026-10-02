@@ -550,7 +550,7 @@ impl Window {
                 let canvas = window.imp().view.canvas();
                 canvas.set_draw_width(spin.value());
                 if !window.imp().syncing_panel.get() {
-                    canvas.restyle_picked(None, Some(spin.value()));
+                    canvas.restyle_picked(None, Some(spin.value()), None);
                 }
             }
         ));
@@ -565,7 +565,7 @@ impl Window {
                 let canvas = window.imp().view.canvas();
                 canvas.set_draw_colour(button.rgba());
                 if !window.imp().syncing_panel.get() {
-                    canvas.restyle_picked(Some(button.rgba()), None);
+                    canvas.restyle_picked(Some(button.rgba()), None, None);
                 }
             }
         ));
@@ -574,6 +574,33 @@ impl Window {
         stroke_row.append(&colour_caption);
         stroke_row.append(&imp.draw_colour);
         strokes.append(&stroke_row);
+
+        // Inside a rectangle or ellipse. See-through, as it starts, is none.
+        let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let fill_caption = gtk::Label::new(Some("Fill"));
+        fill_caption.add_css_class("dim-label");
+        imp.draw_fill.set_tooltip_text(Some(
+            "Inside colour for rectangles and ellipses — set its opacity to zero for none",
+        ));
+        imp.draw_fill.set_title("Fill Colour");
+        imp.draw_fill.connect_rgba_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                let canvas = window.imp().view.canvas();
+                canvas.set_draw_fill(button.rgba());
+                if !window.imp().syncing_panel.get() {
+                    canvas.restyle_picked(None, None, Some(button.rgba()));
+                }
+            }
+        ));
+        let fill_note = gtk::Label::new(Some("Rectangles and ellipses"));
+        fill_note.add_css_class("dim-label");
+        fill_note.add_css_class("caption");
+        fill_row.append(&fill_caption);
+        fill_row.append(&imp.draw_fill);
+        fill_row.append(&fill_note);
+        strokes.append(&fill_row);
 
         let draw_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         draw_actions.set_homogeneous(true);
@@ -847,8 +874,8 @@ impl Window {
         quality.set_hexpand(true);
         quality.set_value(f64::from(export::DEFAULT_QUALITY));
         quality.set_tooltip_text(Some(
-            "How much detail JPEG keeps. Higher is a bigger file; the lossless \
-             formats ignore it.",
+            "How much detail JPEG, HEIC and JPEG 2000 keep. Higher is a bigger file, and \
+             100 is lossless for HEIC and JPEG 2000; the lossless formats ignore it.",
         ));
         imp.quality_row.append(&quality_caption);
         imp.quality_row.append(quality);
@@ -1114,6 +1141,7 @@ impl Window {
         let canvas = imp.view.canvas();
         canvas.set_draw_colour(imp.draw_colour.rgba());
         canvas.set_draw_width(imp.draw_width.value());
+        canvas.set_draw_fill(imp.draw_fill.rgba());
         canvas.set_draw_tool(chosen);
         canvas.set_mark_select(selecting);
         self.sync_draw_hint();
@@ -1128,7 +1156,7 @@ impl Window {
             Some(_) => "Drag on the picture from one corner to the other.",
             None if canvas.picked_mark().is_some() => {
                 "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
-                 Width and Colour change it, and Delete removes it."
+                 Width, Colour and Fill change it, and Delete removes it."
             }
             None if imp.draw_select.is_active() => "Click a drawing to pick it up.",
             None => "Pick a tool, then drag on the picture.",
@@ -1143,6 +1171,11 @@ impl Window {
             imp.syncing_panel.set(true);
             imp.draw_width.set_value(mark.width);
             imp.draw_colour.set_rgba(&mark.colour);
+            if mark.tool.fillable() {
+                let mut none = mark.colour;
+                none.set_alpha(0.0);
+                imp.draw_fill.set_rgba(&mark.fill.unwrap_or(none));
+            }
             imp.syncing_panel.set(false);
         }
         self.sync_draw_hint();
@@ -1310,7 +1343,7 @@ impl Window {
         } else {
             format!(
                 "This format has no quality dial, so {} can only be reached by \
-                 scaling the picture down. JPEG will hold more detail at a size.",
+                 scaling the picture down. JPEG or HEIC will hold more detail at a size.",
                 compress::describe(wanted)
             )
         });

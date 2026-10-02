@@ -16,6 +16,7 @@ const EXTENSIONS: &[&str] = &[
     // raster
     "png", "jpg", "jpeg", "jpe", "jfif", "gif", "webp", "tif", "tiff", "bmp", "ico", "qoi", "pnm",
     "pbm", "pgm", "ppm", "tga", //
+    "jp2", "j2k", "j2c", "jpc", "jpf", "jpx", "psd", "exr", "hdr", "icns", "ai", //
     // heif family
     "heic", "heif", "avif", //
     // vector

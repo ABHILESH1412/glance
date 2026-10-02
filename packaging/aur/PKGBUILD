@@ -12,6 +12,8 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/ABHILESH1412/glance"
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'libheif' 'poppler-glib' 'qpdf' 'libsoup3' 'hicolor-icon-theme')
+# Saving as HEIC needs libheif's HEVC encoder.
+optdepends=('x265: saving pictures as HEIC')
 makedepends=('cargo' 'make' 'glib2')  # glib2 for glib-compile-resources
 conflicts=('glance')
 # GitHub strips the leading v: the tarball for tag v1.0.0 unpacks to glance-1.0.0/,

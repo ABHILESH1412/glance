@@ -51,6 +51,8 @@ pub struct Picked {
     /// dropped there; empty while it sits still.
     pub strokes: Vec<Vec<(f64, f64)>>,
     pub paint: gdk::RGBA,
+    /// What a rectangle or ellipse is filled with.
+    pub fill: Option<gdk::RGBA>,
     /// Line thickness, as a share of the page's width.
     pub width: f64,
     /// The box round it, x, y, width, height, for anything but a line.
@@ -137,6 +139,9 @@ mod imp {
             let redacting = sketch.as_ref().filter(|mark| mark.tool == crate::images::edit::draw::Tool::Redact);
             if let Some(mark) = sketch.as_ref().filter(|_| redacting.is_none()) {
                 if let Some(path) = mark.path() {
+                    if let Some(fill) = mark.inside() {
+                        snapshot.append_fill(&path, gsk::FillRule::Winding, &fill);
+                    }
                     snapshot.append_stroke(&path, &mark.stroke(), &mark.paint());
                 }
             }
@@ -153,10 +158,14 @@ mod imp {
                         builder.line_to((p.0 as f32) * w, (p.1 as f32) * h);
                     }
                 }
+                let path = builder.to_path();
+                if let Some(fill) = picked.fill {
+                    snapshot.append_fill(&path, gsk::FillRule::Winding, &fill);
+                }
                 let stroke = gsk::Stroke::new(((picked.width as f32) * w).max(0.5));
                 stroke.set_line_cap(gsk::LineCap::Round);
                 stroke.set_line_join(gsk::LineJoin::Round);
-                snapshot.append_stroke(&builder.to_path(), &stroke, &picked.paint);
+                snapshot.append_stroke(&path, &stroke, &picked.paint);
             }
             if night {
                 snapshot.pop();

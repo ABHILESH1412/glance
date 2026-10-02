@@ -382,6 +382,7 @@ mod tests {
             strokes: vec![vec![(100.0, 700.0), (200.0, 720.0)], vec![(190.0, 712.0), (200.0, 720.0), (188.0, 724.0)]],
             colour: Rgb(0x1c1c, 0x7171, 0xd8d8),
             width: 3.0,
+            fill: None,
         });
 
         let doc = open();

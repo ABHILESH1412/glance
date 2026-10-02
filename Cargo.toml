@@ -48,6 +48,8 @@ ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "
 # .tgz, already in the tree through the PNG decoder.
 soup3 = "0.9"
 flate2 = "1"
+icns = "0.3"
+openjpeg-sys = "1"
 
 [build-dependencies]
 # Finding qpdf to link against; already in the tree through GTK's own build.
@@ -56,7 +58,7 @@ pkg-config = "0.3"
 [dependencies.image]
 version = "0.25"
 default-features = false
-features = ["rayon", "png", "jpeg", "gif", "webp", "tiff", "bmp", "ico", "qoi", "pnm", "tga"]
+features = ["rayon", "png", "jpeg", "gif", "webp", "tiff", "bmp", "ico", "qoi", "pnm", "tga", "exr", "hdr"]
 
 [profile.release]
 lto = true

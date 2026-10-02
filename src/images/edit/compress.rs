@@ -65,22 +65,7 @@ pub fn describe(bytes: u64) -> String {
 }
 
 fn encode(image: &DynamicImage, target: &Target, quality: u8) -> Result<Vec<u8>, String> {
-    let mut out = std::io::Cursor::new(Vec::new());
-    if target.lossy() {
-        // JPEG cannot carry transparency, so flatten first for the same
-        // reason the ordinary writer does.
-        let rgb = crate::images::edit::export::flatten(image);
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
-            .encode_image(&rgb)
-            .map_err(|e| format!("Could not encode: {e}"))?;
-    } else {
-        let format = image::ImageFormat::from_extension(target.extension)
-            .ok_or_else(|| format!("{} cannot be written.", target.label))?;
-        image
-            .write_to(&mut out, format)
-            .map_err(|e| format!("Could not encode: {e}"))?;
-    }
-    Ok(out.into_inner())
+    crate::images::edit::export::encode(image, target.extension, quality)
 }
 
 /// The best-looking encoding that fits, or `None` when even the worst is over.

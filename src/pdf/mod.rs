@@ -37,7 +37,7 @@ mod sidebar;
 mod thumbnails;
 mod view;
 
-pub use document::{is_pdf, open, Allowed, OpenError, Opened};
+pub use document::{is_pdf, open, uri as document_uri, Allowed, OpenError, Opened};
 pub use annots::Rgb;
 pub use info::{gather as document_info, Info};
 pub use layout::Mode;
@@ -52,7 +52,7 @@ pub use rewrite::{
     Report,
 };
 pub use sidebar::View as SidebarView;
-pub use view::{NOT_ANNOTATABLE, BookmarkEvent, Marked, PageImage, PdfView, Pinned, SearchStatus, Status, Tool};
+pub use view::{NOT_ANNOTATABLE, BookmarkEvent, Ink, Marked, PageImage, PdfView, Pinned, SearchStatus, Status, Tool};
 
 /// Whether this Poppler can draw on pages: ink needs 25.06.
 pub fn can_draw() -> bool {

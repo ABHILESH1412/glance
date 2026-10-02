@@ -17,6 +17,8 @@ Source1:        %{name}-%{version}-vendor.tar.xz
 BuildRequires:  cargo
 BuildRequires:  rust >= 1.92
 BuildRequires:  make
+# OpenJPEG, for JPEG 2000, is built from source as part of the program.
+BuildRequires:  gcc
 # For glib-compile-resources, which build.rs uses to put the icons in the binary.
 BuildRequires:  glib2-devel
 BuildRequires:  pkgconfig(gtk4) >= 4.14

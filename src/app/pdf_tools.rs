@@ -152,6 +152,21 @@ impl PdfTools {
             stroke_row.append(widget);
         }
         strokes.append(&stroke_row);
+        // Inside a rectangle or ellipse. See-through, as it starts, is none.
+        let fill = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0));
+        fill.set_tooltip_text(Some("Inside colour for rectangles and ellipses — set its opacity to zero for none"));
+        fill.set_title("Fill Colour");
+        let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let fill_caption = gtk::Label::new(Some("Fill"));
+        fill_caption.add_css_class("dim-label");
+        let fill_note = gtk::Label::new(Some("Rectangles and ellipses"));
+        fill_note.add_css_class("dim-label");
+        fill_note.add_css_class("caption");
+        fill_row.append(&fill_caption);
+        fill_row.append(&fill);
+        fill_row.append(&fill_note);
+        fill_row.set_sensitive(pdf::can_draw());
+        strokes.append(&fill_row);
         strokes.append(&history_buttons());
         let draw_hint = hint(if pdf::can_draw() {
             "Pick a tool, then drag on the page."
@@ -301,11 +316,11 @@ impl PdfTools {
             let window = window.downgrade();
             let (draw_toggle, text_toggle, tools) = (draw_toggle.clone(), text_toggle.clone(), tools.clone());
             let (redact_toggle, by_text) = (redact_toggle.clone(), by_text.clone());
-            let (width, ink, controls) = (width.clone(), ink.clone(), controls.clone());
+            let (width, ink, fill, controls) = (width.clone(), ink.clone(), fill.clone(), controls.clone());
             Rc::new(move || {
                 let Some(window) = window.upgrade() else { return };
                 let view = &window.imp().pdf_view;
-                view.set_ink(ink.rgba(), width.value());
+                view.set_ink(pdf::Ink { colour: ink.rgba(), width: width.value(), fill: fill.rgba() });
                 let tool = if draw_toggle.is_active() {
                     tools.iter().find(|(_, b)| b.is_active()).map_or(pdf::Tool::Select, |(t, _)| pdf::Tool::Draw(*t))
                 } else if text_toggle.is_active() {
@@ -347,7 +362,7 @@ impl PdfTools {
                 }
                 draw_hint.set_text(if picked {
                     "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
-                     Width and Colour change it, and Delete removes it."
+                     Width, Colour and Fill change it, and Delete removes it."
                 } else if select.is_active() {
                     "Click a drawing to pick it up."
                 } else {
@@ -376,13 +391,13 @@ impl PdfTools {
         // The pen's colour and thickness, and the picked drawing's too.
         let reink = {
             let window = window.downgrade();
-            let (width, ink, showing_picked) = (width.clone(), ink.clone(), showing_picked.clone());
+            let (width, ink, fill, showing_picked) = (width.clone(), ink.clone(), fill.clone(), showing_picked.clone());
             Rc::new(move || {
                 if showing_picked.get() {
                     return;
                 }
                 if let Some(window) = window.upgrade() {
-                    window.imp().pdf_view.reink_picked(ink.rgba(), width.value());
+                    window.imp().pdf_view.reink_picked(pdf::Ink { colour: ink.rgba(), width: width.value(), fill: fill.rgba() });
                 }
             })
         };
@@ -401,12 +416,20 @@ impl PdfTools {
             });
         }
         {
-            let (width, ink) = (width.clone(), ink.clone());
+            let (push_tool, reink) = (push_tool.clone(), reink.clone());
+            fill.connect_rgba_notify(move |_| {
+                push_tool();
+                reink();
+            });
+        }
+        {
+            let (width, ink, fill) = (width.clone(), ink.clone(), fill.clone());
             window.imp().pdf_view.connect_picked(move |picked| {
-                if let Some((colour, thickness)) = picked {
+                if let Some(picked) = picked {
                     showing_picked.set(true);
-                    width.set_value(thickness);
-                    ink.set_rgba(&colour);
+                    width.set_value(picked.width);
+                    ink.set_rgba(&picked.colour);
+                    fill.set_rgba(&picked.fill);
                     showing_picked.set(false);
                 }
                 pick_hint(picked.is_some());

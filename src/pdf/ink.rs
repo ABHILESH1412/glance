@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Drawing on a page: the image editor's pen, highlighter, line, arrow,
-//! rectangle and ellipse, saved as the PDF's own ink annotations, so every
-//! reader draws them.
+//! rectangle and ellipse, saved as the PDF's own annotations, so every reader
+//! draws them: ink for the lines, and a square or circle annotation for a
+//! rectangle or ellipse, which is the only kind of shape a PDF lets be filled.
 //!
 //! What is drawn is the image editor's own `Mark`, in page points rather than
 //! pixels: the same tools, drawn the same way while the pointer moves.
@@ -25,6 +26,8 @@ pub struct Drawing {
     pub colour: Rgb,
     /// Line thickness, in points.
     pub width: f64,
+    /// What a rectangle or ellipse is filled with, if anything.
+    pub fill: Option<Rgb>,
 }
 
 impl Drawing {
@@ -41,7 +44,27 @@ impl Drawing {
             strokes,
             colour: Rgb::from_rgba(&mark.colour),
             width: mark.width,
+            fill: mark.inside().map(|fill| Rgb::from_rgba(&fill)),
         })
+    }
+
+    /// The box a rectangle or ellipse is drawn in, x1, y1, x2, y2: the
+    /// middle of its line all round. None for anything else.
+    pub fn shape(&self) -> Option<[f64; 4]> {
+        if !self.tool.fillable() {
+            return None;
+        }
+        let [x, y, w, h] = shape::frame_of(self.strokes.iter().flatten())?;
+        Some([x, y, x + w, y + h])
+    }
+
+    /// The kind of annotation this is saved as.
+    fn kind(&self) -> poppler::ffi::PopplerAnnotType {
+        match self.tool {
+            Tool::Rectangle => poppler::ffi::POPPLER_ANNOT_SQUARE,
+            Tool::Ellipse => poppler::ffi::POPPLER_ANNOT_CIRCLE,
+            _ => poppler::ffi::POPPLER_ANNOT_INK,
+        }
     }
 
     /// Everything it covers, the line's thickness included: x1, y1, x2, y2.
@@ -49,6 +72,12 @@ impl Drawing {
     /// a whole line's width all round, so this is that same box, which is how
     /// the drawing is found again.
     pub fn area(&self) -> [f64; 4] {
+        // A square or circle annotation's line lies inside its box, so the
+        // box is the shape's, half a line out.
+        if let Some([x1, y1, x2, y2]) = self.shape() {
+            let half = self.width / 2.0;
+            return [x1 - half, y1 - half, x2 + half, y2 + half];
+        }
         let points = self.strokes.iter().flatten();
         let (mut x1, mut y1, mut x2, mut y2) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         for &(x, y) in points {
@@ -93,23 +122,24 @@ impl Drawing {
 
     /// The drawing in another colour or thickness. An arrow's head is sized
     /// from its line, so it is drawn again.
-    pub fn restyled(&self, colour: Rgb, width: f64) -> Drawing {
+    pub fn restyled(&self, colour: Rgb, width: f64, fill: Option<Rgb>) -> Drawing {
         let strokes = match self.ends() {
             Some((a, b)) => self.redrawn(vec![a, b], width),
             None => self.strokes.clone(),
         };
-        Drawing { strokes, colour, width, ..self.clone() }
+        let fill = if self.tool.fillable() { fill } else { None };
+        Drawing { strokes, colour, width, fill, ..self.clone() }
     }
 
     /// A line or arrow's strokes, between the ends given.
     fn redrawn(&self, ends: Vec<(f64, f64)>, width: f64) -> Vec<Vec<(f64, f64)>> {
-        Mark { tool: self.tool, points: ends, colour: self.colour.to_rgba(), width, sequence: 0 }.strokes()
+        Mark { tool: self.tool, points: ends, colour: self.colour.to_rgba(), width, fill: None, sequence: 0 }.strokes()
     }
 
     /// Whether a press at `p` lands on the drawing's ink, give or take
     /// `slack`.
     pub fn is_at(&self, p: (f64, f64), slack: f64) -> bool {
-        shape::touches(&self.strokes, self.width, p, slack)
+        shape::touches(&self.strokes, self.width, p, slack) || (self.fill.is_some() && shape::encloses(&self.strokes, p))
     }
 
     /// The same drawing, as near as the file keeps it: the points come back
@@ -144,8 +174,16 @@ pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Drawing> {
     let (_, height) = page.size();
     annots::list(&page)
         .into_iter()
-        .filter(|found| found.kind == poppler::ffi::POPPLER_ANNOT_INK)
         .filter_map(|found| {
+            let shaped = match found.kind {
+                poppler::ffi::POPPLER_ANNOT_SQUARE => Some(Tool::Rectangle),
+                poppler::ffi::POPPLER_ANNOT_CIRCLE => Some(Tool::Ellipse),
+                poppler::ffi::POPPLER_ANNOT_INK => None,
+                _ => return None,
+            };
+            if let Some(tool) = shaped {
+                return shape_of(&found, tool, index);
+            }
             let strokes = strokes_of(&found.annot, height)?;
             let width = width_of(&found.annot);
             // SAFETY: an ink annotation is a markup annotation.
@@ -160,9 +198,36 @@ pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Drawing> {
                 strokes,
                 colour: found.colour.unwrap_or(Rgb(0, 0, 0)),
                 width,
+                fill: None,
             })
         })
         .collect()
+}
+
+/// A square or circle annotation, as the rectangle or ellipse it draws.
+fn shape_of(found: &annots::Found, tool: Tool, page: usize) -> Option<Drawing> {
+    use glib::translate::ToGlibPtr;
+    let width = width_of(&found.annot);
+    let half = width / 2.0;
+    let [x1, y1, x2, y2] = found.area;
+    let corners = vec![(x1 + half, y1 + half), (x2 - half, y2 - half)];
+    let raw: *mut poppler::ffi::PopplerAnnot = found.annot.to_glib_none().0;
+    // SAFETY: the annotation is the kind asked for; the colour Poppler hands
+    // back is ours to free.
+    let fill = unsafe {
+        let colour = match tool {
+            Tool::Rectangle => poppler::ffi::poppler_annot_square_get_interior_color(raw.cast()),
+            _ => poppler::ffi::poppler_annot_circle_get_interior_color(raw.cast()),
+        };
+        (!colour.is_null()).then(|| {
+            let rgb = Rgb::from_ffi(&*colour);
+            glib::ffi::g_free(colour.cast());
+            rgb
+        })
+    };
+    let colour = found.colour.unwrap_or(Rgb(0, 0, 0));
+    let mark = Mark { tool, points: corners, colour: colour.to_rgba(), width, fill: None, sequence: 0 };
+    Some(Drawing { page, tool, strokes: mark.strokes(), colour, width, fill })
 }
 
 /// An ink annotation's strokes, in points from the page's top-left corner.
@@ -229,7 +294,7 @@ pub fn available() -> bool {
 
 pub(super) fn key(page: &poppler::Page, drawing: &Drawing) -> (poppler::ffi::PopplerAnnotType, [f64; 4]) {
     let (_, height) = page.size();
-    (poppler::ffi::POPPLER_ANNOT_INK, annots::flip(drawing.area(), height))
+    (drawing.kind(), annots::flip(drawing.area(), height))
 }
 
 pub(super) fn add(document: &poppler::Document, page: &poppler::Page, drawing: &Drawing) {
@@ -239,6 +304,25 @@ pub(super) fn add(document: &poppler::Document, page: &poppler::Page, drawing: &
     let (Some(ink), Some(border)) = (&newer.ink, &newer.border) else { return };
     let (_, height) = page.size();
     let mut rect = annots::rectangle(annots::flip(drawing.area(), height));
+    if drawing.shape().is_some() {
+        // SAFETY: Poppler's own calls; the colour is copied by Poppler.
+        unsafe {
+            let raw = match drawing.tool {
+                Tool::Rectangle => poppler::ffi::poppler_annot_square_new(document.to_glib_none().0, &mut rect),
+                _ => poppler::ffi::poppler_annot_circle_new(document.to_glib_none().0, &mut rect),
+            };
+            let annot: poppler::Annot = from_glib_full(raw);
+            (border.set)(raw, drawing.width);
+            let mut fill = drawing.fill.map(Rgb::ffi);
+            let fill = fill.as_mut().map_or(std::ptr::null_mut(), std::ptr::from_mut);
+            match drawing.tool {
+                Tool::Rectangle => poppler::ffi::poppler_annot_square_set_interior_color(raw.cast(), fill),
+                _ => poppler::ffi::poppler_annot_circle_set_interior_color(raw.cast(), fill),
+            }
+            annots::attach(page, &annot, Some(drawing.colour), true);
+        }
+        return;
+    }
     // SAFETY: the calls are Poppler's own, found by name with the signatures
     // its headers give; each path is freed once Poppler has copied it.
     unsafe {
@@ -297,6 +381,7 @@ mod tests {
             strokes: vec![vec![(10.0, 20.0), (50.0, 20.0)]],
             colour: Rgb(0, 0, 0),
             width: 4.0,
+            fill: None,
         };
         assert_eq!(drawing.area(), [6.0, 16.0, 54.0, 24.0]);
     }
@@ -304,7 +389,7 @@ mod tests {
     #[test]
     fn what_a_drawing_was_made_with_is_told_from_its_strokes() {
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], false), Tool::Line);
-        let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, sequence: 0 };
+        let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
         assert_eq!(tool_of(&arrow.strokes(), false), Tool::Arrow);
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], true), Tool::Highlighter);
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)]], false), Tool::Pen);
@@ -313,7 +398,7 @@ mod tests {
 
     #[test]
     fn an_arrow_keeps_its_head_when_its_end_is_dragged() {
-        let mark = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, sequence: 0 };
+        let mark = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
         let arrow = Drawing::from_mark(0, &mark).unwrap();
         let Some(Outline::Ends(a, _)) = arrow.outline() else { panic!("held by its ends") };
         let turned = arrow.reshaped(&Outline::Ends(a, (0.0, 100.0)));
@@ -322,7 +407,7 @@ mod tests {
         assert_eq!(turned.strokes[1][1], (0.0, 100.0));
         assert!(turned.strokes[1][0].1 < 100.0 && turned.strokes[1][2].1 < 100.0, "the head trails the tip");
         // Thicker, the head grows with it.
-        let thick = arrow.restyled(Rgb(0, 0, 0), 8.0);
+        let thick = arrow.restyled(Rgb(0, 0, 0), 8.0, None);
         let spread = |d: &Drawing| (d.strokes[1][0].1 - d.strokes[1][2].1).abs();
         assert!(spread(&thick) > spread(&arrow));
     }
@@ -365,6 +450,7 @@ mod tests {
             points: vec![(100.0, 100.0), (150.0, 140.0), (200.0, 100.0)],
             colour: gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0),
             width: 6.0,
+            fill: None,
             sequence: 0,
         };
         let arrow = Mark { tool: Tool::Arrow, points: vec![(300.0, 300.0), (400.0, 350.0)], ..pen.clone() };
@@ -407,9 +493,103 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A rectangle and an ellipse are a PDF's own square and circle, filled
+    /// or not, and come back from the file as what they were.
+    #[test]
+    fn shapes_are_saved_as_squares_and_circles_with_their_fill() {
+        use super::super::annots::{self, Annotation};
+        use super::super::document;
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("glance-shape-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, blank_page()).unwrap();
+        let open = || poppler::Document::from_file(&document::uri(&path), None).unwrap();
+
+        let yellow = gtk::gdk::RGBA::new(1.0, 0.8, 0.0, 1.0);
+        let rectangle = Mark {
+            tool: Tool::Rectangle,
+            points: vec![(100.0, 100.0), (300.0, 200.0)],
+            colour: gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 1.0),
+            width: 4.0,
+            fill: Some(yellow),
+            sequence: 0,
+        };
+        let ellipse = Mark { tool: Tool::Ellipse, points: vec![(100.0, 400.0), (250.0, 500.0)], fill: None, ..rectangle.clone() };
+        let made = [Drawing::from_mark(0, &rectangle).unwrap(), Drawing::from_mark(0, &ellipse).unwrap()];
+        assert_eq!(made[0].fill, Some(Rgb::from_rgba(&yellow)));
+        let doc = open();
+        for drawing in &made {
+            Annotation::Ink(drawing.clone()).add(&doc);
+        }
+        annots::settle(&doc, &[0]);
+        annots::save(&doc, &path).unwrap();
+
+        let doc = open();
+        let page = annots::page(&doc, 0).unwrap();
+        let kinds: Vec<_> = annots::list(&page).iter().map(|f| f.kind).collect();
+        assert_eq!(kinds, vec![poppler::ffi::POPPLER_ANNOT_SQUARE, poppler::ffi::POPPLER_ANNOT_CIRCLE]);
+        let read = on_page(&doc, 0);
+        assert_eq!(read.len(), 2);
+        for (got, made) in read.iter().zip(&made) {
+            assert_eq!((got.tool, got.fill, got.colour), (made.tool, made.fill, made.colour));
+            let (a, b) = (got.shape().unwrap(), made.shape().unwrap());
+            assert!(a.iter().zip(b).all(|(p, q)| (p - q).abs() < 0.05), "{a:?} is not {b:?}");
+        }
+        // The filled one is picked up by its middle, the empty one only by
+        // its line.
+        assert!(read[0].is_at((200.0, 150.0), 1.0));
+        assert!(!read[1].is_at((175.0, 450.0), 1.0));
+        assert!(read[1].is_at((100.0, 450.0), 1.0));
+
+        // Emptied and moved, then taken away.
+        let Some(Outline::Frame([x, y, w, h])) = read[0].outline() else { panic!() };
+        let changed = read[0].restyled(read[0].colour, 2.0, None).reshaped(&Outline::Frame([x + 50.0, y, w, h]));
+        assert!(Annotation::Ink(read[0].clone()).remove(&doc));
+        Annotation::Ink(changed.clone()).add(&doc);
+        annots::settle(&doc, &[0]);
+        annots::save(&doc, &path).unwrap();
+        let doc = open();
+        let read = on_page(&doc, 0);
+        let moved = read.iter().find(|d| d.tool == Tool::Rectangle).unwrap();
+        assert_eq!(moved.fill, None);
+        assert!((moved.width - 2.0).abs() < 0.01);
+        assert!((moved.shape().unwrap()[0] - 150.0).abs() < 0.05);
+        for drawing in &read {
+            assert!(Annotation::Ink(drawing.clone()).remove(&doc), "{drawing:?} not found to remove");
+        }
+        annots::save(&doc, &path).unwrap();
+        assert!(on_page(&open(), 0).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// One blank A4 page.
+    fn blank_page() -> Vec<u8> {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{object}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+        out
+    }
+
     #[test]
     fn a_click_with_a_shape_tool_draws_nothing() {
-        let mark = Mark { tool: Tool::Rectangle, points: vec![(5.0, 5.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, sequence: 0 };
+        let mark = Mark { tool: Tool::Rectangle, points: vec![(5.0, 5.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
         assert_eq!(Drawing::from_mark(0, &mark), None);
     }
 }

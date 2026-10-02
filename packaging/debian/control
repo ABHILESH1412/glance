@@ -17,6 +17,7 @@ Build-Depends: debhelper-compat (= 13),
                libsoup-3.0-dev,
                pkgconf,
                make,
+               gcc,
                libglib2.0-dev
 Standards-Version: 4.7.0
 Homepage: https://github.com/ABHILESH1412/glance

@@ -171,6 +171,21 @@ pub struct PdfView {
     inner: Rc<Inner>,
 }
 
+/// The pen: its colour, its thickness in points, and what rectangles and
+/// ellipses are filled with, see-through for nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    pub colour: gdk::RGBA,
+    pub width: f64,
+    pub fill: gdk::RGBA,
+}
+
+impl Ink {
+    fn fill(&self) -> Option<Rgb> {
+        (self.fill.alpha() > 0.0).then(|| Rgb::from_rgba(&self.fill))
+    }
+}
+
 /// A picture on a page: which page, Poppler's number for it there, and the
 /// area it covers, x1, y1, x2, y2 in points from the page's top-left.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -278,9 +293,9 @@ struct Inner {
     /// A new colour and thickness for the picked drawing, waiting for the
     /// controls to be still.
     #[allow(clippy::type_complexity)]
-    reink: RefCell<Option<(glib::SourceId, gdk::RGBA, f64)>>,
+    reink: RefCell<Option<(glib::SourceId, Ink)>>,
     #[allow(clippy::type_complexity)]
-    on_picked: RefCell<Option<Box<dyn Fn(Option<(gdk::RGBA, f64)>)>>>,
+    on_picked: RefCell<Option<Box<dyn Fn(Option<Ink>)>>>,
     /// Text read from a picture with Live Text: the picture, and the text,
     /// in points on its page.
     text: RefCell<Option<(PageImage, LiveLayer)>>,
@@ -312,7 +327,7 @@ struct Inner {
     on_error: RefCell<Option<Box<dyn Fn(String)>>>,
     tool: Cell<Tool>,
     /// The pen's colour and thickness, in points.
-    ink: Cell<(gdk::RGBA, f64)>,
+    ink: Cell<Ink>,
     /// A drawing being made, on a page, in page points.
     sketch: RefCell<Option<(usize, draw::Mark)>>,
     /// The page showing a finished drawing until it is redrawn with it.
@@ -408,7 +423,11 @@ impl PdfView {
             on_history: RefCell::default(),
             on_error: RefCell::default(),
             tool: Cell::new(Tool::Select),
-            ink: Cell::new((gdk::RGBA::new(0.9, 0.15, 0.15, 1.0), 3.0)),
+            ink: Cell::new(Ink {
+                colour: gdk::RGBA::new(0.9, 0.15, 0.15, 1.0),
+                width: 3.0,
+                fill: gdk::RGBA::new(0.9, 0.15, 0.15, 0.0),
+            }),
             sketch: RefCell::default(),
             sketched: Cell::new(None),
             look: RefCell::new(("Text".to_string(), TextStyle::bubble())),
@@ -794,9 +813,9 @@ impl PdfView {
         self.inner.set_tool(tool);
     }
 
-    /// The pen's colour, and its thickness in points.
-    pub fn set_ink(&self, colour: gdk::RGBA, width: f64) {
-        self.inner.ink.set((colour, width));
+    /// The pen's colour, thickness and fill.
+    pub fn set_ink(&self, ink: Ink) {
+        self.inner.ink.set(ink);
     }
 
     /// What the text controls say: the words and look for the next text box,
@@ -920,15 +939,15 @@ impl PdfView {
         had
     }
 
-    /// Give the picked drawing the controls' colour and thickness, once
-    /// they have been still for a moment.
-    pub fn reink_picked(&self, colour: gdk::RGBA, width: f64) {
-        Inner::reink(&self.inner, colour, width);
+    /// Give the picked drawing the controls' colour, thickness and fill,
+    /// once they have been still for a moment.
+    pub fn reink_picked(&self, ink: Ink) {
+        Inner::reink(&self.inner, ink);
     }
 
-    /// Called with the picked drawing's colour and thickness, or `None` once
-    /// it is put down.
-    pub fn connect_picked(&self, callback: impl Fn(Option<(gdk::RGBA, f64)>) + 'static) {
+    /// Called with the picked drawing's colour, thickness and fill, or
+    /// `None` once it is put down.
+    pub fn connect_picked(&self, callback: impl Fn(Option<Ink>) + 'static) {
         self.inner.on_picked.replace(Some(Box::new(callback)));
     }
 
@@ -2276,7 +2295,12 @@ impl Inner {
         if drawing.is_none() {
             self.flush_reink();
         }
-        let look = drawing.as_ref().map(|d| (d.colour.to_rgba(), d.width));
+        let look = drawing.as_ref().map(|d| {
+            let colour = d.colour.to_rgba();
+            let mut none = colour;
+            none.set_alpha(0.0);
+            Ink { colour, width: d.width, fill: d.fill.map_or(none, Rgb::to_rgba) }
+        });
         self.picked.replace(drawing);
         self.show_picked();
         if let Some(callback) = self.on_picked.borrow().as_ref() {
@@ -2326,6 +2350,7 @@ impl Inner {
                 Vec::new()
             },
             paint,
+            fill: drawing.fill.map(Rgb::to_rgba),
             width: drawing.width / tw.max(1e-9),
             frame,
             grips: outline.grips().into_iter().map(|(_, at)| to_page(at)).collect(),
@@ -2380,7 +2405,7 @@ impl Inner {
         }
     }
 
-    fn reink(self: &Rc<Self>, colour: gdk::RGBA, width: f64) {
+    fn reink(self: &Rc<Self>, ink: Ink) {
         if self.picked.borrow().is_none() {
             return;
         }
@@ -2388,16 +2413,16 @@ impl Inner {
         let weak = Rc::downgrade(self);
         let source = glib::timeout_add_local_once(RESTYLE_PAUSE, move || {
             if let Some(inner) = weak.upgrade() {
-                if let Some((_, colour, width)) = inner.reink.take() {
-                    inner.apply_reink(colour, width);
+                if let Some((_, ink)) = inner.reink.take() {
+                    inner.apply_reink(ink);
                 }
             }
         });
-        self.reink.replace(Some((source, colour, width)));
+        self.reink.replace(Some((source, ink)));
     }
 
     fn cancel_reink(&self) {
-        if let Some((source, _, _)) = self.reink.take() {
+        if let Some((source, _)) = self.reink.take() {
             source.remove();
         }
     }
@@ -2405,15 +2430,15 @@ impl Inner {
     /// Save a new colour or thickness now, rather than when the controls
     /// are still.
     fn flush_reink(&self) {
-        if let Some((source, colour, width)) = self.reink.take() {
+        if let Some((source, ink)) = self.reink.take() {
             source.remove();
-            self.apply_reink(colour, width);
+            self.apply_reink(ink);
         }
     }
 
-    fn apply_reink(&self, colour: gdk::RGBA, width: f64) {
+    fn apply_reink(&self, ink: Ink) {
         let Some(old) = self.picked.borrow().clone() else { return };
-        let new = old.restyled(Rgb::from_rgba(&colour), width);
+        let new = old.restyled(Rgb::from_rgba(&ink.colour), ink.width, ink.fill());
         if new == old {
             return;
         }
@@ -2649,8 +2674,9 @@ impl Inner {
             self.report("Drawing on a PDF needs Poppler 25.06 or newer.".to_string());
             return;
         }
-        let (colour, width) = self.ink.get();
-        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour, width, sequence: 0 };
+        let ink = self.ink.get();
+        let fill = if tool.fillable() { ink.fill().map(Rgb::to_rgba) } else { None };
+        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.colour, width: ink.width, fill, sequence: 0 };
         // A new drawing replaces any sketch still waiting for its page.
         if let Some(page) = self.sketched.take() {
             if let Some(widget) = self.widgets.borrow().get(page) {

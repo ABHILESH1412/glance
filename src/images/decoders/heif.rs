@@ -70,3 +70,62 @@ pub fn decode(path: &Path, avif: bool) -> Result<LoadedImage, String> {
         vector: None,
     })
 }
+
+/// Write a picture as HEIC, with the system's HEVC encoder. Quality 100 is
+/// lossless.
+pub fn encode(picture: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    use libheif_rs::{Channel, CompressionFormat, EncoderQuality, Image};
+    let fail = |e: libheif_rs::HeifError| format!("Could not save as HEIC: {}", e.message);
+    let rgba = picture.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let opaque = rgba.pixels().all(|p| p[3] == 255);
+    let (chroma, channels) = if opaque { (RgbChroma::Rgb, 3) } else { (RgbChroma::Rgba, 4) };
+    let lib = LibHeif::new();
+    let mut image = Image::new(width, height, ColorSpace::Rgb(chroma)).map_err(fail)?;
+    image.create_plane(Channel::Interleaved, width, height, 8).map_err(fail)?;
+    {
+        let planes = image.planes_mut();
+        let plane = planes.interleaved.ok_or("Could not save as HEIC: no plane to write into.")?;
+        let row = width as usize * channels;
+        for (y, pixels) in rgba.rows().enumerate() {
+            let start = y * plane.stride;
+            let target = &mut plane.data[start..start + row];
+            for (to, from) in target.chunks_exact_mut(channels).zip(pixels) {
+                to.copy_from_slice(&from.0[..channels]);
+            }
+        }
+    }
+    let mut encoder = lib.encoder_for_format(CompressionFormat::Hevc).map_err(|_| {
+        "Could not save as HEIC: this computer has no HEVC encoder for libheif (the x265 plugin).".to_string()
+    })?;
+    encoder
+        .set_quality(if quality >= 100 { EncoderQuality::LossLess } else { EncoderQuality::Lossy(quality) })
+        .map_err(fail)?;
+    let mut context = HeifContext::new().map_err(fail)?;
+    context.encode_image(&image, &mut encoder, None).map_err(fail)?;
+    context.write_to_bytes().map_err(fail)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_picture_written_as_heic_opens_again() {
+        let picture = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(64, 48, |x, y| {
+            image::Rgba([(x * 4) as u8, (y * 5) as u8, 128, 255])
+        }));
+        let bytes = match super::encode(&picture, 90) {
+            Ok(bytes) => bytes,
+            // A libheif without an HEVC encoder: said plainly, as above.
+            Err(why) if why.contains("no HEVC encoder") => return,
+            Err(why) => panic!("{why}"),
+        };
+        let path = std::env::temp_dir().join(format!("glance-heic-{}.heic", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let back = super::decode(&path, false).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!((back.width, back.height), (64, 48));
+        // Lossy, so near rather than exact.
+        let near = back.rgba.iter().zip(picture.to_rgba8().as_raw()).all(|(a, b)| a.abs_diff(*b) < 24);
+        assert!(near, "the colours drifted too far");
+    }
+}

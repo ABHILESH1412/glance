@@ -60,6 +60,8 @@ modules:
   # libheif comes from the runtime (1.20 in GNOME 49), along with dav1d for
   # AVIF, so HEIC and AVIF need no module here. Should a future runtime drop it,
   # the fix is a libheif module built before this one rather than a code change.
+  # Saving as HEIC needs the runtime's libheif to have an HEVC encoder; where it
+  # has none, Export says so rather than failing quietly.
 
   # Poppler, for PDFs, is not in the runtime, so it is built here. Only its GLib
   # wrapper is needed; everything else is switched off. Boost in particular:

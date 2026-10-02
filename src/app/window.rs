@@ -137,6 +137,8 @@ mod imp {
         /// The Select tool, for picking up what has been drawn.
         pub draw_select: gtk::ToggleButton,
         pub draw_colour: crate::app::colour::ColourButton,
+        /// What rectangles and ellipses are filled with: see-through for none.
+        pub draw_fill: crate::app::colour::ColourButton,
         pub draw_width: gtk::SpinButton,
         pub draw_hint: gtk::Label,
         pub text_toggle: gtk::ToggleButton,
@@ -337,6 +339,7 @@ mod imp {
                 draw_tools: RefCell::new(Vec::new()),
                 draw_select: gtk::ToggleButton::new(),
                 draw_colour: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
+                draw_fill: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0)),
                 draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),
                 draw_hint: gtk::Label::new(None),
                 text_toggle: section_toggle("insert-text-symbolic", "Text"),
@@ -1594,6 +1597,14 @@ impl Window {
             "image/heic",
             "image/avif",
             "image/svg+xml",
+            "image/jp2",
+            "image/jpx",
+            "image/x-jp2-codestream",
+            "image/vnd.adobe.photoshop",
+            "image/x-exr",
+            "image/vnd.radiance",
+            "image/x-icns",
+            "application/illustrator",
             "application/pdf",
         ] {
             filter.add_mime_type(mime);
@@ -1604,7 +1615,8 @@ impl Window {
         for suffix in [
             "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "kdc", "mef",
             "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf",
-            "srw", "x3f", "heic", "heif", "avif", "svg", "svgz", "pdf",
+            "srw", "x3f", "heic", "heif", "avif", "svg", "svgz", "pdf", "jp2", "j2k", "jpx", "psd",
+            "exr", "hdr", "icns", "ai",
         ] {
             filter.add_suffix(suffix);
         }

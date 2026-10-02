@@ -2,6 +2,10 @@
 //! the app never learns which library did the work.
 
 pub mod heif;
+pub mod icns;
+pub mod illustrator;
+pub mod jpeg2000;
+pub mod psd;
 pub mod raster;
 pub mod raw;
 pub mod svg;

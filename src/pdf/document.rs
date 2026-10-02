@@ -109,7 +109,13 @@ pub struct Pixels {
 /// Whether a file is a PDF, judged by its content. The PDF header may sit
 /// anywhere in the first kilobyte, so that much is read, not the first five
 /// bytes.
+///
+/// Illustrator artwork has a PDF inside it too, but it is a picture, and is
+/// opened as one.
 pub fn is_pdf(path: &Path) -> bool {
+    if crate::images::decoders::illustrator::is_illustrator(path) {
+        return false;
+    }
     let mut head = [0u8; 1024];
     let Ok(mut file) = File::open(path) else {
         return false;

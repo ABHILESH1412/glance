@@ -80,6 +80,11 @@ impl Tool {
     pub fn freehand(self) -> bool {
         matches!(self, Tool::Pen | Tool::Highlighter)
     }
+
+    /// Shapes with an inside, which can be filled.
+    pub fn fillable(self) -> bool {
+        matches!(self, Tool::Rectangle | Tool::Ellipse)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +95,9 @@ pub struct Mark {
     pub points: Vec<(f64, f64)>,
     pub colour: gdk::RGBA,
     pub width: f64,
+    /// What a rectangle or ellipse is filled with, under its outline. None
+    /// for an outline only, and always for anything else.
+    pub fill: Option<gdk::RGBA>,
     /// When this was drawn, so marks and text stack in the order they were
     /// made rather than by which list they live in.
     pub sequence: u64,
@@ -109,6 +117,12 @@ impl Mark {
         } else {
             self.colour
         }
+    }
+
+    /// The fill that actually goes down: only a shape with an inside has one,
+    /// and a see-through one is none.
+    pub fn inside(&self) -> Option<gdk::RGBA> {
+        self.fill.filter(|fill| self.tool.fillable() && fill.alpha() > 0.0)
     }
 
     pub fn stroke(&self) -> gsk::Stroke {
@@ -317,6 +331,9 @@ impl Mark {
         let snapshot = gtk::Snapshot::new();
         snapshot.save();
         snapshot.translate(&graphene::Point::new(-x as f32, -y as f32));
+        if let Some(fill) = self.inside() {
+            snapshot.append_fill(&path, gsk::FillRule::Winding, &fill);
+        }
         snapshot.append_stroke(&path, &self.stroke(), &self.paint());
         snapshot.restore();
         snapshot.to_node()
@@ -374,6 +391,8 @@ impl Mark {
     pub fn is_at(&self, p: (f64, f64), slack: f64, inside: bool) -> bool {
         let strokes = self.strokes();
         let closed = matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Redact);
+        // A filled shape is picked up by its inside wherever it is.
+        let inside = inside || self.inside().is_some();
         shape::touches(&strokes, self.width, p, slack) || (inside && closed && shape::encloses(&strokes, p))
     }
 
@@ -421,6 +440,7 @@ mod tests {
             points: points.to_vec(),
             colour: gdk::RGBA::new(1.0, 0.0, 0.0, 1.0),
             width: 8.0,
+            fill: None,
             sequence: 0,
         }
     }
@@ -524,6 +544,19 @@ mod tests {
         let line = mark(Tool::Line, &[(0.0, 0.0), (100.0, 0.0)]);
         assert!(!line.is_at((50.0, 20.0), 1.0, true));
         assert!(line.is_at((50.0, 4.0), 1.0, true), "within half its width");
+    }
+
+    #[test]
+    fn only_a_shape_with_an_inside_is_filled() {
+        let red = gdk::RGBA::new(1.0, 0.0, 0.0, 1.0);
+        let filled = |tool| Mark { fill: Some(red), ..mark(tool, &[(0.0, 0.0), (40.0, 20.0)]) };
+        assert_eq!(filled(Tool::Rectangle).inside(), Some(red));
+        assert_eq!(filled(Tool::Ellipse).inside(), Some(red));
+        assert_eq!(filled(Tool::Arrow).inside(), None, "a line has no inside");
+        let clear = Mark { fill: Some(gdk::RGBA::new(1.0, 0.0, 0.0, 0.0)), ..mark(Tool::Rectangle, &[(0.0, 0.0), (40.0, 20.0)]) };
+        assert_eq!(clear.inside(), None, "see-through is no fill");
+        // Filled, it is picked up by its middle too.
+        assert!(filled(Tool::Rectangle).is_at((20.0, 10.0), 0.0, false));
     }
 
     /// A click that never moved is a dot with a pen and nothing with a shape.
@@ -675,6 +708,7 @@ mod icon {
             points,
             colour: gdk::RGBA::BLACK,
             width: if tool == Tool::Highlighter { (h - pad * 2.0).max(2.0) } else { 1.6 },
+            fill: None,
             sequence: 0,
         }
     }

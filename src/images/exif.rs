@@ -243,7 +243,7 @@ pub fn read(path: &Path) -> Option<Camera> {
             // Most raw files are TIFF underneath; the others rawler reads.
             head(path).and_then(|bytes| parse(&bytes)).filter(|camera| !camera.is_empty()).or_else(|| raw(path))
         }
-        Format::Svg => None,
+        Format::Svg | Format::Jpeg2000 | Format::Psd | Format::Icns | Format::Illustrator => None,
         Format::Raster => {
             let bytes = head(path)?;
             if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {

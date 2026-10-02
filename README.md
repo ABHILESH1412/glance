@@ -121,7 +121,8 @@ it, and a read-only file is left untouched.
   page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
   to move it
 - **Edit** (Ctrl+E), a panel of three sections: **Draw**, with the image editor's pen,
-  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, and
+  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, rectangles
+  and ellipses filled or not, and
   **Select**, to pick up any drawing on the page (made earlier, or by another program) and
   move it, resize it by its handles, recolour or thicken it, or delete it; **Text**,
   for text boxes in any font, size, colour and background, bold or italic — click one to
@@ -226,9 +227,9 @@ and shrinks to fit whichever is showing.
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock. Sizes in pixels, percent, inches or centimetres, and the resolution in pixels per inch — resampled to keep the printed size, or not, to keep every pixel and change only the print size. The resolution is read from the file and saved with it |
 | **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
 | **Levels** | The histogram, with handles for the black point, midtones and white point, per channel or all together, and **Auto Levels**, which also takes out a colour cast |
-| **Draw** | Pen, highlighter, line, arrow, rectangle, ellipse — with the buttons drawing their own shapes. **Select** picks a drawing up again: drag it to move it, drag a handle to resize it (Shift keeps the proportions), change its colour or thickness, or press Delete. Every change can be undone |
+| **Draw** | Pen, highlighter, line, arrow, rectangle, ellipse — with the buttons drawing their own shapes — in any colour and thickness, rectangles and ellipses filled or not. **Select** picks a drawing up again: drag it to move it, drag a handle to resize it (Shift keeps the proportions), change its colour or thickness, or press Delete. Every change can be undone |
 | **Text** | Font, size, colour, background, bold, italic, underline, dragged anywhere |
-| **Export** | Any format the picture can honestly become, with a quality dial — or a file size to aim for |
+| **Export** | PNG, JPEG, HEIC, WebP, TIFF, JPEG 2000, PSD, OpenEXR, TGA, BMP, GIF, ICO or ICNS, with a quality dial for JPEG, HEIC and JPEG 2000 — or a file size to aim for |
 
 That last one is the unusual bit: give it a number and it will compress *or* inflate the
 file to hit it, which is what people normally hand to a shady upload site to get done.
@@ -242,7 +243,9 @@ asks first too, with Save offered for edits.
 | Family | Formats |
 |---|---|
 | Raster | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, TGA, PNM |
-| Modern | HEIC / HEIF, AVIF |
+| Modern | HEIC / HEIF, AVIF, JPEG 2000 |
+| High dynamic range | OpenEXR, Radiance HDR — fitted into the screen's range when brighter than white |
+| Design | PSD and PSB (the picture as last saved), Illustrator AI (through the PDF inside it), ICNS |
 | Vector | SVG, SVGZ |
 | Camera raw | CR2, CR3, CRW, NEF, NRW, ARW, DNG, RAF, ORF, RW2, PEF, SRW, and 14 more |
 
@@ -337,7 +340,10 @@ AVIF, Poppler's GLib library and qpdf for PDFs, libsoup 3 for downloading Live T
 parts when first used, Rust 1.92 or newer, `make`, and glib's resource
 compiler, which the build uses to put the icons inside the binary. Drawing on PDFs needs Poppler 25.06,
 and text boxes in a chosen font 24.12; with an older Poppler, PDFs open and the rest works,
-and those two tools say what they need. Everything else is pure Rust and comes in through Cargo.
+and those two tools say what they need. Saving as HEIC needs libheif's HEVC encoder
+(the x265 plugin); without it, Export says so. OpenJPEG, for JPEG 2000, is built from
+source along with the program, so a C compiler is needed too. Everything else is pure
+Rust and comes in through Cargo.
 
 ```bash
 # Arch

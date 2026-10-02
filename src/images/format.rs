@@ -24,6 +24,14 @@ pub enum Format {
     Svg,
     /// Camera raw, via rawler.
     Raw,
+    /// JPEG 2000, via OpenJPEG.
+    Jpeg2000,
+    /// Photoshop documents.
+    Psd,
+    /// macOS icons.
+    Icns,
+    /// Illustrator artwork, through the PDF inside it.
+    Illustrator,
 }
 
 /// Raw extensions worth routing away from the TIFF decoder.
@@ -49,6 +57,18 @@ pub fn detect(path: &Path) -> Format {
 
     if let Some(avif) = heif_kind(&head) {
         return Format::Heif { avif };
+    }
+    if crate::images::decoders::jpeg2000::sniff(&head) {
+        return Format::Jpeg2000;
+    }
+    if crate::images::decoders::psd::sniff(&head) {
+        return Format::Psd;
+    }
+    if crate::images::decoders::icns::sniff(&head) {
+        return Format::Icns;
+    }
+    if crate::images::decoders::illustrator::is_illustrator(path) {
+        return Format::Illustrator;
     }
     // Checked before Raster so TIFF-based raw containers are not mistaken for
     // ordinary TIFFs.

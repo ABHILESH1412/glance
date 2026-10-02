@@ -87,11 +87,11 @@ pub struct Target {
 }
 
 impl Target {
-    /// Whether this format has a quality to choose. Only JPEG does here: the
-    /// others in the list are lossless, and this build writes WebP losslessly
-    /// too.
+    /// Whether this format has a quality to choose: JPEG, HEIC and JPEG
+    /// 2000. The others in the list are lossless, and this build writes WebP
+    /// losslessly too. For HEIC and JPEG 2000 the top of the dial is lossless.
     pub fn lossy(&self) -> bool {
-        matches!(self.extension, "jpg" | "jpeg")
+        matches!(self.extension, "jpg" | "jpeg" | "heic" | "jp2")
     }
 }
 
@@ -100,12 +100,21 @@ pub const TARGETS: &[Target] = &[
     Target { label: "PNG", extension: "png", max_dimension: None, caveat: None },
     Target { label: "JPEG", extension: "jpg", max_dimension: None,
              caveat: Some("no transparency") },
+    Target { label: "HEIC", extension: "heic", max_dimension: None, caveat: None },
     Target { label: "WebP", extension: "webp", max_dimension: None, caveat: None },
     Target { label: "TIFF", extension: "tiff", max_dimension: None, caveat: None },
+    Target { label: "JPEG 2000", extension: "jp2", max_dimension: None, caveat: None },
+    Target { label: "PSD (Photoshop)", extension: "psd", max_dimension: Some(30_000),
+             caveat: Some("one layer") },
+    Target { label: "OpenEXR", extension: "exr", max_dimension: None,
+             caveat: Some("stored as linear light, so the file is large") },
+    Target { label: "TGA", extension: "tga", max_dimension: None, caveat: None },
     Target { label: "BMP", extension: "bmp", max_dimension: None, caveat: None },
     Target { label: "GIF", extension: "gif", max_dimension: None,
              caveat: Some("256 colours, one frame") },
     Target { label: "ICO", extension: "ico", max_dimension: Some(256), caveat: None },
+    Target { label: "ICNS (macOS icon)", extension: "icns", max_dimension: None,
+             caveat: Some("square, every size up to 1024") },
 ];
 
 impl Target {
@@ -114,6 +123,9 @@ impl Target {
     /// Checked before the file dialog opens rather than after, so the refusal
     /// arrives while there is still something to do about it.
     pub fn refusal(&self, width: u32, height: u32) -> Option<String> {
+        if self.extension == "icns" {
+            return crate::images::decoders::icns::refusal(width, height);
+        }
         let limit = self.max_dimension?;
         (width > limit || height > limit).then(|| {
             format!(
@@ -148,26 +160,56 @@ pub fn write(
         .unwrap_or("png")
         .to_ascii_lowercase();
 
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    if matches!(extension.as_str(), "jpg" | "jpeg") {
-        // JPEG cannot carry transparency, so anything a freehand cut removed
-        // would otherwise come out black.
-        let rgb = flatten(image);
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality.unwrap_or(DEFAULT_QUALITY))
-            .encode_image(&rgb)
-            .map_err(|error| format!("Could not save: {error}"))?;
-    } else {
-        let format = image::ImageFormat::from_extension(&extension)
-            .ok_or_else(|| format!("Could not save: Glance cannot write .{extension} files."))?;
-        image
-            .write_to(&mut bytes, format)
-            .map_err(|error| format!("Could not save: {error}"))?;
-    }
-    let mut bytes = bytes.into_inner();
+    let mut bytes = encode(image, &extension, quality.unwrap_or(DEFAULT_QUALITY))?;
     if let Some(dpi) = dpi {
         bytes = crate::images::resolution::stamp(bytes, dpi);
     }
     std::fs::write(destination, bytes).map_err(|error| format!("Could not save: {error}"))
+}
+
+/// The picture as a file of the kind its extension names, in memory.
+/// `quality` is for the formats with a dial; the rest ignore it.
+pub fn encode(image: &DynamicImage, extension: &str, quality: u8) -> Result<Vec<u8>, String> {
+    use crate::images::decoders::{heif, icns, jpeg2000, psd};
+    let other = |image: &DynamicImage, format: image::ImageFormat| {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, format).map_err(|error| format!("Could not save: {error}"))?;
+        Ok::<_, String>(bytes.into_inner())
+    };
+    match extension {
+        "jpg" | "jpeg" => {
+            // JPEG cannot carry transparency, so anything a freehand cut
+            // removed would otherwise come out black.
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
+                .encode_image(&flatten(image))
+                .map_err(|error| format!("Could not save: {error}"))?;
+            Ok(bytes.into_inner())
+        }
+        "heic" | "heif" => heif::encode(image, quality),
+        "jp2" => jpeg2000::encode(image, quality),
+        "psd" => psd::encode(image),
+        "icns" => icns::encode(image),
+        // OpenEXR keeps light, not screen colours: the sRGB curve comes off.
+        "exr" => other(&DynamicImage::ImageRgba32F(linear(image)), image::ImageFormat::OpenExr),
+        _ => {
+            let format = image::ImageFormat::from_extension(extension)
+                .ok_or_else(|| format!("Could not save: Glance cannot write .{extension} files."))?;
+            other(image, format)
+        }
+    }
+}
+
+/// Screen colours as linear light, for OpenEXR.
+fn linear(image: &DynamicImage) -> image::Rgba32FImage {
+    let mut out = image.to_rgba32f();
+    for pixel in out.pixels_mut() {
+        for channel in &mut pixel.0[..3] {
+            let v = *channel;
+            *channel = if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+        }
+    }
+    out
 }
 
 pub(crate) fn flatten(image: &DynamicImage) -> image::RgbImage {
@@ -364,8 +406,8 @@ mod format_tests {
             let path = dir.join(format!("probe.{}", target.extension));
             let result = write(&sample(limit, limit), &path, Some(DEFAULT_QUALITY), Some(300.0));
             assert!(result.is_ok(), "{} failed: {:?}", target.label, result);
-            let written = image::open(&path).expect("what we wrote should read back");
-            assert_eq!((written.width(), written.height()), (limit, limit));
+            let written = open(&path).unwrap_or_else(|why| panic!("{} should read back: {why}", target.label));
+            assert_eq!((written.width(), written.height()), (limit, limit), "{}", target.label);
             if crate::images::resolution::can_store(target.extension) {
                 assert_eq!(crate::images::resolution::read(&path), Some(300.0), "{}", target.label);
             }

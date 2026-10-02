@@ -161,6 +161,8 @@ mod imp {
         /// would be a pen that draws nothing.
         pub draw_colour: RefCell<Option<gdk::RGBA>>,
         pub draw_width: Cell<f64>,
+        /// What new rectangles and ellipses are filled with; None for none.
+        pub draw_fill: Cell<Option<gdk::RGBA>>,
         /// The stroke being drawn right now, before the pointer is lifted.
         pub drawing: RefCell<Option<Mark>>,
         /// True while the Select tool is out: a press picks a mark up.
@@ -1134,6 +1136,12 @@ impl ImageCanvas {
         self.imp().draw_colour.replace(Some(colour));
     }
 
+    /// What new rectangles and ellipses are filled with. A see-through
+    /// colour is no fill.
+    pub fn set_draw_fill(&self, fill: gdk::RGBA) {
+        self.imp().draw_fill.set((fill.alpha() > 0.0).then_some(fill));
+    }
+
     pub fn set_draw_width(&self, width: f64) {
         self.imp().draw_width.set(width.max(1.0));
     }
@@ -1224,6 +1232,7 @@ impl ImageCanvas {
                 .borrow()
                 .unwrap_or_else(|| gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
             width: imp.draw_width.get(),
+            fill: if tool.fillable() { imp.draw_fill.get() } else { None },
             sequence: self.next_sequence(),
         }));
     }
@@ -1307,8 +1316,9 @@ impl ImageCanvas {
         }
     }
 
-    /// Give the picked mark another colour or thickness.
-    pub fn restyle_picked(&self, colour: Option<gdk::RGBA>, width: Option<f64>) {
+    /// Give the picked mark another colour, thickness or fill. A fill only
+    /// takes on a shape with an inside, and a see-through one is none.
+    pub fn restyle_picked(&self, colour: Option<gdk::RGBA>, width: Option<f64>, fill: Option<gdk::RGBA>) {
         let imp = self.imp();
         let Some(before) = self.picked_mark() else { return };
         let mut after = before.clone();
@@ -1318,7 +1328,10 @@ impl ImageCanvas {
         if let Some(width) = width {
             after.width = width.max(1.0);
         }
-        if after.colour == before.colour && (after.width - before.width).abs() < 1e-9 {
+        if let Some(fill) = fill.filter(|_| before.tool.fillable()) {
+            after.fill = (fill.alpha() > 0.0).then_some(fill);
+        }
+        if after.colour == before.colour && (after.width - before.width).abs() < 1e-9 && after.fill == before.fill {
             return;
         }
         // Stepping the width a point at a time is one change, not twenty.

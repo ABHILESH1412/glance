@@ -46,6 +46,10 @@ pub fn decode(path: &Path) -> Result<LoadedImage, String> {
         Format::Heif { avif } => decoders::heif::decode(path, avif),
         Format::Svg => decoders::svg::decode(path),
         Format::Raw => decoders::raw::decode(path),
+        Format::Jpeg2000 => decoders::jpeg2000::decode(path),
+        Format::Psd => decoders::psd::decode(path),
+        Format::Icns => decoders::icns::decode(path),
+        Format::Illustrator => decoders::illustrator::decode(path),
     }
 }
 

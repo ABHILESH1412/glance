@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 40 / 64 | 6 |
+| Images | 52 / 64 | 5 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **60 / 122** | **9** |
+| **Total** | **72 / 122** | **8** |
 
 ---
 
@@ -67,7 +67,7 @@ annotations, so every PDF reader shows them.
 - [x] Line, arrow, rectangle, ellipse
 - [ ] More shapes: star, polygon, rounded rectangle, speech bubble — *partial:* speech bubbles, on PDFs
 - [x] Stroke thickness and colour
-- [ ] Fill colour for shapes — *partial:* shapes are outlines only
+- [x] Fill colour for shapes — rectangles and ellipses, on pictures and PDFs; on a PDF they are saved as its own square and circle annotations, so other readers fill them too
 - [x] Text boxes with font, size and colour
 - [x] Text background colour, bold, italic, underline — underline on images only; a PDF text box has none
 - [x] Select, move and resize a shape after drawing it — the Select tool picks a drawing up to move by its body, resize by its handles (Shift keeps the proportions), recolour, thicken or delete; on a PDF that includes drawings made earlier or by another program. Text can be dragged but not resized
@@ -88,22 +88,22 @@ annotations, so every PDF reader shows them.
 
 - [x] JPEG, PNG, GIF, TIFF, BMP, ICO, HEIC/HEIF
 - [x] Camera raw (DNG, CR2, NEF, ARW and more)
-- [ ] JPEG 2000
-- [ ] PSD (Photoshop)
-- [ ] OpenEXR and Radiance HDR
-- [ ] ICNS (macOS icons)
-- [ ] AI (Illustrator) — these are PDFs inside, so they come free with PDF support
+- [x] JPEG 2000 — `.jp2` files and bare `.j2k` codestreams
+- [x] PSD (Photoshop) — the picture as last saved, all layers together; large PSB documents too
+- [x] OpenEXR and Radiance HDR — brought into the screen's range when brighter than white
+- [x] ICNS (macOS icons) — the largest size inside
+- [x] AI (Illustrator) — through the PDF inside it; files from before Illustrator 9 say why they cannot be shown
 - [x] PDF — see section 6
 
 ### Export
 
 - [x] PNG, JPEG, TIFF, BMP, GIF, ICO
-- [ ] HEIC
-- [ ] JPEG 2000
-- [ ] OpenEXR
-- [ ] PSD
-- [ ] TGA
-- [ ] ICNS
+- [x] HEIC — needs libheif's HEVC encoder (x265); says so when it is missing
+- [x] JPEG 2000 — with the quality dial; 100 is lossless
+- [x] OpenEXR — linear light, 32-bit floating point
+- [x] PSD — one layer, with transparency
+- [x] TGA
+- [x] ICNS — square pictures, every size from 16 up to 1024
 - [x] PDF (save an image as a PDF) — with Combine into PDF, on A4, Letter or the picture's own size
 
 ---
