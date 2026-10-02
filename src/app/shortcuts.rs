@@ -75,6 +75,20 @@ pub const PAGES: &[Page] = &[
                     key("Leave fullscreen, or close a panel", "Escape"),
                 ],
             },
+            Group {
+                title: "Combining into a PDF",
+                shortcuts: &[
+                    local("Add files", "<Primary>o"),
+                    local("Turn the selected pages", "bracketleft bracketright"),
+                    local("Take out the selected pages", "Delete"),
+                    local("Move the selected pages along", "<Primary>Left <Primary>Right"),
+                    local("Look at a page across the window", "Return"),
+                    local("Back to all the pages", "Escape"),
+                    local("Undo", "<Primary>z"),
+                    local("Redo", "<Primary><Shift>z <Primary>y"),
+                    local("Save as PDF", "<Primary>s"),
+                ],
+            },
         ],
     },
     Page {

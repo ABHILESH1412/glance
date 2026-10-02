@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 26 / 64 | 9 |
-| PDF | 15 / 28 | 1 |
+| Images | 27 / 64 | 9 |
+| PDF | 18 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **44 / 122** | **11** |
+| **Total** | **48 / 122** | **11** |
 
 ---
 
@@ -104,7 +104,7 @@ annotations, so every PDF reader shows them.
 - [ ] PSD
 - [ ] TGA
 - [ ] ICNS
-- [ ] PDF (save an image as a PDF)
+- [x] PDF (save an image as a PDF) — with Combine into PDF, on A4, Letter or the picture's own size
 
 ---
 
@@ -136,10 +136,10 @@ annotations, so every PDF reader shows them.
 
 ## 9. PDF — pages
 
-- [ ] Combine several PDFs into one
-- [ ] Add, delete and reorder pages
-- [ ] Insert a blank page, or pages from another file
-- [ ] Rotate pages — *partial:* the view turns a quarter at a time; the file is not changed
+- [x] Combine several PDFs into one — and pictures, in any order, with only the pages wanted
+- [x] Add, delete and reorder pages — in Combine into PDF, saved as a new file
+- [ ] Insert a blank page, or pages from another file — *partial:* pages from other files and pictures, but no blank page yet
+- [x] Rotate pages — in Combine into PDF, page by page, saved as a new file; the reader's turning is for the view only
 - [ ] Crop pages
 - [ ] Apply effects to a whole document (black and white, sepia, lighter/darker)
 
@@ -237,8 +237,8 @@ Roughly in order of value for effort:
 2. **EXIF panel** (section 1) — small, and people expect it.
 3. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
    drawn once and placed anywhere, building on the pen the Draw panel already has.
-4. **PDF pages** (section 9) — combining, reordering and deleting pages; the sidebar's
-   Pages tab is the natural place to drag them around.
+4. **The rest of PDF pages** (section 9) — a blank page, cropping, and effects over a
+   whole document, all at home in Combine into PDF.
 5. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
 6. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.

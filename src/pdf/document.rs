@@ -48,13 +48,15 @@ pub struct Allowed {
     pub copy: bool,
     pub annotate: bool,
     pub print: bool,
+    /// Its pages may be taken out and put together with others.
+    pub assemble: bool,
     /// Nothing is held back, so its protection may be changed.
     pub everything: bool,
 }
 
 impl Default for Allowed {
     fn default() -> Self {
-        Allowed { copy: true, annotate: true, print: true, everything: true }
+        Allowed { copy: true, annotate: true, print: true, assemble: true, everything: true }
     }
 }
 
@@ -75,6 +77,7 @@ impl Allowed {
             copy: granted.contains(P::OK_TO_COPY),
             annotate: granted.contains(P::OK_TO_ADD_NOTES),
             print: granted.contains(P::OK_TO_PRINT),
+            assemble: granted.contains(P::OK_TO_ASSEMBLE) || granted.contains(P::OK_TO_MODIFY),
             everything: granted.contains(all),
         }
     }

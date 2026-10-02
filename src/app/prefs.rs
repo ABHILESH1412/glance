@@ -11,7 +11,7 @@
 
 use gtk::glib;
 
-use crate::pdf::{Mode, Rgb, SidebarView};
+use crate::pdf::{Mode, Paper, Rgb, SidebarView};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reader {
@@ -19,6 +19,8 @@ pub struct Reader {
     pub night: bool,
     pub mode: Mode,
     pub sidebar: SidebarView,
+    /// The paper pictures go on when combined into a PDF, once chosen.
+    pub paper: Option<Paper>,
 }
 
 impl Default for Reader {
@@ -28,6 +30,7 @@ impl Default for Reader {
             night: false,
             mode: Mode::Continuous,
             sidebar: SidebarView::Pages,
+            paper: None,
         }
     }
 }
@@ -68,6 +71,7 @@ impl Reader {
                 "night" => reader.night = value == "true",
                 "layout" => reader.mode = mode_from(value).unwrap_or(reader.mode),
                 "sidebar" => reader.sidebar = SidebarView::from_name(value).unwrap_or(reader.sidebar),
+                "paper" => reader.paper = Paper::from_name(value).or(reader.paper),
                 _ => {}
             }
         }
@@ -76,11 +80,12 @@ impl Reader {
 
     fn text(&self) -> String {
         format!(
-            "highlight={}\nnight={}\nlayout={}\nsidebar={}\n",
+            "highlight={}\nnight={}\nlayout={}\nsidebar={}\n{}",
             self.highlight.hex(),
             self.night,
             mode_name(self.mode),
-            self.sidebar.name()
+            self.sidebar.name(),
+            self.paper.map(|p| format!("paper={}\n", p.name())).unwrap_or_default()
         )
     }
 
@@ -104,6 +109,7 @@ mod tests {
             night: true,
             mode: Mode::Double,
             sidebar: SidebarView::Contents,
+            paper: Some(Paper::Letter),
         };
         assert_eq!(Reader::parse(&reader.text()), reader);
     }

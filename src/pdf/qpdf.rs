@@ -120,6 +120,8 @@ extern "C" {
     fn qpdf_oh_new_real_from_double(qpdf: Data, value: f64, decimal_places: c_int) -> Handle;
     fn qpdf_make_indirect_object(qpdf: Data, oh: Handle) -> Handle;
     fn qpdf_get_root(qpdf: Data) -> Handle;
+    fn qpdf_empty_pdf(qpdf: Data) -> ErrorCode;
+    fn qpdf_add_page(qpdf: Data, from: Data, page: Handle, first: Bool) -> ErrorCode;
 }
 
 /// Why qpdf could not do something.
@@ -192,6 +194,36 @@ impl Qpdf {
         let code = unsafe { qpdf_read(qpdf.data, filename.as_ptr(), password.as_ptr()) };
         qpdf.check(code)?;
         Ok(qpdf)
+    }
+
+    /// A new document with no pages, to add pages to.
+    pub fn empty() -> Result<Self, Error> {
+        // SAFETY: a fresh handle, freed in Drop.
+        let qpdf = unsafe {
+            let data = qpdf_init();
+            qpdf_silence_errors(data);
+            qpdf_set_suppress_warnings(data, 1);
+            Qpdf { data }
+        };
+        let code = unsafe { qpdf_empty_pdf(qpdf.data) };
+        qpdf.check(code)?;
+        Ok(qpdf)
+    }
+
+    /// Add `page` of `from` — which may be this same document — as the last
+    /// page, and return it as it is here. A page from another document is
+    /// copied, with all it uses; `from` has to stay open until this one has
+    /// been written, as the copy's data is only read then.
+    pub fn add_page(&self, from: &Qpdf, page: Object) -> Result<Object, Error> {
+        // SAFETY: both handles are live, and the page belongs to `from`.
+        let code = unsafe { qpdf_add_page(self.data, from.data, page.0, 0) };
+        self.check(code)?;
+        // SAFETY: a live handle; the count includes the page just added.
+        unsafe {
+            let count = qpdf_get_num_pages(self.data);
+            let last = usize::try_from(count - 1).map_err(|_| Error::Other("the page was not added".into()))?;
+            Ok(Object(qpdf_get_page_n(self.data, last)))
+        }
     }
 
     /// What the permissions allow — as written in the file, whichever

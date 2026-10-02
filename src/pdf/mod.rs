@@ -13,6 +13,7 @@
 //! and text tools in `images::edit` are the obvious ones for annotating a page.
 
 mod annots;
+mod combine;
 mod bookmark_list;
 mod bookmarks;
 mod contents;
@@ -26,6 +27,7 @@ mod newer;
 mod notes;
 mod outline;
 mod page;
+mod pages;
 mod qpdf;
 mod redact;
 mod render;
@@ -43,6 +45,8 @@ pub use markup::Style;
 pub use notes::TextStyle;
 pub use qpdf::{Permissions, Protection};
 pub use redact::redact;
+pub use combine::{combine, parse_pages, Leaf, Origin, Paper};
+pub use pages::PageImages;
 pub use rewrite::{
     install, keep_as, opens_with, permissions as current_permissions, protect, shrink, temporary_beside, Level,
     Report,

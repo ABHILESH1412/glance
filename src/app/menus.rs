@@ -128,6 +128,7 @@ pub fn image_menu() -> gio::Menu {
             item("_Save", "win.save"),
             item("_Export…", "win.export"),
             item("_Print…", "win.print"),
+            item("Com_bine into PDF…", "win.combine"),
         ]),
     );
     menu.append_section(None, &section(&[item("_Copy Image", "win.copy"), item("_Delete Image…", "win.delete")]));
@@ -190,6 +191,7 @@ pub fn pdf_menu() -> gio::Menu {
         None,
         &section(&[
             item("_Print…", "win.print"),
+            item("Com_bine into PDF…", "win.combine"),
             item("_Password and Permissions…", "win.protect"),
             item("_Reduce File Size…", "win.reduce-size"),
         ]),

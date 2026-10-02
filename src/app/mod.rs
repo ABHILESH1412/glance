@@ -9,6 +9,7 @@
 //! model will be handed to its own module instead.
 
 pub mod colour;
+pub mod combine;
 pub mod doc_info;
 pub mod filmstrip;
 pub mod locked;

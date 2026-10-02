@@ -122,6 +122,29 @@ it, and a read-only file is left untouched.
 Both save over the file or as a copy beside it, and Glance reopens the document at the
 page you were on.
 
+## Combine into PDF
+
+Pages from any number of PDFs and pictures, put together as one new PDF. Start it from
+the window Glance opens with, from **Combine into PDF…** in the menu (with what is open
+already in), or by opening or dropping several files at once.
+
+- **Add files** with the button, Ctrl+O, or by dropping them in — between two pages to
+  put them there. A PDF of more than one page asks which pages to take: all of them, or
+  a list such as `2-5, 9`. A protected PDF asks for its password.
+- **Every page in a grid**, with its number, the file it came from, and a stripe in that
+  file's colour, so after any amount of shuffling it is still plain where a page came
+  from. A slider sets how big the pages are drawn.
+- **Arrange**: drag pages into order. Click to pick a page, Ctrl+click to pick more,
+  Shift+click for a run; then drag them together, turn them with [ and ], or take them
+  out with Delete. Ctrl+← and Ctrl+→ move them along. Pointing at a page shows buttons to
+  turn it either way or take it out. Everything can be undone.
+- **Look at a page** across the whole window with a double-click or Enter; the arrow keys
+  step through, and Escape goes back to the grid where you were.
+- **Save as PDF…** writes a new file — the files the pages came from are never changed.
+  PDF pages are copied as they are, text, links and notes included. Pictures go on A4,
+  Letter, or a page their own size: Glance asks which, and remembers the answer for next
+  time. A JPEG goes in exactly as it was, not compressed again.
+
 ## Redacting
 
 A black box drawn over a document hides nothing. The words under it are still in the

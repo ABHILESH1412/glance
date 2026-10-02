@@ -31,11 +31,26 @@ impl ImageView {
         open_button.add_css_class("pill");
         open_button.add_css_class("suggested-action");
 
+        let combine_button = gtk::Button::builder()
+            .label("Combine into PDF…")
+            .halign(gtk::Align::Center)
+            .action_name("win.combine")
+            .tooltip_text("Put pages from PDFs and pictures together as one PDF")
+            .build();
+        combine_button.add_css_class("pill");
+        // The same width, one above the other.
+        open_button.set_halign(gtk::Align::Fill);
+        combine_button.set_halign(gtk::Align::Fill);
+        let choices = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        choices.set_halign(gtk::Align::Center);
+        choices.set_homogeneous(true);
+        choices.append(&open_button);
+        choices.append(&combine_button);
         let empty = adw::StatusPage::builder()
             .icon_name("image-x-generic-symbolic")
             .title("Nothing Open")
-            .description("Drop an image or a PDF here, or open one to start viewing.")
-            .child(&open_button)
+            .description("Drop an image or a PDF here, or open one to start viewing. Or put pages from several together as one PDF.")
+            .child(&choices)
             .build();
 
         // GTK's spinner rather than libadwaita's, which would otherwise be the

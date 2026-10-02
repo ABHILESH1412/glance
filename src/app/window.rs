@@ -86,6 +86,10 @@ mod imp {
         pub showing_pdf: Cell<bool>,
         /// Asks for a protected PDF's password.
         pub locked: crate::app::locked::LockedPage,
+        /// The window's two faces: viewing, and combining pages into a PDF.
+        pub faces: gtk::Stack,
+        pub combine: crate::app::combine::Combine,
+        pub combining: Cell<bool>,
         /// Says how many areas are marked for redaction, and applies them.
         pub redaction_banner: adw::Banner,
         /// A picture's redactions are in its working pixels, not yet saved.
@@ -227,6 +231,9 @@ mod imp {
                 showing_pdf: Cell::new(false),
                 locked: crate::app::locked::LockedPage::new(),
                 password: RefCell::default(),
+                faces: gtk::Stack::new(),
+                combine: crate::app::combine::Combine::new(),
+                combining: Cell::new(false),
                 redaction_banner: adw::Banner::new(""),
                 redactions_baked: Cell::new(false),
                 reopen_at: Cell::new(None),
@@ -565,7 +572,21 @@ impl Window {
         toolbar.add_top_bar(banner);
         toolbar.set_content(Some(&imp.toasts));
         toolbar.add_bottom_bar(&imp.strip);
-        self.set_content(Some(toolbar));
+        imp.faces.add_named(toolbar, Some("view"));
+        imp.faces.add_named(imp.combine.widget(), Some("combine"));
+        imp.faces.set_transition_type(gtk::StackTransitionType::Crossfade);
+        self.set_content(Some(&imp.faces));
+        let paper = imp.reader_prefs.get().paper;
+        imp.combine.set_paper(paper, glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |paper| window.update_prefs(|prefs| prefs.paper = Some(paper))
+        ));
+        imp.combine.connect_close(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |open| window.stop_combining(open)
+        ));
 
         // Focus moving into or out of a text box changes which keys are free;
         // `refresh_accels` says why.
@@ -728,19 +749,16 @@ impl Window {
             false,
             move |_, value, _, _| {
                 window.remove_css_class("drop-active");
-                // Dropping several files opens the first; this viewer shows one
-                // image at a time.
-                let file = match value.get::<gdk::FileList>() {
-                    Ok(list) => list.files().into_iter().next(),
-                    Err(_) => value.get::<gio::File>().ok(),
+                let files = match value.get::<gdk::FileList>() {
+                    Ok(list) => list.files(),
+                    Err(_) => value.get::<gio::File>().ok().into_iter().collect(),
                 };
-                match file {
-                    Some(file) => {
-                        window.open_file(&file);
-                        true
-                    }
-                    None => false,
+                if files.is_empty() {
+                    return false;
                 }
+                // Several files: open the first, or combine them all.
+                window.open_files(files);
+                true
             }
         ));
 
@@ -2172,6 +2190,20 @@ impl Window {
         ));
         self.add_action(&reduce);
 
+        // Combine into PDF, starting with whatever is open.
+        let combine = gio::SimpleAction::new("combine", None);
+        combine.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                let current = imp.current.borrow().clone();
+                let password = imp.showing_pdf.get().then(|| imp.pdf_view.password()).flatten();
+                window.start_combining(current.map(|path| (path, password)).into_iter().collect());
+            }
+        ));
+        self.add_action(&combine);
+
         let print = gio::SimpleAction::new("print", None);
         print.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -2263,6 +2295,69 @@ impl Window {
                 }
             }
         ));
+    }
+
+    /// Open what was handed over: one file, or for several, ask whether to
+    /// open the first or combine them all into a PDF. While combining, they
+    /// are added to it.
+    pub fn open_files(&self, files: Vec<gio::File>) {
+        let imp = self.imp();
+        let paths: Vec<std::path::PathBuf> = files.iter().filter_map(|f| f.path()).collect();
+        if imp.combining.get() {
+            imp.combine.add_files(paths);
+            return;
+        }
+        match files.as_slice() {
+            [] => {}
+            [one] => self.open_file(one),
+            [first, ..] => {
+                let first = first.clone();
+                let count = files.len();
+                let dialog = adw::AlertDialog::new(
+                    Some(&format!("Open {count} Files")),
+                    Some("Look at the first of them, or put them all together as one PDF?"),
+                );
+                dialog.add_responses(&[("open", "_Open the First"), ("combine", "_Combine into PDF")]);
+                dialog.set_response_appearance("combine", adw::ResponseAppearance::Suggested);
+                dialog.set_default_response(Some("combine"));
+                dialog.set_close_response("open");
+                dialog.connect_response(None, glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_, response| {
+                        if response == "combine" {
+                            window.start_combining(paths.iter().map(|p| (p.clone(), None)).collect());
+                        } else {
+                            window.open_file(&first);
+                        }
+                    }
+                ));
+                dialog.present(Some(self));
+            }
+        }
+    }
+
+    /// Turn the window over to combining pages, starting with these files.
+    pub(crate) fn start_combining(&self, files: Vec<(std::path::PathBuf, Option<String>)>) {
+        let imp = self.imp();
+        if imp.combining.replace(true) {
+            imp.combine.add_files(files.into_iter().map(|(p, _)| p).collect());
+            return;
+        }
+        imp.faces.set_visible_child_name("combine");
+        imp.combine.start(files);
+        self.refresh_accels();
+    }
+
+    /// Back to viewing, opening the PDF just made if asked to.
+    fn stop_combining(&self, open: Option<std::path::PathBuf>) {
+        let imp = self.imp();
+        imp.combining.set(false);
+        imp.faces.set_visible_child_name("view");
+        self.refresh_accels();
+        if let Some(path) = open {
+            self.load(path, true);
+        }
     }
 
     /// Put the row of view buttons into the main menu. Setting a menu makes
@@ -2666,7 +2761,8 @@ impl Window {
         let typing = gtk::prelude::GtkWindowExt::focus(self)
             .is_some_and(|widget| widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>());
         if let Some(app) = self.application().and_downcast::<adw::Application>() {
-            crate::apply_accels(&app, typing, self.imp().showing_pdf.get());
+            let imp = self.imp();
+            crate::apply_accels(&app, typing, imp.showing_pdf.get(), imp.combining.get());
         }
     }
 }

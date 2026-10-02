@@ -76,6 +76,11 @@ fn load_css() {
         "
         .drop-active { box-shadow: inset 0 0 0 4px @accent_bg_color; }
         .filmstrip-slot { padding: 2px; }
+        /* Combine into PDF: where dragged pages or dropped files will land. */
+        flowboxchild.combine-page { padding: 6px; border-radius: 10px; }
+        flowboxchild.combine-page.picked { background: alpha(@accent_bg_color, 0.28); }
+        flowboxchild.combine-page.drop-before { box-shadow: inset 4px 0 0 @accent_bg_color; }
+        flowboxchild.combine-page.drop-after { box-shadow: inset -4px 0 0 @accent_bg_color; }
         .filmstrip-current {
             outline: 2px solid @accent_bg_color;
             outline-offset: -2px;
@@ -277,11 +282,16 @@ pub(crate) fn bound_keys(pdf: bool) -> Vec<&'static str> {
     ACCELS.iter().flat_map(|accel| keys_for(accel, false, pdf).iter().copied()).collect()
 }
 
+/// Actions that keep their keys while pages are being combined, which has
+/// keys of its own for everything else.
+const COMBINING_KEYS: &[&str] = &["win.close", "app.quit", "win.show-shortcuts"];
+
 /// Swap the whole set over when focus moves into or out of a text box, or
-/// between an image and a PDF.
-pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool) {
+/// between an image and a PDF, or into combining pages.
+pub fn apply_accels(app: &adw::Application, typing: bool, pdf: bool, combining: bool) {
     for accel in ACCELS {
-        app.set_accels_for_action(accel.action, keys_for(accel, typing, pdf));
+        let keys = if combining && !COMBINING_KEYS.contains(&accel.action) { &[] } else { keys_for(accel, typing, pdf) };
+        app.set_accels_for_action(accel.action, keys);
     }
 }
 
@@ -313,7 +323,7 @@ fn main() -> glib::ExitCode {
 
         load_css();
 
-        apply_accels(app, false, false);
+        apply_accels(app, false, false, false);
     });
 
     app.connect_activate(|app| {
@@ -322,10 +332,9 @@ fn main() -> glib::ExitCode {
 
     app.connect_open(|app, files, _hint| {
         let window = Window::new(app);
-        if let Some(file) = files.first() {
-            window.open_file(file);
-        }
         window.present();
+        // Several at once: open the first, or put them all into one PDF.
+        window.open_files(files.to_vec());
     });
 
     app.run()
