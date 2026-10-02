@@ -48,6 +48,7 @@ impl Window {
         right.add_css_class("flat");
 
         let slider = &imp.rotation_scale;
+        crate::images::edit::panel::wheel_scrolls_panel(slider);
         slider.set_hexpand(true);
         slider.set_draw_value(false);
         // The angle runs either side of zero, so a bar filling from the far
@@ -61,6 +62,7 @@ impl Window {
         }
 
         let spin = &imp.rotation_spin;
+        crate::images::edit::panel::wheel_scrolls_panel(spin);
         // Fixed width, otherwise the slider shuffles sideways as digits appear.
         spin.set_width_chars(5);
         spin.set_max_width_chars(6);

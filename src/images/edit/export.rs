@@ -27,7 +27,9 @@ use crate::images::loader;
 /// space, which is the frame their positions were recorded in, and before the
 /// crop, so a cut through a caption or an arrow cuts it exactly as it looked. Tone comes
 /// last because it is per-pixel and commutes with all of it, so it may as well
-/// run on the fewest pixels.
+/// run on the fewest pixels. Sharpening is the one part that looks at
+/// neighbours, and it too goes last: it is about the pixels as they will be
+/// saved, and done before a resize it would only be blurred away again.
 pub fn apply(
     mut image: DynamicImage,
     live: LiveEdits,

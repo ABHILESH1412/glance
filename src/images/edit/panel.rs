@@ -10,7 +10,7 @@
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
-use crate::images::edit::adjust::{self, Adjustments};
+use crate::images::edit::adjust;
 use crate::images::edit::compress;
 use crate::images::edit::draw;
 use crate::images::edit::export;
@@ -56,10 +56,46 @@ pub(crate) fn tone_scale() -> gtk::Scale {
     scale.set_value_pos(gtk::PositionType::Right);
     scale.set_digits(0);
     scale.add_mark(0.0, gtk::PositionType::Bottom, None);
+    // The middle is "untouched", so a bar filling from the far left would
+    // read as though something had been done.
+    scale.set_has_origin(false);
+    scale.add_css_class("tone");
+    wheel_scrolls_panel(&scale);
     // A range starting at its minimum would show -100 on a picture nothing had
     // been done to.
     scale.set_value(0.0);
     scale
+}
+
+/// Let the mouse wheel scroll the panel past `widget` rather than change it.
+///
+/// A slider or number box takes the wheel for itself, so scrolling down a
+/// panel of them nudges whichever one passes under the pointer: a photo's
+/// highlights changed by reading the list. Dragging, clicking and the keys
+/// still change it.
+pub(crate) fn wheel_scrolls_panel(widget: &impl IsA<gtk::Widget>) {
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let weak = widget.as_ref().downgrade();
+    scroll.connect_scroll(move |controller, _, dy| {
+        let Some(scroller) = weak
+            .upgrade()
+            .and_then(|widget| widget.ancestor(gtk::ScrolledWindow::static_type()))
+            .and_downcast::<gtk::ScrolledWindow>()
+        else {
+            return glib::Propagation::Proceed;
+        };
+        let adjustment = scroller.vadjustment();
+        // A wheel's notch moves as far as GTK's own scrolling would; a
+        // touchpad's movement is already in pixels.
+        let step = match controller.unit() {
+            gdk::ScrollUnit::Wheel => adjustment.page_size().powf(2.0 / 3.0),
+            _ => 1.0,
+        };
+        adjustment.set_value(adjustment.value() + dy * step);
+        glib::Propagation::Stop
+    });
+    widget.add_controller(scroll);
 }
 
 impl Window {
@@ -313,54 +349,8 @@ impl Window {
         sizes.append(&size_actions);
         tools.append(sizes);
 
-        // -- tone --
-        let tone = &imp.adjust_toggle;
-        tone.set_tooltip_text(Some("Brightness, contrast and saturation"));
-        tone.connect_toggled(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |button| {
-                if button.is_active() {
-                    window.close_other_sections(button);
-                }
-                window.imp().adjust_options.set_visible(button.is_active());
-            }
-        ));
-        tools.append(tone);
-
-        let tones = &imp.adjust_options;
-        tones.set_visible(false);
-        for (label, scale) in [
-            ("Brightness", &imp.brightness_scale),
-            ("Contrast", &imp.contrast_scale),
-            ("Saturation", &imp.saturation_scale),
-        ] {
-            let caption = gtk::Label::new(Some(label));
-            caption.add_css_class("dim-label");
-            caption.set_xalign(0.0);
-            caption.set_margin_top(4);
-            tones.append(&caption);
-            scale.connect_value_changed(glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |_| window.tone_changed()
-            ));
-            tones.append(scale);
-        }
-
-        let tone_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        tone_actions.set_homogeneous(true);
-        tone_actions.set_margin_top(4);
-        let tone_reset = gtk::Button::with_label("Reset");
-        tone_reset.set_action_name(Some("win.adjust-reset"));
-        let tone_apply = gtk::Button::with_label("Apply");
-        tone_apply.add_css_class("suggested-action");
-        tone_apply.set_tooltip_text(Some("Fix these values into the image, so they can be undone as a step"));
-        tone_apply.set_action_name(Some("win.adjust-apply"));
-        tone_actions.append(&tone_reset);
-        tone_actions.append(&tone_apply);
-        tones.append(&tone_actions);
-        tools.append(tones);
+        // -- tone, and levels --
+        self.build_tone_sections(&tools);
 
         // -- drawing --
         let pens = &imp.draw_toggle;
@@ -710,6 +700,7 @@ impl Window {
         let quality_caption = gtk::Label::new(Some("Quality"));
         quality_caption.add_css_class("dim-label");
         let quality = &imp.quality_scale;
+        wheel_scrolls_panel(quality);
         quality.set_draw_value(true);
         quality.set_value_pos(gtk::PositionType::Right);
         quality.set_digits(0);
@@ -866,13 +857,14 @@ impl Window {
 
     /// One tool at a time. Five sections open at once made a sidebar taller
     /// than the window, and you can only use one of them anyway.
-    fn close_other_sections(&self, keep: &gtk::ToggleButton) {
+    pub(crate) fn close_other_sections(&self, keep: &gtk::ToggleButton) {
         let imp = self.imp();
         for section in [
             &imp.transform_toggle,
             &imp.crop_toggle,
             &imp.resize_toggle,
             &imp.adjust_toggle,
+            &imp.levels_toggle,
             &imp.draw_toggle,
             &imp.text_toggle,
             &imp.redact_toggle,
@@ -1125,43 +1117,6 @@ impl Window {
     fn update_resize_actions(&self) {
         let pending = self.imp().view.canvas().has_resize();
         for name in ["resize-reset", "resize-apply"] {
-            if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
-                action.set_enabled(pending);
-            }
-        }
-    }
-
-    /// A slider moved: push the three values at the canvas, which shows them
-    /// without touching a pixel of the image.
-    fn tone_changed(&self) {
-        let imp = self.imp();
-        if imp.syncing_panel.get() {
-            return;
-        }
-        imp.view.canvas().set_adjustments(Adjustments {
-            brightness: imp.brightness_scale.value(),
-            contrast: imp.contrast_scale.value(),
-            saturation: imp.saturation_scale.value(),
-        });
-        self.update_tone_actions();
-    }
-
-    /// Put the canvas's values back into the sliders, after something baked
-    /// them into the pixels and reset them.
-    pub(crate) fn sync_tone_panel(&self) {
-        let imp = self.imp();
-        let adjust = imp.view.canvas().adjustments();
-        imp.syncing_panel.set(true);
-        imp.brightness_scale.set_value(adjust.brightness);
-        imp.contrast_scale.set_value(adjust.contrast);
-        imp.saturation_scale.set_value(adjust.saturation);
-        imp.syncing_panel.set(false);
-        self.update_tone_actions();
-    }
-
-    fn update_tone_actions(&self) {
-        let pending = !self.imp().view.canvas().adjustments().is_identity();
-        for name in ["adjust-reset", "adjust-apply"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(pending);
             }

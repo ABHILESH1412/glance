@@ -81,6 +81,13 @@ fn load_css() {
         flowboxchild.combine-page.picked { background: alpha(@accent_bg_color, 0.28); }
         flowboxchild.combine-page.drop-before { box-shadow: inset 4px 0 0 @accent_bg_color; }
         flowboxchild.combine-page.drop-after { box-shadow: inset -4px 0 0 @accent_bg_color; }
+        /* The white balance sliders show where they lead, with no fill from
+           the left: their middle is the untouched picture. */
+        scale.temperature trough { background-image: linear-gradient(to right, #5b9bd5, #a0a0a0, #e9a23b); }
+        scale.tint trough { background-image: linear-gradient(to right, #57b05c, #a0a0a0, #c357c9); }
+        scale.temperature trough highlight, scale.tint trough highlight { background: transparent; }
+        /* The edit panel's tone sliders line up, whatever their numbers. */
+        scale.tone value { min-width: 2.6em; }
         .filmstrip-current {
             outline: 2px solid @accent_bg_color;
             outline-offset: -2px;

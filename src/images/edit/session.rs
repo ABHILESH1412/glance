@@ -108,6 +108,9 @@ impl Window {
                     Ok(Ok(image)) => {
                         window.imp().working.replace(Some(image));
                         window.imp().crop_toggle.set_sensitive(true);
+                        // Anything asked of the tone thread before the pixels
+                        // were ready can be answered now.
+                        window.refresh_tone();
                     }
                     _ => window.toast("This image cannot be edited."),
                 }
@@ -123,6 +126,7 @@ impl Window {
         imp.redo.borrow_mut().clear();
         imp.dirty.set(false);
         imp.redactions_baked.set(false);
+        self.stop_tone_worker();
         // Zero the canvas and the sliders together rather than relying on
         // whatever replaces the texture next: a slider still reading -50 over
         // an untouched picture is a lie the next session would inherit.
@@ -168,6 +172,8 @@ impl Window {
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
         let texture = canvas::texture_from(width, height, false, rgba.into_raw());
+        // The tone thread was working from the pixels being replaced.
+        self.stop_tone_worker();
         // Resets zoom, rotation and flips, which is right: they are now baked
         // into these pixels.
         // Resets zoom, rotation, flips and tone, which is right: they are now
@@ -186,6 +192,8 @@ impl Window {
         self.sync_draw_tool();
         imp.title
             .set_subtitle(&format!("Edited · {width} × {height}"));
+        // Levels, if open, needs the new picture's histogram.
+        self.refresh_tone();
     }
 
     fn push_history(&self, previous: image::DynamicImage) {

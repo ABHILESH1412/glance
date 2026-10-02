@@ -17,7 +17,6 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, gio, glib};
 
-use crate::images::edit::adjust::Adjustments;
 use crate::images::view::ImageView;
 use crate::app::filmstrip::{self, FilmStrip};
 use crate::app::menus;
@@ -149,6 +148,28 @@ mod imp {
         pub brightness_scale: gtk::Scale,
         pub contrast_scale: gtk::Scale,
         pub saturation_scale: gtk::Scale,
+        pub exposure_scale: gtk::Scale,
+        pub highlights_scale: gtk::Scale,
+        pub shadows_scale: gtk::Scale,
+        pub temperature_scale: gtk::Scale,
+        pub tint_scale: gtk::Scale,
+        pub sepia_scale: gtk::Scale,
+        pub sharpness_scale: gtk::Scale,
+        pub levels_toggle: gtk::ToggleButton,
+        pub levels_options: gtk::Box,
+        pub levels_graph: crate::images::edit::levels::LevelsGraph,
+        pub levels_channel: gtk::DropDown,
+        pub levels_black: gtk::SpinButton,
+        pub levels_gamma: gtk::SpinButton,
+        pub levels_white: gtk::SpinButton,
+        pub levels_auto: gtk::Button,
+        /// Says the colours have levels of their own, when the RGB handles
+        /// cannot show them.
+        pub levels_note: gtk::Label,
+        /// Works out tone the GPU cannot show, and the histogram.
+        pub tone_worker: RefCell<Option<crate::images::edit::tone::ToneWorker>>,
+        /// Waits for a slider to rest before the whole picture is worked out.
+        pub tone_timer: RefCell<Option<glib::SourceId>>,
         pub crop_size: gtk::Label,
         pub pending_crop: gtk::Label,
         /// Set while pushing state into the panel, so the toggles do not echo
@@ -286,6 +307,24 @@ mod imp {
                 brightness_scale: tone_scale(),
                 contrast_scale: tone_scale(),
                 saturation_scale: tone_scale(),
+                exposure_scale: tone_scale(),
+                highlights_scale: tone_scale(),
+                shadows_scale: tone_scale(),
+                temperature_scale: tone_scale(),
+                tint_scale: tone_scale(),
+                sepia_scale: crate::images::edit::tone_panel::one_sided_scale(),
+                sharpness_scale: tone_scale(),
+                levels_toggle: section_toggle("glance-levels-symbolic", "Levels"),
+                levels_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
+                levels_graph: crate::images::edit::levels::LevelsGraph::new(),
+                levels_channel: gtk::DropDown::new(None::<gio::ListModel>, None::<gtk::Expression>),
+                levels_black: gtk::SpinButton::with_range(0.0, 253.0, 1.0),
+                levels_gamma: gtk::SpinButton::with_range(0.1, 9.99, 0.05),
+                levels_white: gtk::SpinButton::with_range(2.0, 255.0, 1.0),
+                levels_auto: gtk::Button::new(),
+                levels_note: gtk::Label::new(None),
+                tone_worker: RefCell::new(None),
+                tone_timer: RefCell::new(None),
                 crop_size: gtk::Label::new(None),
                 pending_crop: gtk::Label::new(None),
                 syncing_panel: Cell::new(false),
@@ -869,6 +908,7 @@ impl Window {
                     // Leaving the panel puts the tools away with it.
                     window.imp().crop_toggle.set_active(false);
                     window.imp().adjust_toggle.set_active(false);
+                    window.imp().levels_toggle.set_active(false);
                     window.imp().resize_toggle.set_active(false);
                     window.imp().text_toggle.set_active(false);
                     window.imp().draw_toggle.set_active(false);
@@ -1035,12 +1075,18 @@ impl Window {
         adjust_reset.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |_, _| {
-                window.imp().view.canvas().set_adjustments(Adjustments::default());
-                window.sync_tone_panel();
-            }
+            move |_, _| window.reset_sliders()
         ));
         self.add_action(&adjust_reset);
+
+        let levels_reset = gio::SimpleAction::new("levels-reset", None);
+        levels_reset.set_enabled(false);
+        levels_reset.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.reset_levels()
+        ));
+        self.add_action(&levels_reset);
 
         let adjust_apply = gio::SimpleAction::new("adjust-apply", None);
         adjust_apply.set_enabled(false);

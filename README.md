@@ -201,7 +201,8 @@ and shrinks to fit whichever is showing.
 | **Rotate & Flip** | Quarter turns, or any angle typed into the box. A separate header button turns the picture 90° just to look at it, without changing the file |
 | **Crop** | Drag a rectangle, pull any of its eight handles, or pick an aspect preset |
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock |
-| **Adjust** | Brightness, contrast and saturation, applied live on the GPU and baked identically on save |
+| **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
+| **Levels** | The histogram, with handles for the black point, midtones and white point, per channel or all together, and **Auto Levels**, which also takes out a colour cast |
 | **Draw** | Pen, highlighter, line, arrow, rectangle, ellipse — with the buttons drawing their own shapes |
 | **Text** | Font, size, colour, background, bold, italic, underline, dragged anywhere |
 | **Export** | Any format the picture can honestly become, with a quality dial — or a file size to aim for |

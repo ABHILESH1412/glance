@@ -56,6 +56,10 @@ mod imp {
         /// dragging a slider is a GPU colour matrix instead of a pass over
         /// every pixel of a large photograph.
         pub adjust: Cell<Adjustments>,
+        /// The picture with tone already in its pixels, for what the colour
+        /// matrix cannot show: highlights and shadows, levels' midtones,
+        /// sharpness. Possibly a smaller copy; drawn in the picture's place.
+        pub toned: RefCell<Option<gdk::Texture>>,
         /// The drawing as GTK render nodes, when it could be translated.
         ///
         /// This is the fast path and it makes the whole tile machinery below
@@ -459,6 +463,18 @@ impl ImageCanvas {
             return;
         }
         self.imp().adjust.set(adjust);
+        // What the matrix can show, it shows at once; a toned copy made for
+        // earlier values would only be in the way.
+        if adjust.shows_on_gpu() {
+            self.imp().toned.replace(None);
+        }
+        self.queue_draw();
+    }
+
+    /// Show this in place of the picture, with the tone already in it. Until
+    /// the first arrives, the colour matrix stands in.
+    pub fn set_toned(&self, texture: Option<gdk::Texture>) {
+        self.imp().toned.replace(texture);
         self.queue_draw();
     }
 
@@ -468,6 +484,7 @@ impl ImageCanvas {
         imp.vector.replace(None);
         imp.scene.replace(None);
         imp.adjust.set(Adjustments::default());
+        imp.toned.replace(None);
         imp.texts.borrow_mut().clear();
         imp.selected_text.set(None);
         imp.text_tool.set(false);
@@ -1998,8 +2015,11 @@ impl ImageCanvas {
 
         // Tone rides on top of whatever is drawn below, so it wraps the image
         // and nothing else -- the crop overlay must stay the colour it is.
+        // A picture with the tone already in its pixels needs none.
         let adjust = imp.adjust.get();
-        let toned = !adjust.is_identity();
+        let prepared = imp.toned.borrow().clone();
+        let toned = prepared.is_none() && !adjust.is_identity();
+        let texture = prepared.unwrap_or(texture);
         if toned {
             let (matrix, offset) = adjust.colour_matrix();
             snapshot.push_color_matrix(&matrix, &offset);

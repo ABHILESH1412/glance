@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 27 / 64 | 9 |
+| Images | 33 / 64 | 8 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **47 / 122** | **12** |
+| **Total** | **53 / 122** | **11** |
 
 ---
 
@@ -45,12 +45,12 @@ Tick a box when a feature ships.
 - [x] Rotate 90° left and right
 - [x] Flip horizontally and vertically
 - [x] Contrast and saturation
-- [ ] Exposure — *partial:* Glance has brightness, which is close but not the same
-- [ ] Highlights and shadows
-- [ ] Temperature and tint (white balance)
-- [ ] Sepia
-- [ ] Sharpness
-- [ ] Levels with a histogram, and Auto Levels
+- [x] Exposure
+- [x] Highlights and shadows
+- [x] Temperature and tint (white balance)
+- [x] Sepia
+- [x] Sharpness — and softness, below zero
+- [x] Levels with a histogram, and Auto Levels — per channel or all together
 - [ ] Remove background / lift the subject out of a photo
 - [x] Convert to another file type
 - [x] Quality slider when exporting JPEG

@@ -28,7 +28,8 @@
       <li>Crop by dragging, with the usual aspect presets for social sizes</li>
       <li>Resize by handles or by typing the numbers, with the proportions locked if you want them locked</li>
       <li>Rotate by a quarter turn, or to any angle you type</li>
-      <li>Brightness, contrast and saturation</li>
+      <li>Exposure, brightness, contrast, highlights and shadows, saturation, white balance, sepia and sharpness</li>
+      <li>Levels with a histogram, and Auto Levels</li>
       <li>Draw and annotate: pen, highlighter, line, arrow, rectangle, ellipse</li>
       <li>Add text with a font, a size, a colour and a background, dragged where you want it</li>
       <li>Convert between formats, and compress or inflate a file to a size you name — so you never have to hand a photograph to a website that sells what you upload</li>

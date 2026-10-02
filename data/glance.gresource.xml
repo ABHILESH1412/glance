@@ -18,4 +18,9 @@
     <file alias="io.github.abhilesh1412.Glance-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/apps/io.github.abhilesh1412.Glance-symbolic.svg</file>
   </gresource>
+  <!-- Icons for the program's own controls, where Adwaita has none. -->
+  <gresource prefix="/io/github/abhilesh1412/Glance/icons/scalable/actions">
+    <file alias="glance-levels-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-levels-symbolic.svg</file>
+  </gresource>
 </gresources>

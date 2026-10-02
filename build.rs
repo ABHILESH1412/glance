@@ -29,6 +29,7 @@ fn main() {
     for icon in [
         "data/icons/hicolor/scalable/apps/io.github.abhilesh1412.Glance.svg",
         "data/icons/hicolor/symbolic/apps/io.github.abhilesh1412.Glance-symbolic.svg",
+        "data/icons/hicolor/symbolic/actions/glance-levels-symbolic.svg",
     ] {
         println!("cargo:rerun-if-changed={icon}");
     }
