@@ -2141,12 +2141,12 @@ impl Window {
                             window.toast(if password.is_some() {
                                 "Saved. It now needs its password to open."
                             } else {
-                                "Saved with the new permissions."
+                                "Saved. It opens without a password now."
                             });
                             window.reopen(&shown, password);
                         }
                         crate::app::protect::Outcome::Copied(copy) => {
-                            window.toast(&format!("Saved a protected copy, “{}”.", file_name(&copy)));
+                            window.toast(&format!("Saved a copy, “{}”.", file_name(&copy)));
                         }
                     }
                 ));

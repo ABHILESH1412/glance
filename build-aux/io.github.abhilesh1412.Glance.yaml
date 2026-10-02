@@ -97,7 +97,7 @@ modules:
         url: https://poppler.freedesktop.org/poppler-data-0.4.12.tar.gz
         sha256: c835b640a40ce357e1b83666aabd95edffa24ddddd49b8daff63adb851cdab74
 
-  # qpdf, for writing PDFs with a password and permissions, and making them
+  # qpdf, for writing PDFs with a password, and making them
   # smaller: Poppler reads those, but cannot write them. Its own encryption code
   # is used rather than GnuTLS or OpenSSL, so it needs nothing else; zlib and
   # libjpeg come from the runtime. Only the library is kept.

@@ -1,7 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Password and Permissions: who may open a PDF, and what they may do with it.
+//! Password: who may open a PDF.
+//!
+//! Setting permissions (holding back printing, copying or marking up) is
+//! hidden for now: they are only a request in the file, which some viewers
+//! ignore and anyone can strip, so offering them promised more than PDF can
+//! keep. The code for them is commented out below, marked "Permissions,
+//! hidden", rather than deleted. Restrictions other people put on their
+//! documents are still respected.
 //!
 //! Two passwords, as the PDF standard has them. The one to open the document,
 //! if it has one. And the permissions password, which is what lets someone
@@ -79,12 +86,13 @@ struct Form {
     require: adw::SwitchRow,
     open: adw::PasswordEntryRow,
     open_again: adw::PasswordEntryRow,
-    print: adw::SwitchRow,
-    copy: adw::SwitchRow,
-    annotate: adw::SwitchRow,
-    change: adw::SwitchRow,
-    owner: adw::PasswordEntryRow,
-    owner_again: adw::PasswordEntryRow,
+    // Permissions, hidden.
+    // print: adw::SwitchRow,
+    // copy: adw::SwitchRow,
+    // annotate: adw::SwitchRow,
+    // change: adw::SwitchRow,
+    // owner: adw::PasswordEntryRow,
+    // owner_again: adw::PasswordEntryRow,
     problem: gtk::Label,
     apply: gtk::Button,
     copy_button: gtk::Button,
@@ -92,12 +100,15 @@ struct Form {
 
 impl Form {
     fn allow(&self) -> Permissions {
-        Permissions {
-            print: self.print.is_active(),
-            copy: self.copy.is_active(),
-            annotate: self.annotate.is_active(),
-            change: self.change.is_active(),
-        }
+        // Permissions, hidden: everything is allowed, so the password to
+        // open does both jobs.
+        Permissions { print: true, copy: true, annotate: true, change: true }
+        // Permissions {
+        //     print: self.print.is_active(),
+        //     copy: self.copy.is_active(),
+        //     annotate: self.annotate.is_active(),
+        //     change: self.change.is_active(),
+        // }
     }
 
     fn choice(&self) -> Result<Choice, &'static str> {
@@ -106,8 +117,11 @@ impl Form {
             &self.open.text(),
             &self.open_again.text(),
             self.allow(),
-            &self.owner.text(),
-            &self.owner_again.text(),
+            // Permissions, hidden.
+            "",
+            "",
+            // &self.owner.text(),
+            // &self.owner_again.text(),
         )
     }
 
@@ -116,10 +130,11 @@ impl Form {
         let require = self.require.is_active();
         self.open.set_visible(require);
         self.open_again.set_visible(require);
-        let allow = self.allow();
-        let restricted = !(allow.print && allow.copy && allow.annotate && allow.change);
-        self.owner.set_visible(restricted);
-        self.owner_again.set_visible(restricted);
+        // Permissions, hidden.
+        // let allow = self.allow();
+        // let restricted = !(allow.print && allow.copy && allow.annotate && allow.change);
+        // self.owner.set_visible(restricted);
+        // self.owner_again.set_visible(restricted);
         let result = self.choice();
         self.problem.set_text(result.as_ref().err().copied().unwrap_or(""));
         self.problem.set_visible(result.is_err());
@@ -140,9 +155,10 @@ pub fn present(
     let header = adw::HeaderBar::new();
     toolbar.add_top_bar(&header);
     let dialog = adw::Dialog::builder()
-        .title("Password and Permissions")
+        .title("Password")
         .content_width(460)
-        .content_height(680)
+        // 680 with the Permissions section, hidden for now.
+        .content_height(460)
         .child(&toolbar)
         .build();
     let done: Rc<dyn Fn(Outcome)> = Rc::new(done);
@@ -240,9 +256,10 @@ fn build_form(
     path: &Path,
     done: Rc<dyn Fn(Outcome)>,
 ) -> (gtk::Widget, Rc<dyn Fn(Option<String>, Option<String>)>) {
-    let switch = |title: &str, subtitle: &str| {
-        adw::SwitchRow::builder().title(title).subtitle(subtitle).active(true).build()
-    };
+    // Permissions, hidden.
+    // let switch = |title: &str, subtitle: &str| {
+    //     adw::SwitchRow::builder().title(title).subtitle(subtitle).active(true).build()
+    // };
     let require = adw::SwitchRow::builder()
         .title("Require a Password")
         .subtitle("Nobody can open the document without it")
@@ -254,26 +271,27 @@ fn build_form(
     opening.add(&open);
     opening.add(&open_again);
 
-    let print = switch("Printing", "");
-    let copy = switch("Copying Text and Pictures", "");
-    let annotate = switch("Adding Notes and Marks", "Highlights, notes, drawings and text");
-    let change = switch("Changing Pages and Forms", "Adding, removing or turning pages, and filling in forms");
-    let owner = adw::PasswordEntryRow::builder().title("Permissions Password").build();
-    let owner_again = adw::PasswordEntryRow::builder().title("Permissions Password Again").build();
-    let permissions = adw::PreferencesGroup::builder()
-        .title("Permissions")
-        .description("What anyone may do without the permissions password.")
-        .build();
-    for row in [&print, &copy, &annotate, &change] {
-        permissions.add(row);
-    }
-    permissions.add(&owner);
-    permissions.add(&owner_again);
+    // Permissions, hidden.
+    // let print = switch("Printing", "");
+    // let copy = switch("Copying Text and Pictures", "");
+    // let annotate = switch("Adding Notes and Marks", "Highlights, notes, drawings and text");
+    // let change = switch("Changing Pages and Forms", "Adding, removing or turning pages, and filling in forms");
+    // let owner = adw::PasswordEntryRow::builder().title("Permissions Password").build();
+    // let owner_again = adw::PasswordEntryRow::builder().title("Permissions Password Again").build();
+    // let permissions = adw::PreferencesGroup::builder()
+    //     .title("Permissions")
+    //     .description("What anyone may do without the permissions password.")
+    //     .build();
+    // for row in [&print, &copy, &annotate, &change] {
+    //     permissions.add(row);
+    // }
+    // permissions.add(&owner);
+    // permissions.add(&owner_again);
 
     let problem = gtk::Label::builder().wrap(true).xalign(0.0).visible(false).build();
     problem.add_css_class("warning");
     let note = gtk::Label::builder()
-        .label("Keep the passwords somewhere safe. A forgotten password cannot be recovered, by Glance or anyone else.")
+        .label("Keep the password somewhere safe. A forgotten password cannot be recovered, by Glance or anyone else.")
         .wrap(true)
         .xalign(0.0)
         .build();
@@ -300,7 +318,8 @@ fn build_form(
 
     let column = gtk::Box::new(gtk::Orientation::Vertical, 24);
     column.append(&opening);
-    column.append(&permissions);
+    // Permissions, hidden.
+    // column.append(&permissions);
     column.append(&problem);
     column.append(&note);
     column.append(&copy_button);
@@ -315,12 +334,13 @@ fn build_form(
         require,
         open,
         open_again,
-        print,
-        copy,
-        annotate,
-        change,
-        owner,
-        owner_again,
+        // Permissions, hidden.
+        // print,
+        // copy,
+        // annotate,
+        // change,
+        // owner,
+        // owner_again,
         problem,
         apply: apply.clone(),
         copy_button: copy_button.clone(),
@@ -328,15 +348,18 @@ fn build_form(
     // The password the document opened with, to read it with.
     let read_with: Rc<RefCell<Option<String>>> = Rc::default();
 
-    for row in [&form.require, &form.print, &form.copy, &form.annotate, &form.change] {
-        let form = Rc::downgrade(&form);
-        row.connect_active_notify(move |_| {
-            if let Some(form) = form.upgrade() {
+    // Permissions, hidden: this was a loop over `require` and the switches,
+    // &form.print, &form.copy, &form.annotate, &form.change.
+    {
+        let weak = Rc::downgrade(&form);
+        form.require.connect_active_notify(move |_| {
+            if let Some(form) = weak.upgrade() {
                 form.refresh();
             }
         });
     }
-    for row in [&form.open, &form.open_again, &form.owner, &form.owner_again] {
+    // Permissions, hidden: also &form.owner, &form.owner_again.
+    for row in [&form.open, &form.open_again] {
         let form = Rc::downgrade(&form);
         row.connect_changed(move |_| {
             if let Some(form) = form.upgrade() {
@@ -382,17 +405,18 @@ fn build_form(
                 form.open.set_text(open);
                 form.open_again.set_text(open);
             }
-            if let Some(now) = now {
-                form.print.set_active(now.print);
-                form.copy.set_active(now.copy);
-                form.annotate.set_active(now.annotate);
-                form.change.set_active(now.change);
-            }
-            // The permissions password stays as it is unless changed.
-            if let (true, Some(owner)) = (restricted, &owner) {
-                form.owner.set_text(owner);
-                form.owner_again.set_text(owner);
-            }
+            // Permissions, hidden.
+            // if let Some(now) = now {
+            //     form.print.set_active(now.print);
+            //     form.copy.set_active(now.copy);
+            //     form.annotate.set_active(now.annotate);
+            //     form.change.set_active(now.change);
+            // }
+            // // The permissions password stays as it is unless changed.
+            // if let (true, Some(owner)) = (restricted, &owner) {
+            //     form.owner.set_text(owner);
+            //     form.owner_again.set_text(owner);
+            // }
             form.refresh();
         })
     };

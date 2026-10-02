@@ -192,7 +192,7 @@ pub fn pdf_menu() -> gio::Menu {
         &section(&[
             item("_Print…", "win.print"),
             item("Com_bine into PDF…", "win.combine"),
-            item("_Password and Permissions…", "win.protect"),
+            item("Pass_word…", "win.protect"),
             item("_Reduce File Size…", "win.reduce-size"),
         ]),
     );

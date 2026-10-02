@@ -110,10 +110,9 @@ it, and a read-only file is left untouched.
 - **Password-protected PDFs** open after asking for the password, right in the window.
   What their author does not allow — copying text, marking up — Glance does not do
   either, unless the document was opened with its permissions password
-- **Password and Permissions** (in the menu): require a password to open the document,
-  and hold back printing, copying, marking up or changing pages behind a separate
-  permissions password. Saved with AES-256, the strongest encryption PDF has. A document
-  someone else restricted asks for its permissions password before any of it changes
+- **Password** (in the menu): require a password to open the document, or take it
+  off. Saved with AES-256, the strongest encryption PDF has. A document someone else
+  restricted asks for its permissions password before any of it changes
 - **Reduce File Size** (in the menu): repack the document without changing anything you
   can see, or also scale its photos down to 150 or 96 dots per inch. The new size is
   worked out first, so you see it before deciding. Drawings, charts and screenshots are
