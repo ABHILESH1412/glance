@@ -7,11 +7,26 @@
 use std::path::PathBuf;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gtk::{gio, glib};
+use gtk::{gdk, gio, glib};
 use crate::images::edit::compress;
 use crate::images::canvas;
 use crate::images::edit::export;
 use crate::app::window::Window;
+
+/// A texture's pixels, as straight-alpha RGBA the editor can work on.
+fn pixels_of(texture: &gdk::Texture) -> image::DynamicImage {
+    let mut downloader = gdk::TextureDownloader::new(texture);
+    downloader.set_format(gdk::MemoryFormat::R8g8b8a8);
+    let (bytes, stride) = downloader.download_bytes();
+    let (width, height) = (texture.width() as usize, texture.height() as usize);
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for row in bytes.chunks(stride).take(height) {
+        rgba.extend_from_slice(&row[..width * 4]);
+    }
+    image::DynamicImage::ImageRgba8(
+        image::RgbaImage::from_raw(width as u32, height as u32, rgba).unwrap_or_default(),
+    )
+}
 
 impl Window {
     fn downloads_dir() -> PathBuf {
@@ -33,12 +48,22 @@ impl Window {
         // Reuse the editing buffer when there is one; otherwise decode afresh
         // rather than retaining a full-resolution copy just to copy once.
         let existing = imp.working.borrow().clone();
+        // An animation: the frame on screen, not the first one the file
+        // would decode to.
+        let frame = (existing.is_none() && canvas.frame_count() > 1)
+            .then(|| canvas.frames().get(canvas.frame()).map(|(texture, _)| (canvas.frame(), pixels_of(texture))))
+            .flatten();
+        let copied = match &frame {
+            Some((index, _)) => format!("Frame {} copied.", index + 1),
+            None => "Image copied.".to_string(),
+        };
 
         let (sender, receiver) = async_channel::bounded(1);
         std::thread::spawn(move || {
-            let result = match existing {
-                Some(image) => Ok(image),
-                None => export::open(&source),
+            let result = match (existing, frame) {
+                (Some(image), _) => Ok(image),
+                (None, Some((_, image))) => Ok(image),
+                (None, None) => export::open(&source),
             }
             .and_then(|image| export::apply(image, live, None, display));
             let _ = sender.send_blocking(result);
@@ -55,7 +80,7 @@ impl Window {
                         let texture =
                             canvas::texture_from(width, height, false, rgba.into_raw());
                         window.clipboard().set_texture(&texture);
-                        window.toast("Image copied.");
+                        window.toast(&copied);
                     }
                     Ok(Err(message)) => window.toast(&message),
                     Err(_) => window.toast("Copying stopped unexpectedly."),
@@ -304,5 +329,33 @@ impl Window {
                 }
             }
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A frame copied comes out pixel for pixel, padded rows or not.
+    #[test]
+    fn a_texture_s_pixels_come_back_as_they_went_in() {
+        let (width, height, stride) = (3usize, 2usize, 16usize);
+        let mut bytes = vec![0u8; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                bytes[y * stride + x * 4..y * stride + x * 4 + 4].copy_from_slice(&[x as u8 * 80, y as u8 * 90, 7, 200]);
+            }
+        }
+        let texture = gdk::MemoryTexture::new(
+            width as i32,
+            height as i32,
+            gdk::MemoryFormat::R8g8b8a8,
+            &glib::Bytes::from_owned(bytes),
+            stride,
+        );
+        let image = pixels_of(texture.upcast_ref()).to_rgba8();
+        assert_eq!(image.dimensions(), (3, 2));
+        assert_eq!(image.get_pixel(2, 1).0, [160, 90, 7, 200]);
+        assert_eq!(image.get_pixel(0, 0).0, [0, 0, 7, 200]);
     }
 }

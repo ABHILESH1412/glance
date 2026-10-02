@@ -10,7 +10,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
 
 /// How tall each frame's picture is in the list.
 const THUMB_HEIGHT: i32 = 96;
@@ -93,18 +93,59 @@ impl FramesPane {
             syncing: Cell::new(false),
             chosen: RefCell::default(),
         });
+        // A click, Enter, or moving up and down the list with the arrow
+        // keys: whichever frame is picked is the one on screen.
         let weak = Rc::downgrade(&pane);
         list.connect_row_activated(move |_, row| {
-            let Some(pane) = weak.upgrade() else { return };
-            if pane.syncing.get() {
-                return;
-            }
-            let chosen = pane.chosen.borrow();
-            if let Some(chosen) = chosen.as_ref() {
-                chosen(row.index().max(0) as usize);
+            if let Some(pane) = weak.upgrade() {
+                pane.choose(row.index());
             }
         });
+        let weak = Rc::downgrade(&pane);
+        list.connect_row_selected(move |_, row| {
+            if let (Some(pane), Some(row)) = (weak.upgrade(), row) {
+                pane.choose(row.index());
+            }
+        });
+
+        // Right-click a frame to copy it.
+        let menu = gio::Menu::new();
+        menu.append(Some("_Copy Frame"), Some("win.copy"));
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.set_parent(&list);
+        popover.set_has_arrow(false);
+        popover.set_halign(gtk::Align::Start);
+        list.connect_destroy(glib::clone!(
+            #[weak]
+            popover,
+            move |_| popover.unparent()
+        ));
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_SECONDARY);
+        let weak = Rc::downgrade(&pane);
+        click.connect_pressed(move |gesture, _, x, y| {
+            let Some(pane) = weak.upgrade() else { return };
+            let Some(row) = pane.list.row_at_y(y as i32) else { return };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            // The frame the menu is about is the one on screen.
+            pane.list.select_row(Some(&row));
+            pane.choose(row.index());
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        });
+        list.add_controller(click);
         pane
+    }
+
+    /// The person picked frame `index`; not the list being put in step.
+    fn choose(&self, index: i32) {
+        if self.syncing.get() || index < 0 {
+            return;
+        }
+        let chosen = self.chosen.borrow();
+        if let Some(chosen) = chosen.as_ref() {
+            chosen(index as usize);
+        }
     }
 
     /// Told the frame clicked.

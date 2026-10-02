@@ -1396,6 +1396,10 @@ impl Window {
                     window.imp().search_bar.set_search_mode(false);
                 } else if window.imp().slideshow.get() {
                     window.stop_slideshow();
+                } else if window.imp().inspector.root.is_visible() {
+                    if let Some(action) = window.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
+                        action.change_state(&false.to_variant());
+                    }
                 } else if window.draw_panel_open() {
                     window.set_draw_panel(false);
                 } else if window.is_fullscreen() {

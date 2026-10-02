@@ -100,6 +100,70 @@ impl Window {
         ));
 
         self.build_slideshow_controls();
+        self.build_picture_menu();
+    }
+
+    /// Right-click on the picture: copy it, and the things to do with it
+    /// that are otherwise in the main menu.
+    fn build_picture_menu(&self) {
+        let canvas = self.imp().view.canvas().clone();
+        // One for a still picture and one for an animation, each made with
+        // its menu: a menu swapped into a popover after it is made comes up
+        // a row too short.
+        let popovers = [false, true].map(|animated| {
+            let popover = gtk::PopoverMenu::from_model(Some(&Self::picture_menu(animated)));
+            popover.set_parent(&canvas);
+            popover.set_has_arrow(false);
+            popover.set_halign(gtk::Align::Start);
+            canvas.connect_destroy(glib::clone!(
+                #[weak]
+                popover,
+                move |_| popover.unparent()
+            ));
+            popover
+        });
+        let click = gtk::GestureClick::new();
+        click.set_button(gtk::gdk::BUTTON_SECONDARY);
+        click.connect_pressed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |gesture, _, x, y| {
+                let imp = window.imp();
+                let canvas = imp.view.canvas();
+                if !canvas.has_image() || imp.slideshow.get() {
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                let popover = &popovers[usize::from(canvas.frame_count() > 1)];
+                popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.popup();
+            }
+        ));
+        canvas.add_controller(click);
+    }
+
+    /// The menu for a picture: "Copy This Frame" for an animation, which is
+    /// what Copy then copies.
+    fn picture_menu(animated: bool) -> gio::Menu {
+        let copy = gio::Menu::new();
+        copy.append(Some(if animated { "_Copy This Frame" } else { "_Copy Image" }), Some("win.copy"));
+        let look = gio::Menu::new();
+        look.append(Some("Image _Info"), Some("win.inspector"));
+        if animated {
+            look.append(Some("Show F_rames"), Some("win.show-pages"));
+        }
+        look.append(Some("_Slideshow"), Some("win.slideshow"));
+        let turn = gio::Menu::new();
+        turn.append(Some("Rotate _Left"), Some("win.rotate-left"));
+        turn.append(Some("Rotate _Right"), Some("win.rotate-right"));
+        let change = gio::Menu::new();
+        change.append(Some("_Edit…"), Some("win.edit"));
+        change.append(Some("_Print…"), Some("win.print"));
+        let menu = gio::Menu::new();
+        for section in [&copy, &look, &turn, &change] {
+            menu.append_section(None, section);
+        }
+        menu
     }
 
     /// A picture has just been put on screen.

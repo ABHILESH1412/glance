@@ -50,7 +50,8 @@ Decoding never runs on the main thread, so a huge file cannot freeze the window.
 pixel under the cursor stays under it. Two fingers on a touchpad pan and the wheel zooms —
 the hardware says which is which, so there is no modifier to remember. Pinch works too.
 Animated GIF and WebP play, and keep playing while you zoom or rotate; `F9` lists every
-frame down the side with how long it shows, to pause on one or step through them.
+frame down the side with how long it shows, to pause on one or step through them; Copy
+copies the frame on screen. Right-click the picture, or a frame, to copy it.
 
 **Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
 and the folder is watched so files added elsewhere show up. `F5` plays the folder as a
