@@ -13,6 +13,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
+use crate::images::edit::shape::{self, Outline};
 use crate::images::edit::text::Patch;
 
 /// How see-through a highlighter is. Low enough to read what is under it.
@@ -346,6 +347,36 @@ impl Mark {
 }
 
 impl Mark {
+    /// How the mark is held once picked up: a line or arrow by its ends,
+    /// anything else by the box round its points.
+    pub fn outline(&self) -> Option<Outline> {
+        match (self.tool, self.points.as_slice()) {
+            (Tool::Line | Tool::Arrow, [a, .., b]) => Some(Outline::Ends(*a, *b)),
+            _ => shape::frame_of(&self.points).map(Outline::Frame),
+        }
+    }
+
+    /// The mark with its outline dragged to `to`. Only its points change: a
+    /// line stays as thick, and an arrow's head as big.
+    pub fn reshaped(&self, to: &Outline) -> Mark {
+        let points = match (self.outline(), to) {
+            (Some(Outline::Ends(..)), Outline::Ends(a, b)) => vec![*a, *b],
+            (Some(Outline::Frame(from)), Outline::Frame(to)) => {
+                self.points.iter().map(|&p| shape::refit(p, from, *to)).collect()
+            }
+            _ => self.points.clone(),
+        };
+        Mark { points, ..self.clone() }
+    }
+
+    /// Whether a press at `p` picks the mark up: on its ink, give or take
+    /// `slack`, or anywhere inside a rectangle or ellipse when `inside`.
+    pub fn is_at(&self, p: (f64, f64), slack: f64, inside: bool) -> bool {
+        let strokes = self.strokes();
+        let closed = matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Redact);
+        shape::touches(&strokes, self.width, p, slack) || (inside && closed && shape::encloses(&strokes, p))
+    }
+
     /// A redaction as pixels: solid, opaque black over every pixel the area
     /// touches and one more all round, built directly rather than drawn, so
     /// no soft edge can let a shade of what was under it through.
@@ -465,6 +496,36 @@ mod tests {
         assert!(h > (bottom - top), "and its whole spread");
     }
 
+    #[test]
+    fn a_picked_mark_moves_and_resizes_by_its_outline() {
+        // A line is held by its ends, and only the end dragged moves.
+        let line = mark(Tool::Arrow, &[(0.0, 0.0), (100.0, 0.0)]);
+        let Some(Outline::Ends(a, b)) = line.outline() else { panic!("an arrow is held by its ends") };
+        let longer = line.reshaped(&Outline::Ends(a, (b.0 + 50.0, b.1 + 20.0)));
+        assert_eq!(longer.points, vec![(0.0, 0.0), (150.0, 20.0)]);
+        assert_eq!(longer.width, line.width, "the line stays as thick");
+        // Anything else is held by its box, and every point keeps its place
+        // in it.
+        let pen = mark(Tool::Pen, &[(10.0, 10.0), (20.0, 30.0), (30.0, 10.0)]);
+        let Some(Outline::Frame(frame)) = pen.outline() else { panic!("a pen stroke is held by its box") };
+        assert_eq!(frame, [10.0, 10.0, 20.0, 20.0]);
+        let doubled = pen.reshaped(&Outline::Frame([10.0, 10.0, 40.0, 40.0]));
+        assert_eq!(doubled.points, vec![(10.0, 10.0), (30.0, 50.0), (50.0, 10.0)]);
+        assert_eq!(doubled.sequence, pen.sequence, "still the same mark, where it was in the stack");
+    }
+
+    #[test]
+    fn a_mark_is_picked_up_by_its_ink_or_inside_a_shape() {
+        let rectangle = mark(Tool::Rectangle, &[(0.0, 0.0), (100.0, 50.0)]);
+        assert!(rectangle.is_at((100.0, 25.0), 1.0, false), "on the edge");
+        assert!(!rectangle.is_at((50.0, 25.0), 1.0, false), "the middle is not ink");
+        assert!(rectangle.is_at((50.0, 25.0), 1.0, true), "but it is inside");
+        // A line has no inside.
+        let line = mark(Tool::Line, &[(0.0, 0.0), (100.0, 0.0)]);
+        assert!(!line.is_at((50.0, 20.0), 1.0, true));
+        assert!(line.is_at((50.0, 4.0), 1.0, true), "within half its width");
+    }
+
     /// A click that never moved is a dot with a pen and nothing with a shape.
     #[test]
     fn a_drag_that_never_moved_only_counts_for_freehand() {
@@ -500,6 +561,8 @@ mod icon {
         #[derive(Default)]
         pub struct ToolIcon {
             pub tool: Cell<Option<Tool>>,
+            /// The Select tool's pointer, instead of a mark.
+            pub pointer: Cell<bool>,
         }
 
         #[glib::object_subclass]
@@ -513,9 +576,6 @@ mod icon {
 
         impl WidgetImpl for ToolIcon {
             fn snapshot(&self, snapshot: &gtk::Snapshot) {
-                let Some(tool) = self.tool.get() else {
-                    return;
-                };
                 let widget = self.obj();
                 let (w, h) = (widget.width() as f64, widget.height() as f64);
                 if w < 2.0 || h < 2.0 {
@@ -524,6 +584,13 @@ mod icon {
                 // Follow the label's colour, so the icon dims and highlights
                 // with the button like a real symbolic icon.
                 let ink = widget.color();
+                if self.pointer.get() {
+                    snapshot.append_fill(&super::pointer(w, h), gsk::FillRule::Winding, &ink);
+                    return;
+                }
+                let Some(tool) = self.tool.get() else {
+                    return;
+                };
                 let sample = super::sample(tool, w, h);
                 // A solid block: what a redaction leaves.
                 if tool == Tool::Redact {
@@ -554,6 +621,36 @@ mod icon {
             icon.set_valign(gtk::Align::Center);
             icon
         }
+
+        /// The Select tool's button face: a pointer, and its name.
+        pub fn select_face() -> gtk::Box {
+            let icon: Self = glib::Object::new();
+            icon.imp().pointer.set(true);
+            icon.set_size_request(18, 18);
+            icon.set_valign(gtk::Align::Center);
+            let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            face.set_halign(gtk::Align::Center);
+            face.append(&icon);
+            face.append(&gtk::Label::new(Some("Select")));
+            face
+        }
+    }
+
+    /// An arrow pointer, filling the height it is given.
+    fn pointer(w: f64, h: f64) -> gsk::Path {
+        let size = h.min(w) - 2.0;
+        let (x0, y0) = ((w - size * 0.62) / 2.0, 1.0);
+        let at = |x: f64, y: f64| ((x0 + x * size) as f32, (y0 + y * size) as f32);
+        let builder = gsk::PathBuilder::new();
+        let outline = [(0.0, 0.0), (0.0, 0.86), (0.22, 0.66), (0.37, 1.0), (0.5, 0.94), (0.36, 0.61), (0.62, 0.61)];
+        let (x, y) = at(outline[0].0, outline[0].1);
+        builder.move_to(x, y);
+        for &(px, py) in &outline[1..] {
+            let (x, y) = at(px, py);
+            builder.line_to(x, y);
+        }
+        builder.close();
+        builder.to_path()
     }
 
     /// A miniature of what the tool makes, inset so the stroke has room.

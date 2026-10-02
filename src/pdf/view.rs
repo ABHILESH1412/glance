@@ -39,6 +39,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib, graphene, pango};
 
 use crate::images::edit::draw;
+use crate::images::edit::shape::{self, Grip, Outline};
 
 use super::annots::{self, Annotation, Rgb};
 use super::bookmark_list::Request;
@@ -51,7 +52,7 @@ use super::ink::{self, Drawing};
 use super::notes::{self, Note, TextBox, TextStyle};
 use super::outline::{self, Heading};
 use super::redact::Area as RedactArea;
-use super::page::Page;
+use super::page::{Page, Picked};
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
 use super::sidebar::{Event as SidebarEvent, Sidebar, View as SidebarView};
@@ -149,6 +150,15 @@ pub enum Tool {
 /// written: one save, and one step of undo, per pause rather than per key.
 const RESTYLE_PAUSE: Duration = Duration::from_millis(500);
 
+/// A drawing picked up and being dragged: how it was when the press
+/// landed, by which grip, from where, and how it is now.
+struct Reshaping {
+    before: Drawing,
+    grip: Grip,
+    from: Spot,
+    now: Drawing,
+}
+
 /// A note or bubble being dragged, and how far so far, in points.
 struct Moving {
     annotation: Annotation,
@@ -228,8 +238,22 @@ struct Inner {
     /// per version of it.
     pinned: RefCell<HashMap<usize, Vec<Annotation>>>,
     moving: RefCell<Option<Moving>>,
-    /// The page whose pointer is showing a hand over a note.
-    hovering: Cell<Option<usize>>,
+    /// The page whose pointer is showing something other than the tool's
+    /// own, over a note or a drawing, and what.
+    hovering: Cell<Option<(usize, &'static str)>>,
+    /// The drawings on each page looked at, read from the file once per
+    /// version of it.
+    inked: RefCell<HashMap<usize, Vec<Drawing>>>,
+    /// The drawing picked up with the Select tool.
+    picked: RefCell<Option<Drawing>>,
+    /// The page showing it, to clear when it is put down.
+    picked_page: Cell<Option<usize>>,
+    reshaping: RefCell<Option<Reshaping>>,
+    /// A new colour and thickness for the picked drawing, waiting for the
+    /// controls to be still.
+    reink: RefCell<Option<(glib::SourceId, gdk::RGBA, f64)>>,
+    #[allow(clippy::type_complexity)]
+    on_picked: RefCell<Option<Box<dyn Fn(Option<(gdk::RGBA, f64)>)>>>,
     status: RefCell<Option<Box<dyn Fn(Status)>>>,
     last_status: Cell<Option<Status>>,
     searcher: RefCell<Option<Searcher>>,
@@ -327,6 +351,12 @@ impl PdfView {
             pinned: RefCell::default(),
             moving: RefCell::default(),
             hovering: Cell::new(None),
+            inked: RefCell::default(),
+            picked: RefCell::default(),
+            picked_page: Cell::new(None),
+            reshaping: RefCell::default(),
+            reink: RefCell::default(),
+            on_picked: RefCell::default(),
             status: RefCell::default(),
             last_status: Cell::new(None),
             searcher: RefCell::default(),
@@ -658,6 +688,7 @@ impl PdfView {
         for page in marked {
             inner.show_redactions(page);
         }
+        inner.show_picked();
         inner.emit_status();
     }
 
@@ -750,6 +781,45 @@ impl PdfView {
     /// Delete the chosen text box.
     pub fn remove_chosen(&self) {
         self.inner.remove_chosen();
+    }
+
+    /// Delete the picked drawing, or the chosen text box. False if neither
+    /// is there.
+    pub fn remove_picked(&self) -> bool {
+        let inner = &self.inner;
+        let picked = inner.picked.borrow().clone();
+        if let Some(drawing) = picked {
+            inner.cancel_reink();
+            inner.pick(None);
+            if let Err(error) = inner.commit(Change { removed: vec![Annotation::Ink(drawing)], added: Vec::new() }) {
+                inner.report(error);
+            }
+            return true;
+        }
+        if inner.chosen.borrow().is_some() {
+            inner.remove_chosen();
+            return true;
+        }
+        false
+    }
+
+    /// Put down the picked drawing. False if nothing was picked.
+    pub fn drop_picked(&self) -> bool {
+        let had = self.inner.picked.borrow().is_some();
+        self.inner.pick(None);
+        had
+    }
+
+    /// Give the picked drawing the controls' colour and thickness, once
+    /// they have been still for a moment.
+    pub fn reink_picked(&self, colour: gdk::RGBA, width: f64) {
+        Inner::reink(&self.inner, colour, width);
+    }
+
+    /// Called with the picked drawing's colour and thickness, or `None` once
+    /// it is put down.
+    pub fn connect_picked(&self, callback: impl Fn(Option<(gdk::RGBA, f64)>) + 'static) {
+        self.inner.on_picked.replace(Some(Box::new(callback)));
     }
 
     /// Called with the chosen text box's words and look, or `None` when none
@@ -944,13 +1014,28 @@ impl Inner {
                 Tool::Select | Tool::RedactText => {}
             }
             let unit = inner.count_press(x, y);
+            let selecting = inner.tool.get() == Tool::Select;
             if unit == Unit::Glyph {
+                // A handle of the drawing picked up, then a note, then a
+                // drawing to pick up.
+                if let Some(grip) = inner.picked_grip_at(spot).filter(|_| selecting) {
+                    inner.hold(grip, spot);
+                    return;
+                }
                 if let Some(annotation) = inner.pinned_at(spot) {
+                    inner.pick(None);
                     inner.set_selection(None);
                     inner.moving.replace(Some(Moving { annotation, from: spot, by: (0.0, 0.0) }));
                     return;
                 }
+                if let Some(drawing) = inner.drawing_at(spot).filter(|_| selecting) {
+                    inner.set_selection(None);
+                    inner.pick(Some(drawing));
+                    inner.hold(Grip::Body, spot);
+                    return;
+                }
             }
+            inner.pick(None);
             inner.set_selection(Some(Selection { anchor: spot, head: spot, unit }));
         });
         let weak = Rc::downgrade(this);
@@ -960,6 +1045,11 @@ impl Inner {
             let Some(head) = inner.hit(x + dx, y + dy) else { return };
             if inner.sketch.borrow().is_some() {
                 inner.extend_sketch(head);
+                return;
+            }
+            if inner.reshaping.borrow().is_some() {
+                let shift = gesture.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
+                inner.drag_picked(head, shift);
                 return;
             }
             // Dragged off where it was pressed: not a click to place text.
@@ -981,6 +1071,10 @@ impl Inner {
             let Some(inner) = weak.upgrade() else { return };
             if inner.sketch.borrow().is_some() {
                 inner.finish_sketch();
+                return;
+            }
+            if let Some(reshaping) = inner.reshaping.take() {
+                inner.drop_reshaped(reshaping);
                 return;
             }
             if let Some(spot) = inner.placing.take() {
@@ -1749,10 +1843,13 @@ impl Inner {
     fn step_history(&self, back: bool) -> Result<(), String> {
         let (from, to) = if back { (&self.history, &self.undone) } else { (&self.undone, &self.history) };
         self.flush_restyle();
+        // A new colour still waiting is a change of its own, made first.
+        self.flush_reink();
         let Some(change) = from.borrow_mut().pop() else { return Ok(()) };
         let Some(reader) = self.reader() else { return Ok(()) };
         // What was chosen may be what is about to be taken away.
         self.choose(None);
+        self.pick(None);
         if let Err(error) = self.apply(&reader, &change, !back) {
             from.borrow_mut().push(change);
             return Err(error);
@@ -1793,6 +1890,7 @@ impl Inner {
         let revision = self.revision.get() + 1;
         self.revision.set(revision);
         self.pinned.borrow_mut().clear();
+        self.inked.borrow_mut().clear();
         if let Some(renderer) = self.renderer.borrow().as_ref() {
             renderer.reload(revision);
         }
@@ -1848,24 +1946,246 @@ impl Inner {
         notes::under(here, spot.x, spot.y).cloned()
     }
 
-    /// A hand over a note or bubble, the text cursor elsewhere.
+    /// A hand over a note, bubble or drawing, and over the drawing picked
+    /// up, what a drag would do to it; the tool's own pointer elsewhere.
     fn hover(&self, x: f64, y: f64) {
         // A pen draws over notes like anything else on the page.
         if matches!(self.tool.get(), Tool::Draw(_)) {
             return;
         }
-        let over = self.hit(x, y).filter(|&spot| self.pinned_at(spot).is_some()).map(|spot| spot.page);
+        let over = self.hit(x, y).and_then(|spot| self.hover_cursor(spot).map(|name| (spot.page, name)));
         if over == self.hovering.get() {
             return;
         }
         let widgets = self.widgets.borrow();
-        if let Some(widget) = self.hovering.get().and_then(|page| widgets.get(page)) {
+        if let Some(widget) = self.hovering.get().and_then(|(page, _)| widgets.get(page)) {
             widget.set_cursor_from_name(Some(self.cursor()));
         }
-        if let Some(widget) = over.and_then(|page| widgets.get(page)) {
-            widget.set_cursor_from_name(Some("pointer"));
+        if let Some((widget, name)) = over.and_then(|(page, name)| Some((widgets.get(page)?, name))) {
+            widget.set_cursor_from_name(Some(name));
         }
         self.hovering.set(over);
+    }
+
+    fn hover_cursor(&self, spot: Spot) -> Option<&'static str> {
+        let selecting = self.tool.get() == Tool::Select;
+        if let Some(grip) = self.picked_grip_at(spot).filter(|_| selecting) {
+            return Some(self.grip_cursor(grip));
+        }
+        if self.pinned_at(spot).is_some() || (selecting && self.drawing_at(spot).is_some()) {
+            return Some("pointer");
+        }
+        None
+    }
+
+    /// Logical pixels per point on a page, as it is shown now.
+    fn pixels_per_point(&self, page: usize) -> f64 {
+        let Some(&(pw, ph)) = self.pages.borrow().get(page) else { return 1.0 };
+        let (tw, _) = self.rotation.get().size(pw, ph);
+        (self.layout.borrow().size(page).0 / tw.max(1e-9)).max(1e-9)
+    }
+
+    /// A point on a page, in points, as a share of the page as it is shown:
+    /// turned, if the view is turned.
+    fn shown_point(&self, page: usize, (x, y): (f64, f64)) -> (f64, f64) {
+        let Some(&(pw, ph)) = self.pages.borrow().get(page) else { return (0.0, 0.0) };
+        let rotation = self.rotation.get();
+        let (tw, th) = rotation.size(pw, ph);
+        let (x, y) = rotation.apply(x, y, pw, ph);
+        (x / tw.max(1e-9), y / th.max(1e-9))
+    }
+
+    /// The drawing under a spot, the one drawn last if they overlap.
+    fn drawing_at(&self, spot: Spot) -> Option<Drawing> {
+        let reader = self.reader()?;
+        let slack = 4.0 / self.pixels_per_point(spot.page);
+        let mut inked = self.inked.borrow_mut();
+        let here = inked.entry(spot.page).or_insert_with(|| ink::on_page(&reader, spot.page));
+        here.iter().rev().find(|drawing| drawing.is_at((spot.x, spot.y), slack)).cloned()
+    }
+
+    /// The handle of the picked drawing under a spot, or the drawing itself.
+    fn picked_grip_at(&self, spot: Spot) -> Option<Grip> {
+        let picked = self.picked.borrow();
+        let drawing = picked.as_ref().filter(|d| d.page == spot.page)?;
+        let per_point = self.pixels_per_point(spot.page);
+        let at = (spot.x, spot.y);
+        if let Some(grip) = drawing.outline().and_then(|outline| outline.grip_at(at, shape::GRIP_REACH / per_point)) {
+            return Some(grip);
+        }
+        drawing.is_at(at, 4.0 / per_point).then_some(Grip::Body)
+    }
+
+    /// The pointer for a handle of the picked drawing, judged on screen.
+    fn grip_cursor(&self, grip: Grip) -> &'static str {
+        let picked = self.picked.borrow();
+        let Some(drawing) = picked.as_ref() else { return "move" };
+        let Some(outline) = drawing.outline() else { return "move" };
+        let [x, y, w, h] = outline.bounds();
+        let Some((_, at)) = outline.grips().into_iter().find(|(g, _)| *g == grip) else { return shape::cursor(grip, (0.0, 0.0)) };
+        let page = drawing.page;
+        let (mx, my) = self.shown_point(page, (x + w / 2.0, y + h / 2.0));
+        let (gx, gy) = self.shown_point(page, at);
+        let (pw, ph) = self.layout.borrow().size(page);
+        shape::cursor(grip, ((gx - mx) * pw, (gy - my) * ph))
+    }
+
+    /// Pick a drawing up, or put down the one picked.
+    fn pick(&self, drawing: Option<Drawing>) {
+        if self.picked.borrow().is_none() && drawing.is_none() {
+            return;
+        }
+        if drawing.is_none() {
+            self.flush_reink();
+        }
+        let look = drawing.as_ref().map(|d| (d.colour.to_rgba(), d.width));
+        self.picked.replace(drawing);
+        self.show_picked();
+        if let Some(callback) = self.on_picked.borrow().as_ref() {
+            callback(look);
+        }
+    }
+
+    /// Show the picked drawing on its page, its handles, and where it is
+    /// being dragged to.
+    fn show_picked(&self) {
+        let widgets = self.widgets.borrow();
+        let reshaping = self.reshaping.borrow();
+        let picked = self.picked.borrow();
+        let shown = reshaping.as_ref().map(|r| &r.now).or(picked.as_ref());
+        let page = shown.map(|d| d.page);
+        if let Some(old) = self.picked_page.get().filter(|&old| Some(old) != page) {
+            if let Some(widget) = widgets.get(old) {
+                widget.set_picked(None);
+            }
+        }
+        self.picked_page.set(page);
+        let Some(drawing) = shown else { return };
+        let Some(widget) = widgets.get(drawing.page) else { return };
+        let Some(outline) = drawing.outline() else { return };
+        let page = drawing.page;
+        let to_page = |p: (f64, f64)| self.shown_point(page, p);
+        let frame = match outline {
+            Outline::Ends(..) => None,
+            Outline::Frame(_) => {
+                let [x1, y1, x2, y2] = drawing.area();
+                // Poppler pads the box a whole line's width; half is the ink.
+                let pad = drawing.width / 2.0;
+                let (a, b) = (to_page((x1 + pad, y1 + pad)), to_page((x2 - pad, y2 - pad)));
+                Some([a.0.min(b.0), a.1.min(b.1), (a.0 - b.0).abs(), (a.1 - b.1).abs()])
+            }
+        };
+        let Some(&(pw, ph)) = self.pages.borrow().get(page) else { return };
+        let (tw, _) = self.rotation.get().size(pw, ph);
+        let mut paint = drawing.colour.to_rgba();
+        if drawing.tool == draw::Tool::Highlighter {
+            paint.set_alpha(draw::HIGHLIGHT_ALPHA);
+        }
+        widget.set_picked(Some(Picked {
+            strokes: if reshaping.is_some() {
+                drawing.strokes.iter().map(|stroke| stroke.iter().map(|&p| to_page(p)).collect()).collect()
+            } else {
+                Vec::new()
+            },
+            paint,
+            width: drawing.width / tw.max(1e-9),
+            frame,
+            grips: outline.grips().into_iter().map(|(_, at)| to_page(at)).collect(),
+        }));
+    }
+
+    /// Take hold of the picked drawing, by a handle or by itself.
+    fn hold(&self, grip: Grip, from: Spot) {
+        let Some(before) = self.picked.borrow().clone() else { return };
+        // So Delete reaches the drawing, rather than the width box last used.
+        if let Some(root) = self.root.root() {
+            gtk::prelude::RootExt::set_focus(&root, None::<&gtk::Widget>);
+        }
+        self.flush_reink();
+        let before = self.picked.borrow().clone().unwrap_or(before);
+        self.reshaping.replace(Some(Reshaping { now: before.clone(), before, grip, from }));
+    }
+
+    /// The picked drawing follows the drag, on its own page. Shift keeps a
+    /// corner in proportion.
+    fn drag_picked(&self, to: Spot, keep_aspect: bool) {
+        {
+            let mut reshaping = self.reshaping.borrow_mut();
+            let Some(reshaping) = reshaping.as_mut() else { return };
+            if to.page != reshaping.from.page {
+                return;
+            }
+            let Some(outline) = reshaping.before.outline() else { return };
+            let outline = outline.dragged(reshaping.grip, (reshaping.from.x, reshaping.from.y), (to.x, to.y), keep_aspect);
+            reshaping.now = reshaping.before.reshaped(&outline);
+        }
+        self.show_picked();
+    }
+
+    /// Let go of the picked drawing: saved where it was put, if it moved.
+    fn drop_reshaped(&self, reshaping: Reshaping) {
+        let Reshaping { before, now, .. } = reshaping;
+        let moved = before.strokes.iter().flatten().zip(now.strokes.iter().flatten()).any(|(a, b)| (a.0 - b.0).hypot(a.1 - b.1) >= NUDGE / 4.0);
+        if !moved {
+            self.show_picked();
+            return;
+        }
+        match self.commit(Change { removed: vec![Annotation::Ink(before)], added: vec![Annotation::Ink(now.clone())] }) {
+            Ok(()) => {
+                self.picked.replace(Some(now));
+                self.show_picked();
+            }
+            Err(error) => {
+                self.show_picked();
+                self.report(error);
+            }
+        }
+    }
+
+    fn reink(self: &Rc<Self>, colour: gdk::RGBA, width: f64) {
+        if self.picked.borrow().is_none() {
+            return;
+        }
+        self.cancel_reink();
+        let weak = Rc::downgrade(self);
+        let source = glib::timeout_add_local_once(RESTYLE_PAUSE, move || {
+            if let Some(inner) = weak.upgrade() {
+                if let Some((_, colour, width)) = inner.reink.take() {
+                    inner.apply_reink(colour, width);
+                }
+            }
+        });
+        self.reink.replace(Some((source, colour, width)));
+    }
+
+    fn cancel_reink(&self) {
+        if let Some((source, _, _)) = self.reink.take() {
+            source.remove();
+        }
+    }
+
+    /// Save a new colour or thickness now, rather than when the controls
+    /// are still.
+    fn flush_reink(&self) {
+        if let Some((source, colour, width)) = self.reink.take() {
+            source.remove();
+            self.apply_reink(colour, width);
+        }
+    }
+
+    fn apply_reink(&self, colour: gdk::RGBA, width: f64) {
+        let Some(old) = self.picked.borrow().clone() else { return };
+        let new = old.restyled(Rgb::from_rgba(&colour), width);
+        if new == old {
+            return;
+        }
+        match self.commit(Change { removed: vec![Annotation::Ink(old)], added: vec![Annotation::Ink(new.clone())] }) {
+            Ok(()) => {
+                self.picked.replace(Some(new));
+                self.show_picked();
+            }
+            Err(error) => self.report(error),
+        }
     }
 
     fn drag_pinned(&self, to: Spot) {
@@ -2065,6 +2385,9 @@ impl Inner {
         }
         self.flush_restyle();
         self.choose(None);
+        if tool != Tool::Select {
+            self.pick(None);
+        }
         for widget in self.widgets.borrow().iter() {
             widget.set_cursor_from_name(Some(self.cursor()));
         }
@@ -2320,6 +2643,11 @@ impl Inner {
         self.selection.set(None);
         self.highlighted.borrow_mut().clear();
         self.pinned.borrow_mut().clear();
+        self.inked.borrow_mut().clear();
+        self.cancel_reink();
+        self.picked.replace(None);
+        self.picked_page.set(None);
+        self.reshaping.replace(None);
         self.moving.replace(None);
         self.hovering.set(None);
         if let Some(source) = self.restyle.take() {

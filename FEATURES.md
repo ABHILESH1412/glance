@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 39 / 64 | 7 |
+| Images | 40 / 64 | 6 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **59 / 122** | **10** |
+| **Total** | **60 / 122** | **9** |
 
 ---
 
@@ -70,7 +70,7 @@ annotations, so every PDF reader shows them.
 - [ ] Fill colour for shapes — *partial:* shapes are outlines only
 - [x] Text boxes with font, size and colour
 - [x] Text background colour, bold, italic, underline — underline on images only; a PDF text box has none
-- [ ] Select, move and resize a shape after drawing it — *partial:* text can be dragged, and on a PDF so can notes and speech bubbles; drawn marks can only be undone, and nothing resizes yet
+- [x] Select, move and resize a shape after drawing it — the Select tool picks a drawing up to move by its body, resize by its handles (Shift keeps the proportions), recolour, thicken or delete; on a PDF that includes drawings made earlier or by another program. Text can be dragged but not resized
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
 - [ ] Signatures

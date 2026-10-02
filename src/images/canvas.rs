@@ -22,6 +22,7 @@ use gtk::{gdk, glib, graphene, gsk};
 
 use crate::images::edit::adjust::Adjustments;
 use crate::images::edit::draw::{Mark, Tool};
+use crate::images::edit::shape::{self, Grip};
 use crate::images::edit::text::{Patch, TextItem};
 use crate::images::decoders::svg;
 use crate::images::live_layer::{LiveLayer, Place};
@@ -162,6 +163,18 @@ mod imp {
         pub draw_width: Cell<f64>,
         /// The stroke being drawn right now, before the pointer is lifted.
         pub drawing: RefCell<Option<Mark>>,
+        /// True while the Select tool is out: a press picks a mark up.
+        pub mark_select: Cell<bool>,
+        /// The mark picked up, by its sequence, which undo leaves alone.
+        pub picked: Cell<Option<u64>>,
+        /// A picked mark being dragged: by which grip, how it was when the
+        /// press landed, and where that was, in display space.
+        #[allow(clippy::type_complexity)]
+        pub reshaping: RefCell<Option<(Grip, Mark, (f64, f64))>>,
+        /// Changes made to marks already down, oldest first, for undo.
+        pub mark_edits: RefCell<Vec<super::MarkEdit>>,
+        #[allow(clippy::type_complexity)]
+        pub on_picked: RefCell<Option<Box<dyn Fn(Option<Mark>)>>>,
         /// Counts every overlay added, so marks and text stack in the order
         /// they were made rather than by which list they live in.
         pub sequence: Cell<u64>,
@@ -240,6 +253,20 @@ glib::wrapper! {
     pub struct ImageCanvas(ObjectSubclass<imp::ImageCanvas>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
+}
+
+/// A change to a mark already down — moved, resized, recoloured or taken
+/// away — and what it was before, so undo can put it back.
+pub struct MarkEdit {
+    /// When it was made, on the same count as the marks and text, so undo
+    /// takes back whichever came last.
+    order: u64,
+    before: Mark,
+    /// Where it was in the list, if it was taken away.
+    removed_at: Option<usize>,
+    /// A change of colour or thickness. A run of them on one mark, as the
+    /// width is stepped up a point at a time, is one step of undo.
+    restyle: bool,
 }
 
 /// A crop the user has drawn, in *display space*: the image as it appears after
@@ -727,6 +754,10 @@ impl ImageCanvas {
         imp.marks.borrow_mut().clear();
         imp.drawing.replace(None);
         imp.draw_tool.set(None);
+        imp.mark_select.set(false);
+        imp.picked.set(None);
+        imp.reshaping.replace(None);
+        imp.mark_edits.borrow_mut().clear();
         imp.sequence.set(0);
         imp.tile.replace(None);
         imp.budget_scale.set(f64::INFINITY);
@@ -992,6 +1023,7 @@ impl ImageCanvas {
     /// somewhere visible however far the view has been panned.
     pub fn add_text(&self, mut item: TextItem) {
         let imp = self.imp();
+        item.sequence = self.next_sequence();
         let (width, height) = item.bounds(self);
         let centre = self.to_display(self.viewport_centre());
         item.x = (centre.0 - width / 2.0).round();
@@ -1110,30 +1142,45 @@ impl ImageCanvas {
         !self.imp().marks.borrow().is_empty()
     }
 
-    /// Take back the most recent thing laid over the picture, whether that was
-    /// a stroke or a line of text.
+    /// Take back the most recent thing done over the picture: a stroke, a
+    /// line of text, or a change to a mark already down.
     pub fn undo_overlay(&self) -> bool {
         let imp = self.imp();
         let newest_mark = imp.marks.borrow().last().map(|m| m.sequence);
         let newest_text = imp.texts.borrow().last().map(|t| t.sequence);
-        match (newest_mark, newest_text) {
-            (None, None) => return false,
-            (Some(mark), Some(text)) if text > mark => {
-                imp.texts.borrow_mut().pop();
-                let remaining = imp.texts.borrow().len();
-                imp.selected_text
-                    .set((remaining > 0).then_some(remaining - 1));
+        let newest_edit = imp.mark_edits.borrow().last().map(|e| e.order);
+        let Some(newest) = [newest_mark, newest_text, newest_edit].into_iter().flatten().max() else {
+            return false;
+        };
+        if Some(newest) == newest_edit {
+            let edit = imp.mark_edits.borrow_mut().pop();
+            if let Some(edit) = edit {
+                let mut marks = imp.marks.borrow_mut();
+                match edit.removed_at {
+                    Some(index) => {
+                        let index = index.min(marks.len());
+                        marks.insert(index, edit.before);
+                    }
+                    None => {
+                        if let Some(mark) = marks.iter_mut().find(|m| m.sequence == edit.before.sequence) {
+                            *mark = edit.before;
+                        }
+                    }
+                }
             }
-            (Some(_), _) => {
-                imp.marks.borrow_mut().pop();
-            }
-            (None, Some(_)) => {
-                imp.texts.borrow_mut().pop();
-                let remaining = imp.texts.borrow().len();
-                imp.selected_text
-                    .set((remaining > 0).then_some(remaining - 1));
-            }
+        } else if Some(newest) == newest_text {
+            imp.texts.borrow_mut().pop();
+            let remaining = imp.texts.borrow().len();
+            imp.selected_text.set((remaining > 0).then_some(remaining - 1));
+        } else {
+            imp.marks.borrow_mut().pop();
         }
+        // A mark undone out of existence is no longer picked; one changed
+        // back is shown as it now is.
+        if imp.picked.get().is_some_and(|picked| !imp.marks.borrow().iter().any(|m| m.sequence == picked)) {
+            imp.picked.set(None);
+        }
+        self.notify_picked();
         self.queue_draw();
         self.notify_text();
         true
@@ -1148,6 +1195,10 @@ impl ImageCanvas {
         let imp = self.imp();
         imp.marks.borrow_mut().clear();
         imp.drawing.replace(None);
+        imp.mark_edits.borrow_mut().clear();
+        if imp.picked.take().is_some() {
+            self.notify_picked();
+        }
         self.queue_draw();
         self.notify_text();
     }
@@ -1208,6 +1259,211 @@ impl ImageCanvas {
             .rev()
             .find(|(_, item)| item.contains(self, display.0, display.1))
             .map(|(index, _)| index)
+    }
+
+    // -- picking marks up again ------------------------------------------
+
+    /// The Select tool: a press picks up a mark already down, to move,
+    /// resize, recolour or remove.
+    pub fn set_mark_select(&self, active: bool) {
+        let imp = self.imp();
+        imp.mark_select.set(active);
+        if !active {
+            imp.reshaping.replace(None);
+            if imp.picked.take().is_some() {
+                self.notify_picked();
+            }
+        }
+        self.update_cursor();
+        self.queue_draw();
+    }
+
+    /// The mark picked up, as it is now.
+    pub fn picked_mark(&self) -> Option<Mark> {
+        let picked = self.imp().picked.get()?;
+        self.imp().marks.borrow().iter().find(|m| m.sequence == picked).cloned()
+    }
+
+    /// Put the picked mark down, leaving it where it is.
+    pub fn drop_picked(&self) -> bool {
+        let had = self.imp().picked.take().is_some();
+        if had {
+            self.notify_picked();
+            self.queue_draw();
+        }
+        had
+    }
+
+    /// Called with the picked mark whenever it changes, or `None` once
+    /// nothing is picked, so the panel can show its colour and thickness.
+    pub fn connect_picked(&self, f: impl Fn(Option<Mark>) + 'static) {
+        self.imp().on_picked.replace(Some(Box::new(f)));
+    }
+
+    fn notify_picked(&self) {
+        let picked = self.picked_mark();
+        if let Some(f) = self.imp().on_picked.borrow().as_ref() {
+            f(picked);
+        }
+    }
+
+    /// Give the picked mark another colour or thickness.
+    pub fn restyle_picked(&self, colour: Option<gdk::RGBA>, width: Option<f64>) {
+        let imp = self.imp();
+        let Some(before) = self.picked_mark() else { return };
+        let mut after = before.clone();
+        if let Some(colour) = colour {
+            after.colour = colour;
+        }
+        if let Some(width) = width {
+            after.width = width.max(1.0);
+        }
+        if after.colour == before.colour && (after.width - before.width).abs() < 1e-9 {
+            return;
+        }
+        // Stepping the width a point at a time is one change, not twenty.
+        let continuing = imp
+            .mark_edits
+            .borrow()
+            .last()
+            .is_some_and(|edit| edit.restyle && edit.before.sequence == before.sequence && edit.order == imp.sequence.get());
+        if !continuing {
+            let order = self.next_sequence();
+            imp.mark_edits.borrow_mut().push(MarkEdit { order, before: before.clone(), removed_at: None, restyle: true });
+        }
+        self.replace_mark(after);
+        self.notify_text();
+    }
+
+    /// Take the picked mark away.
+    pub fn remove_picked(&self) -> bool {
+        let imp = self.imp();
+        let Some(picked) = imp.picked.get() else { return false };
+        let Some(index) = imp.marks.borrow().iter().position(|m| m.sequence == picked) else { return false };
+        let before = imp.marks.borrow_mut().remove(index);
+        let order = self.next_sequence();
+        imp.mark_edits.borrow_mut().push(MarkEdit { order, before, removed_at: Some(index), restyle: false });
+        imp.picked.set(None);
+        self.notify_picked();
+        self.queue_draw();
+        self.notify_text();
+        true
+    }
+
+    fn replace_mark(&self, mark: Mark) {
+        if let Some(slot) = self.imp().marks.borrow_mut().iter_mut().find(|m| m.sequence == mark.sequence) {
+            *slot = mark;
+        }
+        self.queue_draw();
+    }
+
+    /// How near, in display space, the pointer has to come to something to
+    /// take hold of it: the same on screen at any zoom.
+    fn reach(&self, pixels: f64) -> f64 {
+        pixels / self.imp().target_scale.get().max(1e-9)
+    }
+
+    /// The mark under a widget point, by its sequence: the newest whose ink
+    /// is there, or failing that the smallest rectangle or ellipse round it.
+    fn mark_at(&self, point: (f64, f64)) -> Option<u64> {
+        let at = self.to_display(point);
+        let slack = self.reach(4.0);
+        let marks = self.imp().marks.borrow();
+        if let Some(mark) = marks.iter().rev().find(|m| m.is_at(at, slack, false)) {
+            return Some(mark.sequence);
+        }
+        marks
+            .iter()
+            .filter(|m| m.is_at(at, slack, true))
+            .min_by(|a, b| {
+                let area = |m: &Mark| m.rect().map_or(f64::MAX, |(_, _, w, h)| w * h);
+                area(a).total_cmp(&area(b))
+            })
+            .map(|m| m.sequence)
+    }
+
+    /// The grip of the picked mark under a widget point, if any: one of its
+    /// handles, or the mark itself.
+    fn picked_grip_at(&self, point: (f64, f64)) -> Option<Grip> {
+        let mark = self.picked_mark()?;
+        let at = self.to_display(point);
+        if let Some(grip) = mark.outline().and_then(|outline| outline.grip_at(at, self.reach(shape::GRIP_REACH))) {
+            return Some(grip);
+        }
+        mark.is_at(at, self.reach(4.0), true).then_some(Grip::Body)
+    }
+
+    /// A press with the Select tool: take hold of a grip of the picked mark,
+    /// or pick up the mark under the pointer. False when there is nothing
+    /// there, which puts down whatever was picked and leaves the drag to pan.
+    fn pick_press(&self, point: (f64, f64)) -> bool {
+        let imp = self.imp();
+        let held = self.picked_grip_at(point).zip(imp.picked.get()).map(|(grip, picked)| (picked, grip));
+        let Some((picked, grip)) = held.or_else(|| self.mark_at(point).map(|picked| (picked, Grip::Body))) else {
+            self.drop_picked();
+            return false;
+        };
+        let changed = imp.picked.replace(Some(picked)) != Some(picked);
+        // So Delete reaches it, rather than the width box last used.
+        self.grab_focus();
+        if let Some(mark) = self.picked_mark() {
+            imp.reshaping.replace(Some((grip, mark, self.to_display(point))));
+        }
+        if changed {
+            self.notify_picked();
+        }
+        self.queue_draw();
+        true
+    }
+
+    /// The picked mark follows the drag. Shift keeps a corner in proportion.
+    fn pick_drag(&self, point: (f64, f64), keep_aspect: bool) {
+        let imp = self.imp();
+        let Some((grip, before, from)) = imp.reshaping.borrow().clone() else { return };
+        let Some(outline) = before.outline() else { return };
+        let to = outline.dragged(grip, from, self.to_display(point), keep_aspect);
+        self.replace_mark(before.reshaped(&to));
+    }
+
+    /// The drag is over: if the mark moved, that is a change undo can take
+    /// back.
+    fn pick_release(&self) {
+        let imp = self.imp();
+        let Some((_, before, _)) = imp.reshaping.take() else { return };
+        if self.picked_mark().is_some_and(|now| now.points != before.points) {
+            let order = self.next_sequence();
+            imp.mark_edits.borrow_mut().push(MarkEdit { order, before, removed_at: None, restyle: false });
+            self.notify_text();
+        }
+        self.update_cursor();
+    }
+
+    /// The picked mark's box and grips, on screen.
+    fn draw_picked(&self, snapshot: &gtk::Snapshot) {
+        let Some(mark) = self.picked_mark() else { return };
+        let Some(outline) = mark.outline() else { return };
+        let grips: Vec<(f64, f64)> = outline.grips().into_iter().map(|(_, at)| self.from_display(at)).collect();
+        // A line is its own outline; anything else gets a box round its ink.
+        let frame = match outline {
+            shape::Outline::Ends(..) => None,
+            shape::Outline::Frame(_) => mark.bounds().map(|(x, y, w, h)| {
+                let (x1, y1) = self.from_display((x, y));
+                let (x2, y2) = self.from_display((x + w, y + h));
+                [x1, y1, x2 - x1, y2 - y1]
+            }),
+        };
+        shape::append_picked(snapshot, frame, &grips);
+    }
+
+    /// The pointer over the picked mark: what a drag from here would do.
+    fn picked_cursor(&self, point: (f64, f64)) -> Option<&'static str> {
+        let grip = self.picked_grip_at(point)?;
+        let outline = self.picked_mark()?.outline()?;
+        let [x, y, w, h] = outline.bounds();
+        let grip_at = outline.grips().into_iter().find(|(g, _)| *g == grip).map_or((x + w / 2.0, y + h / 2.0), |(_, at)| at);
+        let middle = self.from_display((x + w / 2.0, y + h / 2.0));
+        let on_screen = self.from_display(grip_at);
+        Some(shape::cursor(grip, (on_screen.0 - middle.0, on_screen.1 - middle.1)))
     }
 
     // -- resizing ---------------------------------------------------------
@@ -2090,6 +2346,22 @@ impl ImageCanvas {
             self.set_cursor_from_name(Some("crosshair"));
             return;
         }
+        if self.imp().mark_select.get() {
+            let pointer = self.imp().pointer.get();
+            let name = if self.imp().reshaping.borrow().is_some() {
+                Some("grabbing")
+            } else if let Some(name) = self.picked_cursor(pointer) {
+                Some(name)
+            } else if self.mark_at(pointer).is_some() {
+                Some("pointer")
+            } else if self.is_pannable() {
+                Some("grab")
+            } else {
+                None
+            };
+            self.set_cursor_from_name(name);
+            return;
+        }
         if self.imp().text_tool.get() {
             let over_text = self.text_at(self.imp().pointer.get()).is_some();
             let name = if over_text {
@@ -2389,6 +2661,9 @@ impl ImageCanvas {
         if let Some(mark) = imp.drawing.borrow().as_ref() {
             self.draw_mark(snapshot, mark);
         }
+        if imp.mark_select.get() {
+            self.draw_picked(snapshot);
+        }
     }
 
     fn draw_mark(&self, snapshot: &gtk::Snapshot, mark: &Mark) {
@@ -2612,6 +2887,7 @@ impl ImageCanvas {
                 if canvas.imp().cropping.get()
                     || canvas.imp().resizing.get()
                     || canvas.imp().text_tool.get()
+                    || canvas.imp().mark_select.get()
                     || canvas.has_live_text()
                 {
                     canvas.update_cursor();
@@ -2690,6 +2966,11 @@ impl ImageCanvas {
                     return;
                 }
 
+                if imp.mark_select.get() && canvas.pick_press((start_x, start_y)) {
+                    canvas.update_cursor();
+                    return;
+                }
+
                 if imp.text_tool.get() {
                     let hit = canvas.text_at((start_x, start_y));
                     imp.selected_text.set(hit);
@@ -2754,6 +3035,14 @@ impl ImageCanvas {
                     // gesture's own start point turns it back into a position.
                     if let Some((start_x, start_y)) = gesture.start_point() {
                         canvas.extend_mark((start_x + dx, start_y + dy));
+                    }
+                    return;
+                }
+
+                if imp.reshaping.borrow().is_some() {
+                    if let Some((start_x, start_y)) = gesture.start_point() {
+                        let shift = gesture.current_event_state().contains(gdk::ModifierType::SHIFT_MASK);
+                        canvas.pick_drag((start_x + dx, start_y + dy), shift);
                     }
                     return;
                 }
@@ -2836,6 +3125,7 @@ impl ImageCanvas {
             self,
             move |_, _, _| {
                 canvas.finish_mark();
+                canvas.pick_release();
                 canvas.imp().dragging.set(false);
                 canvas.imp().live_selecting.set(false);
                 canvas.update_cursor();

@@ -501,7 +501,17 @@ impl Window {
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
-        let mut anchor: Option<gtk::ToggleButton> = None;
+        // Select first: for picking up what has already been drawn.
+        let select = &imp.draw_select;
+        select.set_child(Some(&draw::ToolIcon::select_face()));
+        select.set_tooltip_text(Some("Select a drawing, to move, resize or remove it"));
+        select.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.sync_draw_tool()
+        ));
+        tool_grid.append(select);
+        let mut anchor: Option<gtk::ToggleButton> = Some(select.clone());
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
             // The icon is the mark the tool makes, drawn by the same code that
@@ -536,7 +546,13 @@ impl Window {
         imp.draw_width.connect_value_changed(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |spin| window.imp().view.canvas().set_draw_width(spin.value())
+            move |spin| {
+                let canvas = window.imp().view.canvas();
+                canvas.set_draw_width(spin.value());
+                if !window.imp().syncing_panel.get() {
+                    canvas.restyle_picked(None, Some(spin.value()));
+                }
+            }
         ));
         let colour_caption = gtk::Label::new(Some("Colour"));
         colour_caption.add_css_class("dim-label");
@@ -545,7 +561,13 @@ impl Window {
         imp.draw_colour.connect_rgba_notify(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |button| window.imp().view.canvas().set_draw_colour(button.rgba())
+            move |button| {
+                let canvas = window.imp().view.canvas();
+                canvas.set_draw_colour(button.rgba());
+                if !window.imp().syncing_panel.get() {
+                    canvas.restyle_picked(Some(button.rgba()), None);
+                }
+            }
         ));
         stroke_row.append(&width_caption);
         stroke_row.append(&imp.draw_width);
@@ -915,6 +937,12 @@ impl Window {
             }
         ));
 
+        imp.view.canvas().connect_picked(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |picked| window.show_picked(picked)
+        ));
+
         // Dragging a handle has to reach the numbers, the same way typing a
         // number reaches the handles.
         imp.view.canvas().connect_resize_changed(glib::clone!(
@@ -1082,17 +1110,42 @@ impl Window {
         } else {
             None
         };
+        let selecting = imp.draw_toggle.is_active() && imp.draw_select.is_active();
         let canvas = imp.view.canvas();
         canvas.set_draw_colour(imp.draw_colour.rgba());
         canvas.set_draw_width(imp.draw_width.value());
         canvas.set_draw_tool(chosen);
-        imp.draw_hint.set_text(match chosen {
-            Some(tool) => match tool {
-                draw::Tool::Pen | draw::Tool::Highlighter => "Drag on the picture to draw.",
-                _ => "Drag on the picture from one corner to the other.",
-            },
+        canvas.set_mark_select(selecting);
+        self.sync_draw_hint();
+    }
+
+    /// What the tool in hand does, under the drawing tools.
+    pub(crate) fn sync_draw_hint(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        imp.draw_hint.set_text(match canvas.draw_tool() {
+            Some(draw::Tool::Pen | draw::Tool::Highlighter) => "Drag on the picture to draw.",
+            Some(_) => "Drag on the picture from one corner to the other.",
+            None if canvas.picked_mark().is_some() => {
+                "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
+                 Width and Colour change it, and Delete removes it."
+            }
+            None if imp.draw_select.is_active() => "Click a drawing to pick it up.",
             None => "Pick a tool, then drag on the picture.",
         });
+    }
+
+    /// A mark picked up shows its own thickness and colour, so changing
+    /// them starts from what it has.
+    pub(crate) fn show_picked(&self, picked: Option<draw::Mark>) {
+        let imp = self.imp();
+        if let Some(mark) = picked {
+            imp.syncing_panel.set(true);
+            imp.draw_width.set_value(mark.width);
+            imp.draw_colour.set_rgba(&mark.colour);
+            imp.syncing_panel.set(false);
+        }
+        self.sync_draw_hint();
     }
 
     /// Change the selected item, unless the panel is only echoing the canvas

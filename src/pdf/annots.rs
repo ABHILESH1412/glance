@@ -115,6 +115,14 @@ impl Annotation {
     /// Take it off its page again. False if it is not there.
     pub fn remove(&self, document: &poppler::Document) -> bool {
         let Some(page) = page(document, self.page()) else { return false };
+        // Another program's drawing has a box of its own making, so it is
+        // looked for by its strokes when it is not where Glance would put it.
+        if let Annotation::Ink(drawing) = self {
+            let (kind, rect) = super::ink::key(&page, drawing);
+            let Some(annot) = find(&page, kind, rect).or_else(|| super::ink::find(&page, drawing)) else { return false };
+            page.remove_annot(&annot);
+            return true;
+        }
         let parts = match self {
             Annotation::Mark(mark) => vec![super::markup::key(&page, mark)],
             Annotation::Note(note) => vec![super::notes::note_key(&page, note)],

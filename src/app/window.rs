@@ -134,6 +134,8 @@ mod imp {
         pub draw_toggle: gtk::ToggleButton,
         pub draw_options: gtk::Box,
         pub draw_tools: RefCell<Vec<gtk::ToggleButton>>,
+        /// The Select tool, for picking up what has been drawn.
+        pub draw_select: gtk::ToggleButton,
         pub draw_colour: crate::app::colour::ColourButton,
         pub draw_width: gtk::SpinButton,
         pub draw_hint: gtk::Label,
@@ -333,6 +335,7 @@ mod imp {
                 draw_toggle: section_toggle("applications-graphics-symbolic", "Draw"),
                 draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_tools: RefCell::new(Vec::new()),
+                draw_select: gtk::ToggleButton::new(),
                 draw_colour: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
                 draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),
                 draw_hint: gtk::Label::new(None),
@@ -1373,6 +1376,20 @@ impl Window {
             move |_, _| window.confirm_delete()
         ));
         self.add_action(&delete);
+        let delete_key = gio::SimpleAction::new("delete-key", None);
+        delete_key.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| {
+                let imp = window.imp();
+                if imp.showing_pdf.get() {
+                    imp.pdf_view.remove_picked();
+                } else if !imp.view.canvas().remove_picked() {
+                    window.confirm_delete();
+                }
+            }
+        ));
+        self.add_action(&delete_key);
 
         let fullscreen = gio::SimpleAction::new("fullscreen", None);
         fullscreen.connect_activate(glib::clone!(
@@ -1433,6 +1450,8 @@ impl Window {
                     window.stop_slideshow();
                 } else if window.imp().live_on.get() {
                     window.live_stop();
+                } else if window.imp().pdf_view.drop_picked() || window.imp().view.canvas().drop_picked() {
+                    // Put down what was picked up, leaving the tool in hand.
                 } else if window.imp().inspector.root.is_visible() {
                     if let Some(action) = window.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
                         action.change_state(&false.to_variant());

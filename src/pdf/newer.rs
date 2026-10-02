@@ -19,6 +19,7 @@ pub struct Ink {
     pub path_free: unsafe extern "C" fn(*mut c_void),
     pub path_points: unsafe extern "C" fn(*mut c_void, *mut usize) -> *mut PopplerPoint,
     pub set_list: unsafe extern "C" fn(*mut PopplerAnnot, *mut *mut c_void, usize),
+    pub get_list: unsafe extern "C" fn(*mut PopplerAnnot, *mut usize) -> *mut *mut c_void,
 }
 
 pub struct Fonts {
@@ -64,6 +65,7 @@ pub fn get() -> &'static Newer {
                 path_free: lookup(c"poppler_path_free")?,
                 path_points: lookup(c"poppler_path_get_points")?,
                 set_list: lookup(c"poppler_annot_ink_set_ink_list")?,
+                get_list: lookup(c"poppler_annot_ink_get_ink_list")?,
             })
         })();
         let fonts = (|| {

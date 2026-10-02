@@ -11,6 +11,7 @@
 use gtk::glib;
 
 use crate::images::edit::draw::{self, Mark, Tool};
+use crate::images::edit::shape::{self, Outline};
 
 use super::annots::{self, Rgb};
 use super::newer;
@@ -56,6 +57,169 @@ impl Drawing {
         let margin = self.width;
         [x1 - margin, y1 - margin, x2 + margin, y2 + margin]
     }
+
+    /// The ends of a line or arrow; None for any other drawing.
+    fn ends(&self) -> Option<((f64, f64), (f64, f64))> {
+        match (self.tool, self.strokes.as_slice()) {
+            (Tool::Line, [shaft]) | (Tool::Arrow, [shaft, _]) if shaft.len() == 2 => Some((shaft[0], shaft[1])),
+            _ => None,
+        }
+    }
+
+    /// How the drawing is held once picked up: a line or arrow by its ends,
+    /// anything else by the box round its points.
+    pub fn outline(&self) -> Option<Outline> {
+        match self.ends() {
+            Some((a, b)) => Some(Outline::Ends(a, b)),
+            None => shape::frame_of(self.strokes.iter().flatten()).map(Outline::Frame),
+        }
+    }
+
+    /// The drawing with its outline dragged to `to`. A line or arrow is
+    /// drawn again between its new ends, so an arrow's head keeps its shape;
+    /// anything else has its points stretched to the new box.
+    pub fn reshaped(&self, to: &Outline) -> Drawing {
+        let strokes = match (self.outline(), to) {
+            (Some(Outline::Ends(..)), Outline::Ends(a, b)) => self.redrawn(vec![*a, *b], self.width),
+            (Some(Outline::Frame(from)), Outline::Frame(to)) => self
+                .strokes
+                .iter()
+                .map(|stroke| stroke.iter().map(|&p| shape::refit(p, from, *to)).collect())
+                .collect(),
+            _ => self.strokes.clone(),
+        };
+        Drawing { strokes, ..self.clone() }
+    }
+
+    /// The drawing in another colour or thickness. An arrow's head is sized
+    /// from its line, so it is drawn again.
+    pub fn restyled(&self, colour: Rgb, width: f64) -> Drawing {
+        let strokes = match self.ends() {
+            Some((a, b)) => self.redrawn(vec![a, b], width),
+            None => self.strokes.clone(),
+        };
+        Drawing { strokes, colour, width, ..self.clone() }
+    }
+
+    /// A line or arrow's strokes, between the ends given.
+    fn redrawn(&self, ends: Vec<(f64, f64)>, width: f64) -> Vec<Vec<(f64, f64)>> {
+        Mark { tool: self.tool, points: ends, colour: self.colour.to_rgba(), width, sequence: 0 }.strokes()
+    }
+
+    /// Whether a press at `p` lands on the drawing's ink, give or take
+    /// `slack`.
+    pub fn is_at(&self, p: (f64, f64), slack: f64) -> bool {
+        shape::touches(&self.strokes, self.width, p, slack)
+    }
+
+    /// The same drawing, as near as the file keeps it: the points come back
+    /// a hair off what was written.
+    fn same_strokes(&self, strokes: &[Vec<(f64, f64)>]) -> bool {
+        const CLOSE: f64 = 0.05;
+        self.strokes.len() == strokes.len()
+            && self.strokes.iter().zip(strokes).all(|(a, b)| {
+                a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (p.0 - q.0).abs() < CLOSE && (p.1 - q.1).abs() < CLOSE)
+            })
+    }
+}
+
+/// What a drawing read back from a file was made with, as near as can be
+/// told: a line or an arrow by its strokes, a highlighter by being see-
+/// through, and anything else as if by pen. Only lines and arrows are held
+/// differently once picked up, and only a highlighter is saved differently.
+fn tool_of(strokes: &[Vec<(f64, f64)>], see_through: bool) -> Tool {
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).abs() < 0.05 && (a.1 - b.1).abs() < 0.05;
+    match strokes {
+        _ if see_through => Tool::Highlighter,
+        [shaft] if shaft.len() == 2 && !near(shaft[0], shaft[1]) => Tool::Line,
+        [shaft, head] if shaft.len() == 2 && head.len() == 3 && near(head[1], shaft[1]) => Tool::Arrow,
+        _ => Tool::Pen,
+    }
+}
+
+/// The drawings on a page, read back from the document, including any
+/// another program made.
+pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Drawing> {
+    let Some(page) = annots::page(document, index) else { return Vec::new() };
+    let (_, height) = page.size();
+    annots::list(&page)
+        .into_iter()
+        .filter(|found| found.kind == poppler::ffi::POPPLER_ANNOT_INK)
+        .filter_map(|found| {
+            let strokes = strokes_of(&found.annot, height)?;
+            let width = width_of(&found.annot);
+            // SAFETY: an ink annotation is a markup annotation.
+            let opacity = unsafe {
+                use glib::translate::ToGlibPtr;
+                let raw: *mut poppler::ffi::PopplerAnnot = found.annot.to_glib_none().0;
+                poppler::ffi::poppler_annot_markup_get_opacity(raw.cast())
+            };
+            Some(Drawing {
+                page: index,
+                tool: tool_of(&strokes, opacity < 0.99),
+                strokes,
+                colour: found.colour.unwrap_or(Rgb(0, 0, 0)),
+                width,
+            })
+        })
+        .collect()
+}
+
+/// An ink annotation's strokes, in points from the page's top-left corner.
+fn strokes_of(annot: &poppler::Annot, height: f64) -> Option<Vec<Vec<(f64, f64)>>> {
+    use glib::translate::ToGlibPtr;
+    let ink = newer::get().ink.as_ref()?;
+    let raw: *mut poppler::ffi::PopplerAnnot = annot.to_glib_none().0;
+    let mut strokes = Vec::new();
+    // SAFETY: Poppler's own calls; the list and its paths are ours to free,
+    // the points in them are not.
+    unsafe {
+        let mut count = 0usize;
+        let list = (ink.get_list)(raw, &mut count);
+        if list.is_null() {
+            return None;
+        }
+        for i in 0..count {
+            let path = *list.add(i);
+            if path.is_null() {
+                continue;
+            }
+            let mut n = 0usize;
+            let points = (ink.path_points)(path, &mut n);
+            if !points.is_null() {
+                strokes.push((0..n).map(|j| {
+                    let p = *points.add(j);
+                    (p.x, height - p.y)
+                }).collect::<Vec<_>>());
+            }
+            (ink.path_free)(path);
+        }
+        glib::ffi::g_free(list.cast());
+    }
+    strokes.retain(|stroke| !stroke.is_empty());
+    (!strokes.is_empty()).then_some(strokes)
+}
+
+/// How thick an annotation's line is, in points: 1 if it does not say, as
+/// the PDF has it.
+fn width_of(annot: &poppler::Annot) -> f64 {
+    use glib::translate::ToGlibPtr;
+    let Some(border) = newer::get().border.as_ref() else { return 1.0 };
+    let mut width = 1.0;
+    // SAFETY: Poppler's own call, writing one number.
+    let known = unsafe { (border.get)(annot.to_glib_none().0, &mut width) };
+    if known != 0 && width > 0.0 { width } else { 1.0 }
+}
+
+/// The drawing's annotation on its page, found by its strokes when its box
+/// is not the one Glance would have given it: one made by another program.
+pub(super) fn find(page: &poppler::Page, drawing: &Drawing) -> Option<poppler::Annot> {
+    let (_, height) = page.size();
+    annots::list(page)
+        .into_iter()
+        .filter(|found| found.kind == poppler::ffi::POPPLER_ANNOT_INK)
+        .find(|found| strokes_of(&found.annot, height).is_some_and(|strokes| drawing.same_strokes(&strokes)))
+        .map(|found| found.annot)
 }
 
 /// Whether this Poppler can draw at all: ink needs 25.06.
@@ -135,6 +299,112 @@ mod tests {
             width: 4.0,
         };
         assert_eq!(drawing.area(), [6.0, 16.0, 54.0, 24.0]);
+    }
+
+    #[test]
+    fn what_a_drawing_was_made_with_is_told_from_its_strokes() {
+        assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], false), Tool::Line);
+        let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, sequence: 0 };
+        assert_eq!(tool_of(&arrow.strokes(), false), Tool::Arrow);
+        assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], true), Tool::Highlighter);
+        assert_eq!(tool_of(&[vec![(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)]], false), Tool::Pen);
+        assert_eq!(tool_of(&[vec![(3.0, 3.0), (3.0, 3.0)]], false), Tool::Pen, "a dot is not a line");
+    }
+
+    #[test]
+    fn an_arrow_keeps_its_head_when_its_end_is_dragged() {
+        let mark = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, sequence: 0 };
+        let arrow = Drawing::from_mark(0, &mark).unwrap();
+        let Some(Outline::Ends(a, _)) = arrow.outline() else { panic!("held by its ends") };
+        let turned = arrow.reshaped(&Outline::Ends(a, (0.0, 100.0)));
+        // Pointing down now, the head drawn again at the new tip.
+        assert_eq!(turned.strokes[0], vec![(0.0, 0.0), (0.0, 100.0)]);
+        assert_eq!(turned.strokes[1][1], (0.0, 100.0));
+        assert!(turned.strokes[1][0].1 < 100.0 && turned.strokes[1][2].1 < 100.0, "the head trails the tip");
+        // Thicker, the head grows with it.
+        let thick = arrow.restyled(Rgb(0, 0, 0), 8.0);
+        let spread = |d: &Drawing| (d.strokes[1][0].1 - d.strokes[1][2].1).abs();
+        assert!(spread(&thick) > spread(&arrow));
+    }
+
+    /// Saved, read back as another run would, moved and taken away: the
+    /// whole life of a drawing picked up again.
+    #[test]
+    fn a_drawing_is_read_back_moved_and_removed() {
+        use super::super::annots::{self, Annotation};
+        use super::super::document;
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("glance-ink-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.pdf");
+        // One blank A4 page.
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, object) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{object}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+        for offset in offsets {
+            out.extend(format!("{offset:010} 00000 n \n").bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+        std::fs::write(&path, out).unwrap();
+        let open = || poppler::Document::from_file(&document::uri(&path), None).unwrap();
+
+        let pen = Mark {
+            tool: Tool::Highlighter,
+            points: vec![(100.0, 100.0), (150.0, 140.0), (200.0, 100.0)],
+            colour: gtk::gdk::RGBA::new(1.0, 0.0, 0.0, 1.0),
+            width: 6.0,
+            sequence: 0,
+        };
+        let arrow = Mark { tool: Tool::Arrow, points: vec![(300.0, 300.0), (400.0, 350.0)], ..pen.clone() };
+        let arrow = Mark { tool: Tool::Arrow, width: 3.0, ..arrow };
+        let drawings = [Drawing::from_mark(0, &pen).unwrap(), Drawing::from_mark(0, &arrow).unwrap()];
+        let doc = open();
+        for drawing in &drawings {
+            Annotation::Ink(drawing.clone()).add(&doc);
+        }
+        annots::settle(&doc, &[0]);
+        annots::save(&doc, &path).unwrap();
+
+        let doc = open();
+        let read = on_page(&doc, 0);
+        assert_eq!(read.len(), 2);
+        for (got, made) in read.iter().zip(&drawings) {
+            assert!(got.same_strokes(&made.strokes), "{got:?} is not {made:?}");
+            assert_eq!(got.tool, made.tool, "told apart by its strokes and how see-through it is");
+            assert!((got.width - made.width).abs() < 0.01);
+            assert_eq!(got.colour, made.colour);
+        }
+        // Found where it is, and moved.
+        assert!(read[0].is_at((150.0, 141.0), 0.5));
+        let Some(Outline::Frame([x, y, w, h])) = read[0].outline() else { panic!() };
+        let moved = read[0].reshaped(&Outline::Frame([x + 50.0, y + 200.0, w, h]));
+        assert!(Annotation::Ink(read[0].clone()).remove(&doc), "the drawing read back is found to take away");
+        Annotation::Ink(moved.clone()).add(&doc);
+        annots::settle(&doc, &[0]);
+        annots::save(&doc, &path).unwrap();
+        let doc = open();
+        let read = on_page(&doc, 0);
+        assert_eq!(read.len(), 2);
+        assert!(read.iter().any(|d| d.same_strokes(&moved.strokes)), "moved where it was put");
+        // And taken away.
+        for drawing in &read {
+            assert!(Annotation::Ink(drawing.clone()).remove(&doc));
+        }
+        annots::save(&doc, &path).unwrap();
+        assert!(on_page(&open(), 0).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

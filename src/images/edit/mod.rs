@@ -13,6 +13,7 @@ pub mod output;
 pub mod panel;
 pub mod rotate;
 pub mod session;
+pub mod shape;
 pub mod text;
 pub mod tone;
 pub mod tone_panel;

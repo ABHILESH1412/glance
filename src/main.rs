@@ -190,7 +190,11 @@ const ACCELS: &[Accel] = &[
     Accel { action: "win.fullscreen", idle: &["F11", "<Primary>f"], typing: &["F11"] },
     // The one that would do real harm: Delete in a size box must delete a
     // digit, not the file.
-    Accel { action: "win.delete", idle: &["Delete"], typing: &[] },
+    // Delete takes away the drawing picked up, if there is one, and only
+    // otherwise asks to delete the file; the menu and the header button
+    // always mean the file.
+    Accel { action: "win.delete", idle: &[], typing: &[] },
+    Accel { action: "win.delete-key", idle: &["Delete"], typing: &[] },
     Accel { action: "win.copy", idle: &["<Primary>c"], typing: &[] },
     Accel { action: "win.edit", idle: &["<Primary>e"], typing: &["<Primary>e"] },
     Accel { action: "win.resize", idle: &["<Primary>r"], typing: &["<Primary>r"] },
@@ -252,6 +256,8 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     ("win.next-image", &[]),
     ("win.previous-image", &[]),
     ("win.delete", &[]),
+    // Only ever the drawing or text box picked up: never the document.
+    ("win.delete-key", &["Delete"]),
     ("win.page-down", &["Page_Down", "space"]),
     ("win.page-up", &["Page_Up", "BackSpace", "<Shift>space"]),
     ("win.line-down", &["Down"]),

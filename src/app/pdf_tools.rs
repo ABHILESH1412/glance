@@ -113,6 +113,11 @@ impl PdfTools {
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
+        // Select first: for picking up what has already been drawn.
+        let select = gtk::ToggleButton::new();
+        select.set_child(Some(&draw::ToolIcon::select_face()));
+        select.set_tooltip_text(Some("Select a drawing, to move, resize or remove it"));
+        tool_grid.append(&select);
         let mut tools: Vec<(draw::Tool, gtk::ToggleButton)> = Vec::new();
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
@@ -122,9 +127,7 @@ impl PdfTools {
             face.append(&gtk::Label::new(Some(tool.label())));
             button.set_child(Some(&face));
             button.set_tooltip_text(Some(tool.label()));
-            if let Some((_, first)) = tools.first() {
-                button.set_group(Some(first));
-            }
+            button.set_group(Some(&select));
             tool_grid.append(&button);
             tools.push((*tool, button));
         }
@@ -158,6 +161,8 @@ impl PdfTools {
         tool_grid.set_sensitive(pdf::can_draw());
         stroke_row.set_sensitive(pdf::can_draw());
         strokes.append(&draw_hint);
+        // Set while the controls are being filled from a picked drawing.
+        let showing_picked = Rc::new(Cell::new(false));
 
         // -- text --
         let words = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -334,9 +339,28 @@ impl PdfTools {
                 push_tool();
             });
         }
-        for (_, button) in tools.iter() {
-            let push_tool = push_tool.clone();
-            button.connect_toggled(move |_| push_tool());
+        let pick_hint = {
+            let (draw_hint, select) = (draw_hint.clone(), select.clone());
+            Rc::new(move |picked: bool| {
+                if !pdf::can_draw() {
+                    return;
+                }
+                draw_hint.set_text(if picked {
+                    "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
+                     Width and Colour change it, and Delete removes it."
+                } else if select.is_active() {
+                    "Click a drawing to pick it up."
+                } else {
+                    "Pick a tool, then drag on the page."
+                });
+            })
+        };
+        for button in tools.iter().map(|(_, b)| b).chain([&select]) {
+            let (push_tool, pick_hint) = (push_tool.clone(), pick_hint.clone());
+            button.connect_toggled(move |_| {
+                push_tool();
+                pick_hint(false);
+            });
         }
         {
             let push_tool = push_tool.clone();
@@ -349,13 +373,44 @@ impl PdfTools {
                 push_tool();
             });
         }
+        // The pen's colour and thickness, and the picked drawing's too.
+        let reink = {
+            let window = window.downgrade();
+            let (width, ink, showing_picked) = (width.clone(), ink.clone(), showing_picked.clone());
+            Rc::new(move || {
+                if showing_picked.get() {
+                    return;
+                }
+                if let Some(window) = window.upgrade() {
+                    window.imp().pdf_view.reink_picked(ink.rgba(), width.value());
+                }
+            })
+        };
         {
-            let push_tool = push_tool.clone();
-            width.connect_value_changed(move |_| push_tool());
+            let (push_tool, reink) = (push_tool.clone(), reink.clone());
+            width.connect_value_changed(move |_| {
+                push_tool();
+                reink();
+            });
         }
         {
-            let push_tool = push_tool.clone();
-            ink.connect_rgba_notify(move |_| push_tool());
+            let (push_tool, reink) = (push_tool.clone(), reink.clone());
+            ink.connect_rgba_notify(move |_| {
+                push_tool();
+                reink();
+            });
+        }
+        {
+            let (width, ink) = (width.clone(), ink.clone());
+            window.imp().pdf_view.connect_picked(move |picked| {
+                if let Some((colour, thickness)) = picked {
+                    showing_picked.set(true);
+                    width.set_value(thickness);
+                    ink.set_rgba(&colour);
+                    showing_picked.set(false);
+                }
+                pick_hint(picked.is_some());
+            });
         }
 
         // Any change to the text controls: the next box looks like this, and

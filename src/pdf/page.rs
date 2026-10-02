@@ -43,6 +43,21 @@ fn night() -> (graphene::Matrix, graphene::Vec4) {
     (matrix, graphene::Vec4::new(1.0, 1.0, 1.0, 0.0))
 }
 
+/// A drawing picked up with the Select tool, in fractions of the page as it
+/// is shown, so it stays put however the page is zoomed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picked {
+    /// Where it is being dragged to, drawn over the page until it is
+    /// dropped there; empty while it sits still.
+    pub strokes: Vec<Vec<(f64, f64)>>,
+    pub paint: gdk::RGBA,
+    /// Line thickness, as a share of the page's width.
+    pub width: f64,
+    /// The box round it, x, y, width, height, for anything but a line.
+    pub frame: Option<[f64; 4]>,
+    pub grips: Vec<(f64, f64)>,
+}
+
 mod imp {
     use super::*;
 
@@ -67,6 +82,7 @@ mod imp {
         pub night: Cell<bool>,
         /// Areas marked for redaction, as fractions of the page.
         pub redactions: RefCell<Vec<[f64; 4]>>,
+        pub picked: RefCell<Option<Picked>>,
     }
 
     #[glib::object_subclass]
@@ -115,9 +131,34 @@ mod imp {
                     snapshot.append_stroke(&path, &mark.stroke(), &mark.paint());
                 }
             }
+            let picked = self.picked.borrow();
+            if let Some(picked) = picked.as_ref().filter(|p| !p.strokes.is_empty()) {
+                let builder = gsk::PathBuilder::new();
+                for stroke in &picked.strokes {
+                    let Some((first, rest)) = stroke.split_first() else { continue };
+                    builder.move_to((first.0 as f32) * w, (first.1 as f32) * h);
+                    if rest.is_empty() {
+                        builder.line_to((first.0 as f32) * w, (first.1 as f32) * h);
+                    }
+                    for p in rest {
+                        builder.line_to((p.0 as f32) * w, (p.1 as f32) * h);
+                    }
+                }
+                let stroke = gsk::Stroke::new(((picked.width as f32) * w).max(0.5));
+                stroke.set_line_cap(gsk::LineCap::Round);
+                stroke.set_line_join(gsk::LineJoin::Round);
+                snapshot.append_stroke(&builder.to_path(), &stroke, &picked.paint);
+            }
             if night {
                 snapshot.pop();
             }
+            if let Some(picked) = picked.as_ref() {
+                let (fw, fh) = (f64::from(w), f64::from(h));
+                let frame = picked.frame.map(|[x, y, rw, rh]| [x * fw, y * fh, rw * fw, rh * fh]);
+                let grips: Vec<(f64, f64)> = picked.grips.iter().map(|&(x, y)| (x * fw, y * fh)).collect();
+                crate::images::edit::shape::append_picked(snapshot, frame, &grips);
+            }
+            drop(picked);
             // Marked for redaction, over everything, the same by day and night.
             let scale = |[x, y, rw, rh]: [f64; 4]| {
                 graphene::Rect::new((x as f32) * w, (y as f32) * h, (rw as f32) * w, (rh as f32) * h)
@@ -225,6 +266,14 @@ impl Page {
     pub fn set_sketch(&self, sketch: Option<crate::images::edit::draw::Mark>) {
         let had = self.imp().sketch.replace(sketch).is_some();
         if had || self.imp().sketch.borrow().is_some() {
+            self.queue_draw();
+        }
+    }
+
+    /// Show a drawing picked up, or `None` once it is put down.
+    pub fn set_picked(&self, picked: Option<Picked>) {
+        if *self.imp().picked.borrow() != picked {
+            self.imp().picked.replace(picked);
             self.queue_draw();
         }
     }

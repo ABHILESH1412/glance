@@ -119,7 +119,9 @@ it, and a read-only file is left untouched.
   page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
   to move it
 - **Edit** (Ctrl+E), a panel of three sections: **Draw**, with the image editor's pen,
-  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness; **Text**,
+  highlighter, line, arrow, rectangle and ellipse, in any colour and thickness, and
+  **Select**, to pick up any drawing on the page (made earlier, or by another program) and
+  move it, resize it by its handles, recolour or thicken it, or delete it; **Text**,
   for text boxes in any font, size, colour and background, bold or italic — click one to
   change it, drag it to move it; and **Redact** (see below). Opening another PDF puts the
   panel away
@@ -222,7 +224,7 @@ and shrinks to fit whichever is showing.
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock. Sizes in pixels, percent, inches or centimetres, and the resolution in pixels per inch — resampled to keep the printed size, or not, to keep every pixel and change only the print size. The resolution is read from the file and saved with it |
 | **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
 | **Levels** | The histogram, with handles for the black point, midtones and white point, per channel or all together, and **Auto Levels**, which also takes out a colour cast |
-| **Draw** | Pen, highlighter, line, arrow, rectangle, ellipse — with the buttons drawing their own shapes |
+| **Draw** | Pen, highlighter, line, arrow, rectangle, ellipse — with the buttons drawing their own shapes. **Select** picks a drawing up again: drag it to move it, drag a handle to resize it (Shift keeps the proportions), change its colour or thickness, or press Delete. Every change can be undone |
 | **Text** | Font, size, colour, background, bold, italic, underline, dragged anywhere |
 | **Export** | Any format the picture can honestly become, with a quality dial — or a file size to aim for |
 
