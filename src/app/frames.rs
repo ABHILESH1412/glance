@@ -112,10 +112,13 @@ impl FramesPane {
         let menu = gio::Menu::new();
         menu.append(Some("_Copy Frame"), Some("win.copy"));
         let popover = gtk::PopoverMenu::from_model(Some(&menu));
-        popover.set_parent(&list);
+        // On the pane, not the list: a list box takes every child for a row,
+        // and on closing would try to remove the menu as one, fail, and try
+        // again forever, so the window went but the program never ended.
+        popover.set_parent(&pane.root);
         popover.set_has_arrow(false);
         popover.set_halign(gtk::Align::Start);
-        list.connect_destroy(glib::clone!(
+        pane.root.connect_destroy(glib::clone!(
             #[weak]
             popover,
             move |_| popover.unparent()
@@ -130,7 +133,11 @@ impl FramesPane {
             // The frame the menu is about is the one on screen.
             pane.list.select_row(Some(&row));
             pane.choose(row.index());
-            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            let at = pane
+                .list
+                .compute_point(&pane.root, &gtk::graphene::Point::new(x as f32, y as f32))
+                .unwrap_or(gtk::graphene::Point::new(x as f32, y as f32));
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(at.x() as i32, at.y() as i32, 1, 1)));
             popover.popup();
         });
         list.add_controller(click);
