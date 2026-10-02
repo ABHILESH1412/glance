@@ -187,10 +187,18 @@ impl Window {
 
         let (sender, receiver) = async_channel::bounded(1);
         let path = destination.clone();
+        let dpi = self.imp().dpi.get();
         std::thread::spawn(move || {
             // A dozen or so encodes of a full-size picture: nowhere near the
             // main loop.
-            let outcome = compress::fit_to_size(&image, target, wanted).and_then(|fit| {
+            // Room for the resolution, so recording it cannot push the file
+            // over the size asked for.
+            let room = if dpi.is_some() { crate::images::resolution::ROOM } else { 0 };
+            let outcome = compress::fit_to_size(&image, target, wanted.saturating_sub(room)).and_then(|mut fit| {
+                // A few bytes more, for the resolution.
+                if let Some(dpi) = dpi {
+                    fit.bytes = crate::images::resolution::stamp(std::mem::take(&mut fit.bytes), dpi);
+                }
                 std::fs::write(&path, &fit.bytes)
                     .map_err(|error| format!("Could not write the file: {error}"))
                     .map(|()| fit)
@@ -256,9 +264,10 @@ impl Window {
         let target = destination.clone();
         let encoded = image.clone();
         let quality = self.quality();
+        let dpi = self.imp().dpi.get();
         std::thread::spawn(move || {
             // Encoding a large image is slow enough to matter.
-            let _ = sender.send_blocking(export::write(&encoded, &target, quality));
+            let _ = sender.send_blocking(export::write(&encoded, &target, quality, dpi));
         });
 
         glib::spawn_future_local(glib::clone!(
@@ -278,6 +287,8 @@ impl Window {
                             // the working pixels and start clean.
                             let imp = window.imp();
                             imp.redactions_baked.set(false);
+                            // The file records the resolution now.
+                            imp.dpi_file.set(imp.dpi.get());
                             imp.working.replace(Some(image));
                             imp.history.borrow_mut().clear();
                             imp.redo.borrow_mut().clear();

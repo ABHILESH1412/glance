@@ -95,6 +95,10 @@ impl Window {
             return;
         };
         imp.crop_toggle.set_sensitive(false);
+        // Only the start of the file is read, so this is quick.
+        let dpi = crate::images::resolution::read(&source);
+        imp.dpi_file.set(dpi);
+        imp.dpi.set(dpi);
 
         let (sender, receiver) = async_channel::bounded(1);
         std::thread::spawn(move || {
@@ -127,6 +131,8 @@ impl Window {
         imp.dirty.set(false);
         imp.redactions_baked.set(false);
         self.stop_tone_worker();
+        imp.dpi_file.set(None);
+        imp.dpi.set(None);
         // Zero the canvas and the sliders together rather than relying on
         // whatever replaces the texture next: a slider still reading -50 over
         // an untouched picture is a lie the next session would inherit.
@@ -253,6 +259,7 @@ impl Window {
             || canvas.has_text()
             || canvas.has_marks()
             || !canvas.adjustments().is_identity()
+            || self.resolution_changed()
     }
 
     /// Leave the editor, throwing the session away. Asked for out loud first:

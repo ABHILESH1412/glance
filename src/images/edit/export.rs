@@ -134,11 +134,13 @@ pub fn open(source: &Path) -> Result<DynamicImage, String> {
 }
 
 /// Write the image out. `quality` is honoured by the formats that have a dial;
-/// the rest are lossless and ignore it.
+/// the rest are lossless and ignore it. `dpi`, if given, is recorded in the
+/// formats that can hold it.
 pub fn write(
     image: &DynamicImage,
     destination: &Path,
     quality: Option<u8>,
+    dpi: Option<f64>,
 ) -> Result<(), String> {
     let extension = destination
         .extension()
@@ -146,23 +148,26 @@ pub fn write(
         .unwrap_or("png")
         .to_ascii_lowercase();
 
+    let mut bytes = std::io::Cursor::new(Vec::new());
     if matches!(extension.as_str(), "jpg" | "jpeg") {
         // JPEG cannot carry transparency, so anything a freehand cut removed
         // would otherwise come out black.
         let rgb = flatten(image);
-        let file = std::fs::File::create(destination)
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality.unwrap_or(DEFAULT_QUALITY))
+            .encode_image(&rgb)
             .map_err(|error| format!("Could not save: {error}"))?;
-        let mut writer = std::io::BufWriter::new(file);
-        return image::codecs::jpeg::JpegEncoder::new_with_quality(
-            &mut writer,
-            quality.unwrap_or(DEFAULT_QUALITY),
-        )
-        .encode_image(&rgb)
-        .map_err(|error| format!("Could not save: {error}"));
+    } else {
+        let format = image::ImageFormat::from_extension(&extension)
+            .ok_or_else(|| format!("Could not save: Glance cannot write .{extension} files."))?;
+        image
+            .write_to(&mut bytes, format)
+            .map_err(|error| format!("Could not save: {error}"))?;
     }
-    image
-        .save(destination)
-        .map_err(|error| format!("Could not save: {error}"))
+    let mut bytes = bytes.into_inner();
+    if let Some(dpi) = dpi {
+        bytes = crate::images::resolution::stamp(bytes, dpi);
+    }
+    std::fs::write(destination, bytes).map_err(|error| format!("Could not save: {error}"))
 }
 
 pub(crate) fn flatten(image: &DynamicImage) -> image::RgbImage {
@@ -357,10 +362,13 @@ mod format_tests {
         for target in TARGETS {
             let limit = target.max_dimension.unwrap_or(64).min(64);
             let path = dir.join(format!("probe.{}", target.extension));
-            let result = write(&sample(limit, limit), &path, Some(DEFAULT_QUALITY));
+            let result = write(&sample(limit, limit), &path, Some(DEFAULT_QUALITY), Some(300.0));
             assert!(result.is_ok(), "{} failed: {:?}", target.label, result);
             let written = image::open(&path).expect("what we wrote should read back");
             assert_eq!((written.width(), written.height()), (limit, limit));
+            if crate::images::resolution::can_store(target.extension) {
+                assert_eq!(crate::images::resolution::read(&path), Some(300.0), "{}", target.label);
+            }
             let _ = std::fs::remove_file(&path);
         }
     }

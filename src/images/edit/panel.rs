@@ -98,6 +98,63 @@ pub(crate) fn wheel_scrolls_panel(widget: &impl IsA<gtk::Widget>) {
     widget.add_controller(scroll);
 }
 
+/// What the width and height boxes count in.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum SizeUnit {
+    Pixels,
+    Percent,
+    Inches,
+    Centimetres,
+}
+
+impl SizeUnit {
+    pub(crate) const ALL: [SizeUnit; 4] = [SizeUnit::Pixels, SizeUnit::Percent, SizeUnit::Inches, SizeUnit::Centimetres];
+
+    fn name(self) -> &'static str {
+        match self {
+            SizeUnit::Pixels => "pixels",
+            SizeUnit::Percent => "percent",
+            SizeUnit::Inches => "inches",
+            SizeUnit::Centimetres => "cm",
+        }
+    }
+
+    /// A length on paper rather than a count of pixels.
+    fn is_print(self) -> bool {
+        matches!(self, SizeUnit::Inches | SizeUnit::Centimetres)
+    }
+
+    /// `pixels` in this unit, for a side `natural` pixels long at `dpi`.
+    pub(crate) fn in_unit(self, pixels: f64, natural: f64, dpi: f64) -> f64 {
+        match self {
+            SizeUnit::Pixels => pixels,
+            SizeUnit::Percent => pixels / natural.max(1.0) * 100.0,
+            SizeUnit::Inches => pixels / dpi,
+            SizeUnit::Centimetres => pixels / dpi * 2.54,
+        }
+    }
+
+    /// The other way: `value` in this unit, as pixels.
+    pub(crate) fn pixels(self, value: f64, natural: f64, dpi: f64) -> f64 {
+        match self {
+            SizeUnit::Pixels => value,
+            SizeUnit::Percent => value / 100.0 * natural,
+            SizeUnit::Inches => value * dpi,
+            SizeUnit::Centimetres => value / 2.54 * dpi,
+        }
+    }
+
+    /// Range, step and decimals for the boxes.
+    fn spin(self) -> (f64, f64, f64, u32) {
+        match self {
+            SizeUnit::Pixels => (1.0, 30_000.0, 1.0, 0),
+            SizeUnit::Percent => (0.1, 10_000.0, 1.0, 1),
+            SizeUnit::Inches => (0.01, 10_000.0, 0.1, 2),
+            SizeUnit::Centimetres => (0.01, 25_000.0, 0.1, 2),
+        }
+    }
+}
+
 impl Window {
     /// The edit sidebar: tools at the top, output at the bottom.
     pub(crate) fn build_edit_panel(&self) -> &gtk::Box {
@@ -265,7 +322,7 @@ impl Window {
 
         // -- resize --
         let sizing = &imp.resize_toggle;
-        sizing.set_tooltip_text(Some("Change the pixel size"));
+        sizing.set_tooltip_text(Some("Change the size, in pixels, percent or on paper, and the resolution"));
         sizing.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -299,6 +356,7 @@ impl Window {
             column.append(&caption);
             column.append(spin);
             fields.append(&column);
+            wheel_scrolls_panel(spin);
             spin.connect_value_changed(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
@@ -308,6 +366,26 @@ impl Window {
             ));
         }
         sizes.append(&fields);
+
+        // What the two boxes count in.
+        let unit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let unit_label = gtk::Label::new(Some("In"));
+        unit_label.add_css_class("dim-label");
+        unit_label.set_hexpand(true);
+        unit_label.set_xalign(0.0);
+        unit_row.append(&unit_label);
+        let names: Vec<&str> = SizeUnit::ALL.iter().map(|unit| unit.name()).collect();
+        let unit = &imp.resize_unit;
+        unit.set_model(Some(&gtk::StringList::new(&names)));
+        unit.set_selected(0);
+        unit.update_property(&[gtk::accessible::Property::Label("Width and height in")]);
+        unit.connect_selected_notify(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.size_unit_changed()
+        ));
+        unit_row.append(unit);
+        sizes.append(&unit_row);
 
         let keep = &imp.keep_aspect;
         // On by default: stretching a photograph out of shape is almost never
@@ -330,6 +408,46 @@ impl Window {
             }
         ));
         sizes.append(keep);
+
+        // Resolution: how many pixels make an inch on paper.
+        let resolution_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        resolution_row.set_margin_top(6);
+        let resolution_label = gtk::Label::new(Some("Resolution"));
+        resolution_label.add_css_class("dim-label");
+        resolution_label.set_xalign(0.0);
+        resolution_label.set_hexpand(true);
+        resolution_row.append(&resolution_label);
+        let resolution = &imp.resolution_spin;
+        resolution.set_numeric(true);
+        resolution.set_width_chars(5);
+        resolution.set_tooltip_text(Some("Pixels per inch: how big the picture prints, not how it looks on screen"));
+        resolution.update_property(&[gtk::accessible::Property::Label("Resolution, in pixels per inch")]);
+        wheel_scrolls_panel(resolution);
+        resolution.connect_value_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.resolution_typed()
+        ));
+        resolution_row.append(resolution);
+        let ppi = gtk::Label::new(Some("ppi"));
+        ppi.add_css_class("dim-label");
+        resolution_row.append(&ppi);
+        sizes.append(&resolution_row);
+
+        let resample = &imp.resample;
+        resample.set_label(Some("Resample image"));
+        resample.set_tooltip_text(Some(
+            "On: a new size or resolution changes the number of pixels. \
+             Off: every pixel is kept, and only the size on paper and the resolution change",
+        ));
+        // On, as in every editor: a resize is what the section is for.
+        resample.set_active(true);
+        resample.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.sync_resize_panel()
+        ));
+        sizes.append(resample);
 
         imp.natural_label.add_css_class("dim-label");
         imp.natural_label.set_xalign(0.0);
@@ -819,6 +937,19 @@ impl Window {
         panel
     }
 
+    /// The unit the size boxes are in.
+    pub(crate) fn size_unit(&self) -> SizeUnit {
+        SizeUnit::ALL
+            .get(self.imp().resize_unit.selected() as usize)
+            .copied()
+            .unwrap_or(SizeUnit::Pixels)
+    }
+
+    /// The resolution in effect: chosen here, read from the file, or assumed.
+    pub(crate) fn resolution(&self) -> f64 {
+        self.imp().dpi.get().unwrap_or(crate::images::resolution::ASSUMED)
+    }
+
     /// A number was typed or stepped: push it at the canvas, which redraws the
     /// picture at that size without resampling anything.
     fn size_typed(&self, width_led: bool) {
@@ -827,13 +958,34 @@ impl Window {
             return;
         }
         let canvas = imp.view.canvas();
-        let Some((nw, nh)) = canvas.natural_size() else {
+        let (Some((nw, nh)), Some((tw, th))) = (canvas.natural_size(), canvas.target_size()) else {
             return;
         };
-        let mut width = imp.width_spin.value().round().max(1.0);
-        let mut height = imp.height_spin.value().round().max(1.0);
+        let (nw, nh) = (f64::from(nw), f64::from(nh));
+        let unit = self.size_unit();
+        let dpi = self.resolution();
+
+        if !imp.resample.is_active() {
+            // The pixels stay as they are, so a length on paper can only
+            // change how many of them make an inch.
+            if unit.is_print() {
+                let typed = if width_led { imp.width_spin.value() } else { imp.height_spin.value() };
+                let pixels = f64::from(if width_led { tw } else { th });
+                let inches = SizeUnit::Inches.in_unit(unit.pixels(typed, 1.0, 1.0), 1.0, 1.0);
+                if inches > 0.0 {
+                    // Whole numbers, as files record it, so the size on paper
+                    // shown is the size the saved file will say.
+                    imp.dpi.set(Some((pixels / inches).round().clamp(1.0, 65_535.0)));
+                }
+            }
+            self.sync_resize_panel();
+            return;
+        }
+
+        let mut width = unit.pixels(imp.width_spin.value(), nw, dpi).round().max(1.0);
+        let mut height = unit.pixels(imp.height_spin.value(), nh, dpi).round().max(1.0);
         if imp.keep_aspect.is_active() {
-            let ratio = f64::from(nw) / f64::from(nh).max(1e-9);
+            let ratio = nw / nh.max(1e-9);
             // Whichever box was touched leads; the other follows.
             if width_led {
                 height = (width / ratio).round().max(1.0);
@@ -847,12 +999,52 @@ impl Window {
         imp.syncing_panel.set(true);
         canvas.set_target_size(width as u32, height as u32);
         if width_led {
-            imp.height_spin.set_value(height);
+            imp.height_spin.set_value(unit.in_unit(height, nh, dpi));
         } else {
-            imp.width_spin.set_value(width);
+            imp.width_spin.set_value(unit.in_unit(width, nw, dpi));
         }
         imp.syncing_panel.set(false);
         self.describe_size();
+    }
+
+    /// The resolution was typed or stepped. Resampling keeps the size on
+    /// paper and changes the pixels to fill it; otherwise the pixels stay
+    /// and the size on paper changes.
+    fn resolution_typed(&self) {
+        let imp = self.imp();
+        if imp.syncing_panel.get() {
+            return;
+        }
+        let new = imp.resolution_spin.value().max(1.0);
+        let old = self.resolution();
+        imp.dpi.set(Some(new));
+        if imp.resample.is_active() && (new - old).abs() > 1e-9 {
+            let canvas = imp.view.canvas();
+            if let Some((tw, th)) = canvas.target_size() {
+                let scale = new / old;
+                let width = (f64::from(tw) * scale).round().clamp(1.0, 30_000.0);
+                let height = (f64::from(th) * scale).round().clamp(1.0, 30_000.0);
+                canvas.set_target_size(width as u32, height as u32);
+            }
+        }
+        self.sync_resize_panel();
+    }
+
+    /// Show the boxes in the newly chosen unit.
+    fn size_unit_changed(&self) {
+        let (low, high, step, digits) = self.size_unit().spin();
+        let imp = self.imp();
+        imp.syncing_panel.set(true);
+        for spin in [&imp.width_spin, &imp.height_spin] {
+            // Snapping counts its steps from the bottom of the range, so
+            // only whole pixels can have it: 50% would become 50.1%.
+            spin.set_snap_to_ticks(self.size_unit() == SizeUnit::Pixels);
+            spin.set_digits(digits);
+            spin.set_range(low, high);
+            spin.set_increments(step, step * 10.0);
+        }
+        imp.syncing_panel.set(false);
+        self.sync_resize_panel();
     }
 
     /// One tool at a time. Five sections open at once made a sidebar taller
@@ -1081,8 +1273,8 @@ impl Window {
         imp.format_note.set_text(note.unwrap_or_default());
     }
 
-    /// The line under the boxes, and whether Reset and Apply have anything to
-    /// act on.
+    /// The lines under the boxes, and whether Reset and Apply have anything
+    /// to act on.
     fn describe_size(&self) {
         let imp = self.imp();
         let canvas = imp.view.canvas();
@@ -1090,12 +1282,47 @@ impl Window {
             return;
         };
         let percent = f64::from(w) / f64::from(nw).max(1e-9) * 100.0;
-        imp.natural_label.set_text(&if (w, h) == (nw, nh) {
-            format!("Original size, {nw} × {nh}")
+        let mut lines = vec![if (w, h) == (nw, nh) {
+            format!("Original size, {nw} × {nh} pixels")
         } else {
-            format!("From {nw} × {nh} — {percent:.0}% of the width")
-        });
+            format!("{w} × {h} pixels, from {nw} × {nh} — {percent:.0}% of the width")
+        }];
+        let dpi = self.resolution();
+        let inches = |pixels: u32| f64::from(pixels) / dpi;
+        lines.push(format!(
+            "Prints at {:.2} × {:.2} in ({:.1} × {:.1} cm)",
+            inches(w),
+            inches(h),
+            inches(w) * 2.54,
+            inches(h) * 2.54
+        ));
+        if imp.dpi.get().is_none() {
+            lines.push(format!("The file does not record a resolution, so {dpi:.0} ppi is assumed."));
+        }
+        let extension = imp
+            .current
+            .borrow()
+            .as_ref()
+            .and_then(|path| path.extension())
+            .map(|e| e.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if self.resolution_changed() && !crate::images::resolution::can_store(&extension) {
+            lines.push("This kind of file cannot record a resolution. Export as JPEG, PNG or BMP to keep it.".into());
+        } else if self.resolution_changed() && !canvas.has_resize() {
+            lines.push("The new resolution is saved with the picture.".into());
+        }
+        imp.natural_label.set_text(&lines.join("\n"));
         self.update_resize_actions();
+    }
+
+    /// Whether the resolution differs from what the file records.
+    pub(crate) fn resolution_changed(&self) -> bool {
+        let imp = self.imp();
+        match (imp.dpi.get(), imp.dpi_file.get()) {
+            (Some(now), Some(file)) => (now - file).abs() > 1e-6,
+            (Some(_), None) => true,
+            _ => false,
+        }
     }
 
     /// Put the canvas's size back into the boxes, after a handle drag or a
@@ -1106,19 +1333,28 @@ impl Window {
         let (Some((w, h)), Some((nw, nh))) = (canvas.target_size(), canvas.natural_size()) else {
             return;
         };
-        let _ = (nw, nh);
+        let unit = self.size_unit();
+        let dpi = self.resolution();
+        let resample = imp.resample.is_active();
         imp.syncing_panel.set(true);
-        imp.width_spin.set_value(f64::from(w));
-        imp.height_spin.set_value(f64::from(h));
+        imp.width_spin.set_value(unit.in_unit(f64::from(w), f64::from(nw), dpi));
+        imp.height_spin.set_value(unit.in_unit(f64::from(h), f64::from(nh), dpi));
+        imp.resolution_spin.set_value(dpi);
+        // Without resampling the pixel count is fixed: only a length on paper
+        // can be typed, and the shape cannot change.
+        let editable = resample || unit.is_print();
+        imp.width_spin.set_sensitive(editable);
+        imp.height_spin.set_sensitive(editable);
+        imp.keep_aspect.set_sensitive(resample);
         imp.syncing_panel.set(false);
         self.describe_size();
     }
 
     fn update_resize_actions(&self) {
-        let pending = self.imp().view.canvas().has_resize();
-        for name in ["resize-reset", "resize-apply"] {
+        let resized = self.imp().view.canvas().has_resize();
+        for (name, enabled) in [("resize-reset", resized || self.resolution_changed()), ("resize-apply", resized)] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
-                action.set_enabled(pending);
+                action.set_enabled(enabled);
             }
         }
     }
@@ -1141,5 +1377,27 @@ impl Window {
                 action.set_enabled(cropping);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SizeUnit;
+
+    #[test]
+    fn every_unit_converts_there_and_back() {
+        for unit in SizeUnit::ALL {
+            for pixels in [1.0, 640.0, 4000.0] {
+                let value = unit.in_unit(pixels, 4000.0, 300.0);
+                assert!((unit.pixels(value, 4000.0, 300.0) - pixels).abs() < 1e-9, "{unit:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn units_mean_what_they_say() {
+        assert_eq!(SizeUnit::Percent.in_unit(2000.0, 4000.0, 300.0), 50.0);
+        assert_eq!(SizeUnit::Inches.in_unit(3000.0, 4000.0, 300.0), 10.0);
+        assert!((SizeUnit::Centimetres.in_unit(300.0, 4000.0, 300.0) - 2.54).abs() < 1e-12);
     }
 }

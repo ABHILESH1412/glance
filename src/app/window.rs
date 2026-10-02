@@ -113,6 +113,14 @@ mod imp {
         pub height_spin: gtk::SpinButton,
         pub keep_aspect: gtk::CheckButton,
         pub natural_label: gtk::Label,
+        /// What the width and height boxes count in.
+        pub resize_unit: gtk::DropDown,
+        pub resolution_spin: gtk::SpinButton,
+        pub resample: gtk::CheckButton,
+        /// The resolution the file records, in pixels per inch, if any.
+        pub dpi_file: Cell<Option<f64>>,
+        /// The resolution the picture will be saved with, if any.
+        pub dpi: Cell<Option<f64>>,
         pub format_drop: gtk::DropDown,
         pub format_note: gtk::Label,
         pub size_wanted: gtk::CheckButton,
@@ -273,6 +281,11 @@ mod imp {
                 height_spin: dimension_spin(),
                 keep_aspect: gtk::CheckButton::with_label("Keep aspect ratio"),
                 natural_label: gtk::Label::new(None),
+                resize_unit: gtk::DropDown::new(None::<gio::ListModel>, None::<gtk::Expression>),
+                resolution_spin: gtk::SpinButton::with_range(1.0, 10_000.0, 1.0),
+                resample: gtk::CheckButton::new(),
+                dpi_file: Cell::new(None),
+                dpi: Cell::new(None),
                 format_drop: gtk::DropDown::default(),
                 format_note: gtk::Label::new(None),
                 size_wanted: gtk::CheckButton::with_label("Aim for a file size"),
@@ -1019,7 +1032,9 @@ impl Window {
             #[weak(rename_to = window)]
             self,
             move |_, _| {
-                window.imp().view.canvas().reset_size();
+                let imp = window.imp();
+                imp.view.canvas().reset_size();
+                imp.dpi.set(imp.dpi_file.get());
                 window.sync_resize_panel();
             }
         ));

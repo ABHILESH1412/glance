@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 33 / 64 | 8 |
+| Images | 34 / 64 | 7 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **53 / 122** | **11** |
+| **Total** | **54 / 122** | **10** |
 
 ---
 
@@ -41,7 +41,7 @@ Tick a box when a feature ships.
 
 - [x] Crop
 - [x] Resize to exact pixels, with aspect-ratio lock
-- [ ] Resize by percentage, inches/cm, or change resolution (DPI) — *partial:* pixels only
+- [x] Resize by percentage, inches/cm, or change resolution (DPI) — with or without resampling; the resolution is kept in JPEG, PNG and BMP
 - [x] Rotate 90° left and right
 - [x] Flip horizontally and vertically
 - [x] Contrast and saturation

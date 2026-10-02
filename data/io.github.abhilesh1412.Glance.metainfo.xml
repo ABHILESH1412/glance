@@ -26,7 +26,7 @@
     </p>
     <ul>
       <li>Crop by dragging, with the usual aspect presets for social sizes</li>
-      <li>Resize by handles or by typing the numbers, with the proportions locked if you want them locked</li>
+      <li>Resize by handles or by typing the numbers, in pixels, percent, inches or centimetres, with the proportions locked if you want them locked, and set the print resolution</li>
       <li>Rotate by a quarter turn, or to any angle you type</li>
       <li>Exposure, brightness, contrast, highlights and shadows, saturation, white balance, sepia and sharpness</li>
       <li>Levels with a histogram, and Auto Levels</li>

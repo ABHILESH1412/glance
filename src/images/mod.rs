@@ -10,6 +10,7 @@ pub mod decoders;
 pub mod edit;
 pub mod format;
 pub mod loader;
+pub mod resolution;
 pub mod scene;
 pub mod thumbs;
 pub mod view;
