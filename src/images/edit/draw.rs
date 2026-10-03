@@ -34,8 +34,22 @@ pub enum Tool {
     Highlighter,
     Line,
     Arrow,
+    /// An arrow with a head at each end.
+    DoubleArrow,
     Rectangle,
+    /// A rectangle with its corners rounded off.
+    RoundedRectangle,
     Ellipse,
+    /// A regular polygon of this many sides, in the box dragged out.
+    Polygon(u8),
+    /// A star of this many points.
+    Star(u8),
+    /// A speech bubble's outline: a rounded box with a tail below.
+    Bubble,
+    /// A tick, for checking things off.
+    Tick,
+    /// A cross, for crossing them out.
+    Cross,
     /// Black out an area for good. Shown see-through until it is applied,
     /// so what is under it can be checked first. Not in `TOOLS`: it has a
     /// section of its own in the editing panels, apart from the pens.
@@ -47,9 +61,31 @@ pub const TOOLS: &[Tool] = &[
     Tool::Highlighter,
     Tool::Line,
     Tool::Arrow,
+    Tool::DoubleArrow,
     Tool::Rectangle,
+    Tool::RoundedRectangle,
     Tool::Ellipse,
+    Tool::Polygon(DEFAULT_SIDES),
+    Tool::Star(DEFAULT_POINTS),
+    Tool::Bubble,
+    Tool::Tick,
+    Tool::Cross,
 ];
+
+/// A new polygon's sides and a new star's points, until changed.
+pub const DEFAULT_SIDES: u8 = 6;
+pub const DEFAULT_POINTS: u8 = 5;
+/// The fewest and most corners a polygon or star can have.
+pub const FEWEST_CORNERS: u8 = 3;
+pub const MOST_CORNERS: u8 = 24;
+/// How far in a star's inner corners sit, as a share of the outer ones.
+const STAR_INNER: f64 = 0.42;
+/// How round a rounded rectangle's corners are, as a share of its shorter
+/// side, and how many straight steps a quarter circle is drawn in.
+const ROUNDING: f64 = 0.18;
+const ARC_STEPS: usize = 16;
+/// The share of a speech bubble's box its body takes; the tail fills the rest.
+const BUBBLE_BODY: f64 = 0.78;
 
 /// How a marked-but-not-yet-applied redaction looks: dark enough to see it
 /// is marked, light enough to read what it covers, edged in red.
@@ -69,10 +105,66 @@ impl Tool {
             Tool::Highlighter => "Highlighter",
             Tool::Line => "Line",
             Tool::Arrow => "Arrow",
+            Tool::DoubleArrow => "Double Arrow",
             Tool::Rectangle => "Rectangle",
+            Tool::RoundedRectangle => "Rounded",
             Tool::Ellipse => "Ellipse",
+            Tool::Polygon(_) => "Polygon",
+            Tool::Star(_) => "Star",
+            Tool::Bubble => "Bubble",
+            Tool::Tick => "Tick",
+            Tool::Cross => "Cross",
             Tool::Redact => "Redact",
         }
+    }
+
+    /// The name in full, for a tooltip, where the button's is cut short.
+    pub fn description(self) -> &'static str {
+        match self {
+            Tool::RoundedRectangle => "Rounded rectangle",
+            Tool::Polygon(_) => "Polygon — set how many sides below",
+            Tool::Star(_) => "Star — set how many points below",
+            Tool::Bubble => "Speech bubble",
+            Tool::Tick => "Tick, for checking things off",
+            Tool::Cross => "Cross, for crossing things out",
+            Tool::DoubleArrow => "Arrow with a head at each end",
+            other => other.label(),
+        }
+    }
+
+    /// The same kind of tool, whatever its corners: a hexagon and a
+    /// pentagon are both the polygon tool.
+    pub fn same_kind(self, other: Tool) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
+    }
+
+    /// A polygon's sides or a star's points; None for anything else.
+    pub fn corners(self) -> Option<u8> {
+        match self {
+            Tool::Polygon(n) | Tool::Star(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// The same tool with another number of corners, if it has corners.
+    pub fn with_corners(self, n: u8) -> Tool {
+        let n = n.clamp(FEWEST_CORNERS, MOST_CORNERS);
+        match self {
+            Tool::Polygon(_) => Tool::Polygon(n),
+            Tool::Star(_) => Tool::Star(n),
+            other => other,
+        }
+    }
+
+    /// Lines held by their two ends rather than by a box.
+    pub fn has_ends(self) -> bool {
+        matches!(self, Tool::Line | Tool::Arrow | Tool::DoubleArrow)
+    }
+
+    /// Closed outlines drawn as one ring of straight steps, the same on
+    /// screen, in a picture and in a PDF.
+    fn ringed(self) -> bool {
+        matches!(self, Tool::RoundedRectangle | Tool::Polygon(_) | Tool::Star(_) | Tool::Bubble)
     }
 
     /// Freehand tools keep every point the pointer visited. The rest need only
@@ -83,7 +175,7 @@ impl Tool {
 
     /// Shapes with an inside, which can be filled.
     pub fn fillable(self) -> bool {
-        matches!(self, Tool::Rectangle | Tool::Ellipse)
+        matches!(self, Tool::Rectangle | Tool::Ellipse) || self.ringed()
     }
 }
 
@@ -181,15 +273,39 @@ impl Mark {
                     builder.line_to(point.0 as f32, point.1 as f32);
                 }
             }
-            Tool::Line | Tool::Arrow => {
+            Tool::Line | Tool::Arrow | Tool::DoubleArrow => {
                 let (from, to) = self.ends()?;
                 builder.move_to(from.0 as f32, from.1 as f32);
                 builder.line_to(to.0 as f32, to.1 as f32);
-                if self.tool == Tool::Arrow {
+                let mut tips = Vec::new();
+                if matches!(self.tool, Tool::Arrow | Tool::DoubleArrow) {
+                    tips.push((from, to));
+                }
+                if self.tool == Tool::DoubleArrow {
+                    tips.push((to, from));
+                }
+                for (from, to) in tips {
                     let (left, right) = self.head(from, to);
                     for wing in [left, right] {
                         builder.move_to(to.0 as f32, to.1 as f32);
                         builder.line_to(wing.0 as f32, wing.1 as f32);
+                    }
+                }
+            }
+            // Drawn as the very steps a PDF is given, so all three agree.
+            _ if self.tool.ringed() || matches!(self.tool, Tool::Tick | Tool::Cross) => {
+                let strokes = self.strokes();
+                if strokes.is_empty() {
+                    return None;
+                }
+                for stroke in &strokes {
+                    let (first, rest) = stroke.split_first()?;
+                    builder.move_to(first.0 as f32, first.1 as f32);
+                    for point in rest {
+                        builder.line_to(point.0 as f32, point.1 as f32);
+                    }
+                    if self.tool.ringed() {
+                        builder.close();
                     }
                 }
             }
@@ -230,14 +346,33 @@ impl Mark {
                 [only] => vec![vec![*only, *only]],
                 points => vec![points.to_vec()],
             },
-            Tool::Line | Tool::Arrow => {
+            Tool::Line | Tool::Arrow | Tool::DoubleArrow => {
                 let Some((from, to)) = self.ends() else { return Vec::new() };
                 let mut strokes = vec![vec![from, to]];
-                if self.tool == Tool::Arrow {
+                if matches!(self.tool, Tool::Arrow | Tool::DoubleArrow) {
                     let (left, right) = self.head(from, to);
                     strokes.push(vec![left, to, right]);
                 }
+                if self.tool == Tool::DoubleArrow {
+                    let (left, right) = self.head(to, from);
+                    strokes.push(vec![left, from, right]);
+                }
                 strokes
+            }
+            _ if self.tool.ringed() => {
+                let Some(mut ring) = self.ring() else { return Vec::new() };
+                if let Some(&first) = ring.first() {
+                    ring.push(first);
+                }
+                vec![ring]
+            }
+            Tool::Tick => {
+                let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
+                vec![vec![(x, y + h * 0.55), (x + w * 0.38, y + h), (x + w, y)]]
+            }
+            Tool::Cross => {
+                let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
+                vec![vec![(x, y), (x + w, y + h)], vec![(x + w, y), (x, y + h)]]
             }
             Tool::Rectangle | Tool::Redact => {
                 let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
@@ -260,10 +395,45 @@ impl Mark {
         Some((*self.points.first()?, *self.points.last()?))
     }
 
+    /// The corners of a closed outline, in order round it, not closed up.
+    fn ring(&self) -> Option<Vec<(f64, f64)>> {
+        let (x, y, w, h) = self.rect()?;
+        let (cx, cy, rx, ry) = (x + w / 2.0, y + h / 2.0, w / 2.0, h / 2.0);
+        let around = |n: usize, radius: &dyn Fn(usize) -> f64| -> Vec<(f64, f64)> {
+            (0..n)
+                .map(|i| {
+                    // From the top, clockwise, so a polygon or star stands
+                    // on its base.
+                    let angle = -std::f64::consts::FRAC_PI_2 + i as f64 * std::f64::consts::TAU / n as f64;
+                    let r = radius(i);
+                    (cx + rx * r * angle.cos(), cy + ry * r * angle.sin())
+                })
+                .collect()
+        };
+        Some(match self.tool {
+            Tool::Polygon(sides) => around(usize::from(sides.max(FEWEST_CORNERS)), &|_| 1.0),
+            Tool::Star(points) => {
+                around(usize::from(points.max(FEWEST_CORNERS)) * 2, &|i| if i % 2 == 0 { 1.0 } else { STAR_INNER })
+            }
+            Tool::RoundedRectangle => rounded(x, y, w, h, w.min(h) * ROUNDING, None),
+            Tool::Bubble => {
+                let body = h * BUBBLE_BODY;
+                // The tail leaves the bottom a fifth of the way in and points
+                // down and to the left, as a speaker's would.
+                let tail = [(x + w * 0.36, y + body), (x + w * 0.12, y + h), (x + w * 0.2, y + body)];
+                rounded(x, y, w, body, w.min(body) * 0.25, Some(tail))
+            }
+            _ => return None,
+        })
+    }
+
     /// The two wing tips of an arrow head, behind the point.
     fn head(&self, from: (f64, f64), to: (f64, f64)) -> ((f64, f64), (f64, f64)) {
         let angle = (to.1 - from.1).atan2(to.0 - from.0);
-        let length = (self.width * HEAD_OF_WIDTH).max(HEAD_MINIMUM);
+        // Never more than a little under half the arrow, so a short one is
+        // not all head, and a double one's heads do not meet.
+        let shaft = (to.0 - from.0).hypot(to.1 - from.1);
+        let length = (self.width * HEAD_OF_WIDTH).max(HEAD_MINIMUM).min(shaft * 0.4);
         let wing = |offset: f64| {
             (
                 to.0 - length * (angle + offset).cos(),
@@ -294,12 +464,17 @@ impl Mark {
         if xs.is_empty() {
             return None;
         }
-        if self.tool == Tool::Arrow {
+        if matches!(self.tool, Tool::Arrow | Tool::DoubleArrow) {
             if let Some((from, to)) = self.ends() {
-                let (left, right) = self.head(from, to);
-                for wing in [left, right] {
-                    xs.push(wing.0);
-                    ys.push(wing.1);
+                let mut wings = vec![self.head(from, to)];
+                if self.tool == Tool::DoubleArrow {
+                    wings.push(self.head(to, from));
+                }
+                for (left, right) in wings {
+                    for wing in [left, right] {
+                        xs.push(wing.0);
+                        ys.push(wing.1);
+                    }
                 }
             }
         }
@@ -368,7 +543,7 @@ impl Mark {
     /// anything else by the box round its points.
     pub fn outline(&self) -> Option<Outline> {
         match (self.tool, self.points.as_slice()) {
-            (Tool::Line | Tool::Arrow, [a, .., b]) => Some(Outline::Ends(*a, *b)),
+            (tool, [a, .., b]) if tool.has_ends() => Some(Outline::Ends(*a, *b)),
             _ => shape::frame_of(&self.points).map(Outline::Frame),
         }
     }
@@ -390,7 +565,7 @@ impl Mark {
     /// `slack`, or anywhere inside a rectangle or ellipse when `inside`.
     pub fn is_at(&self, p: (f64, f64), slack: f64, inside: bool) -> bool {
         let strokes = self.strokes();
-        let closed = matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Redact);
+        let closed = matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Redact) || self.tool.ringed();
         // A filled shape is picked up by its inside wherever it is.
         let inside = inside || self.inside().is_some();
         shape::touches(&strokes, self.width, p, slack) || (inside && closed && shape::encloses(&strokes, p))
@@ -559,6 +734,70 @@ mod tests {
         assert!(filled(Tool::Rectangle).is_at((20.0, 10.0), 0.0, false));
     }
 
+    #[test]
+    fn every_new_shape_stays_in_the_box_it_was_dragged_out_in() {
+        let (x0, y0, x1, y1) = (10.0, 20.0, 210.0, 120.0);
+        for tool in [Tool::RoundedRectangle, Tool::Polygon(6), Tool::Star(5), Tool::Bubble, Tool::Tick, Tool::Cross] {
+            let shape = mark(tool, &[(x0, y0), (x1, y1)]);
+            let strokes = shape.strokes();
+            assert!(!strokes.is_empty(), "{tool:?} drew nothing");
+            for &(x, y) in strokes.iter().flatten() {
+                assert!((x0 - 1e-9..=x1 + 1e-9).contains(&x) && (y0 - 1e-9..=y1 + 1e-9).contains(&y), "{tool:?} left its box at {x}, {y}");
+            }
+            assert!(shape.path().is_some(), "{tool:?} has no path to draw");
+        }
+    }
+
+    #[test]
+    fn polygons_and_stars_have_the_corners_asked_for() {
+        let corners = |tool| mark(tool, &[(0.0, 0.0), (100.0, 100.0)]).strokes()[0].len() - 1;
+        assert_eq!(corners(Tool::Polygon(3)), 3);
+        assert_eq!(corners(Tool::Polygon(8)), 8);
+        assert_eq!(corners(Tool::Star(5)), 10, "five points, five corners between them");
+        // The first corner is at the top, so a triangle stands on its base.
+        let triangle = mark(Tool::Polygon(3), &[(0.0, 0.0), (100.0, 100.0)]).strokes();
+        assert!((triangle[0][0].0 - 50.0).abs() < 1e-9 && triangle[0][0].1.abs() < 1e-9);
+        // Too few or too many is held to what makes sense.
+        assert_eq!(Tool::Polygon(6).with_corners(1), Tool::Polygon(FEWEST_CORNERS));
+        assert_eq!(Tool::Star(5).with_corners(200), Tool::Star(MOST_CORNERS));
+        assert!(Tool::Star(5).same_kind(Tool::Star(7)) && !Tool::Star(5).same_kind(Tool::Polygon(5)));
+    }
+
+    #[test]
+    fn closed_shapes_are_picked_up_inside_and_open_ones_only_on_their_line() {
+        let star = mark(Tool::Star(5), &[(0.0, 0.0), (100.0, 100.0)]);
+        assert!(star.is_at((50.0, 50.0), 1.0, true), "the middle of a star");
+        assert!(!star.is_at((2.0, 2.0), 1.0, true), "outside it, in the box's corner");
+        let bubble = mark(Tool::Bubble, &[(0.0, 0.0), (100.0, 100.0)]);
+        assert!(bubble.is_at((50.0, 40.0), 1.0, true));
+        assert!(bubble.is_at((13.0, 97.0), 4.0, false), "its tail's tip");
+        let tick = mark(Tool::Tick, &[(0.0, 0.0), (100.0, 100.0)]);
+        assert!(!tick.is_at((70.0, 80.0), 1.0, true), "a tick has no inside");
+        assert!(Tool::Star(5).fillable() && Tool::Bubble.fillable() && !Tool::Tick.fillable());
+    }
+
+    #[test]
+    fn a_double_arrow_has_a_head_at_each_end_and_is_held_by_them() {
+        let both = mark(Tool::DoubleArrow, &[(0.0, 50.0), (100.0, 50.0)]);
+        let strokes = both.strokes();
+        assert_eq!(strokes.len(), 3);
+        assert_eq!(strokes[1][1], (100.0, 50.0));
+        assert_eq!(strokes[2][1], (0.0, 50.0));
+        assert!(strokes[2][0].0 > 0.0, "the second head points back the other way");
+        assert!(matches!(both.outline(), Some(Outline::Ends(..))));
+        let (x, _, w, _) = both.bounds().unwrap();
+        assert!(x < strokes[2][0].0.min(strokes[2][2].0) && x + w > 100.0);
+    }
+
+    #[test]
+    fn a_reshaped_star_keeps_its_points_and_fills_its_new_box() {
+        let star = mark(Tool::Star(6), &[(0.0, 0.0), (100.0, 100.0)]);
+        let wider = star.reshaped(&Outline::Frame([0.0, 0.0, 200.0, 100.0]));
+        assert_eq!(wider.tool, Tool::Star(6));
+        let xs: Vec<f64> = wider.strokes()[0].iter().map(|p| p.0).collect();
+        assert!(xs.iter().cloned().fold(f64::MIN, f64::max) > 180.0, "it stretched to the new box");
+    }
+
     /// A click that never moved is a dot with a pen and nothing with a shape.
     #[test]
     fn a_drag_that_never_moved_only_counts_for_freehand() {
@@ -577,6 +816,29 @@ mod tests {
         assert!(through.alpha() > 0.0 && through.alpha() < 0.5, "{}", through.alpha());
         assert_eq!(through.red(), 1.0);
     }
+}
+
+/// A rectangle's outline with its corners rounded to `radius`, clockwise
+/// from the top-left. A tail, if given, is let into the bottom edge: the
+/// point it leaves at on the right, its tip, and where it comes back on the
+/// left.
+fn rounded(x: f64, y: f64, w: f64, h: f64, radius: f64, tail: Option<[(f64, f64); 3]>) -> Vec<(f64, f64)> {
+    let r = radius.clamp(0.0, w.min(h) / 2.0);
+    let arc = |ring: &mut Vec<(f64, f64)>, cx: f64, cy: f64, from: f64| {
+        for step in 0..=ARC_STEPS {
+            let angle = (from + 90.0 * step as f64 / ARC_STEPS as f64).to_radians();
+            ring.push((cx + r * angle.cos(), cy + r * angle.sin()));
+        }
+    };
+    let mut ring = Vec::with_capacity(ARC_STEPS * 4 + 8);
+    arc(&mut ring, x + w - r, y + r, -90.0);
+    arc(&mut ring, x + w - r, y + h - r, 0.0);
+    if let Some(tail) = tail {
+        ring.extend(tail);
+    }
+    arc(&mut ring, x + r, y + h - r, 90.0);
+    arc(&mut ring, x + r, y + r, 180.0);
+    ring
 }
 
 /// A button icon showing the very shape the tool draws.
@@ -700,8 +962,12 @@ mod icon {
             ],
             // One thick sweep, the way a marker goes down.
             Tool::Highlighter => vec![(x0, (y0 + y1) / 2.0), (x1, (y0 + y1) / 2.0)],
-            Tool::Line | Tool::Arrow => vec![(x0, y1), (x1, y0)],
-            Tool::Rectangle | Tool::Ellipse | Tool::Redact => vec![(x0, y0), (x1, y1)],
+            Tool::Line | Tool::Arrow | Tool::DoubleArrow => vec![(x0, y1), (x1, y0)],
+            // A star or polygon fills the square it is drawn in.
+            Tool::Polygon(_) | Tool::Star(_) => vec![(x0 - 1.0, y0 - 1.0), (x1 + 1.0, y1 + 1.0)],
+            Tool::Rectangle | Tool::RoundedRectangle | Tool::Ellipse | Tool::Bubble | Tool::Tick | Tool::Cross | Tool::Redact => {
+                vec![(x0, y0), (x1, y1)]
+            }
         };
         Mark {
             tool,

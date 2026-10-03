@@ -31,6 +31,93 @@ pub(crate) fn section_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
 
 /// A colour well that lets the alpha channel be set, so "no background" is a
 /// colour you can choose rather than a separate switch.
+/// How many sides a polygon has and how many points a star: one box beside
+/// the pens, shown only for those two, remembering each count apart.
+#[derive(Clone)]
+pub struct Corners {
+    pub row: gtk::Box,
+    caption: gtk::Label,
+    spin: gtk::SpinButton,
+    sides: std::rc::Rc<std::cell::Cell<u8>>,
+    points: std::rc::Rc<std::cell::Cell<u8>>,
+    /// Which count is on show, the polygon's or the star's.
+    showing: std::rc::Rc<std::cell::Cell<Option<draw::Tool>>>,
+    /// Set while the box is being filled in, not changed by hand.
+    filling: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl Corners {
+    pub fn new() -> Self {
+        let caption = gtk::Label::new(None);
+        caption.add_css_class("dim-label");
+        let spin = gtk::SpinButton::with_range(f64::from(draw::FEWEST_CORNERS), f64::from(draw::MOST_CORNERS), 1.0);
+        spin.set_width_chars(3);
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        row.append(&caption);
+        row.append(&spin);
+        row.set_visible(false);
+        let corners = Corners {
+            row,
+            caption,
+            spin,
+            sides: std::rc::Rc::new(std::cell::Cell::new(draw::DEFAULT_SIDES)),
+            points: std::rc::Rc::new(std::cell::Cell::new(draw::DEFAULT_POINTS)),
+            showing: std::rc::Rc::default(),
+            filling: std::rc::Rc::default(),
+        };
+        let kept = corners.clone();
+        corners.spin.connect_value_changed(move |spin| {
+            if kept.filling.get() {
+                return;
+            }
+            let n = spin.value().round() as u8;
+            match kept.showing.get() {
+                Some(draw::Tool::Polygon(_)) => kept.sides.set(n),
+                Some(draw::Tool::Star(_)) => kept.points.set(n),
+                _ => {}
+            }
+        });
+        corners
+    }
+
+    /// A polygon or star tool with the count set here; any other as it is.
+    pub fn tool(&self, tool: draw::Tool) -> draw::Tool {
+        match tool {
+            draw::Tool::Polygon(_) => tool.with_corners(self.sides.get()),
+            draw::Tool::Star(_) => tool.with_corners(self.points.get()),
+            other => other,
+        }
+    }
+
+    /// Show the box for a polygon or star, with its count; hide it for
+    /// anything else.
+    pub fn show(&self, tool: Option<draw::Tool>) {
+        let tool = tool.filter(|t| t.corners().is_some());
+        self.showing.set(tool);
+        self.row.set_visible(tool.is_some());
+        let Some(tool) = tool else { return };
+        self.caption.set_text(if matches!(tool, draw::Tool::Star(_)) { "Points" } else { "Sides" });
+        self.spin.set_tooltip_text(Some(if matches!(tool, draw::Tool::Star(_)) {
+            "How many points the star has"
+        } else {
+            "How many sides the polygon has"
+        }));
+        self.filling.set(true);
+        self.spin.set_value(f64::from(tool.corners().unwrap_or(draw::DEFAULT_SIDES)));
+        self.filling.set(false);
+    }
+
+    /// Called with the count when it is changed by hand.
+    pub fn connect_changed(&self, f: impl Fn(u8) + 'static) {
+        let filling = self.filling.clone();
+        self.spin.connect_value_changed(move |spin| {
+            if !filling.get() {
+                f(spin.value().round() as u8);
+            }
+        });
+    }
+}
+
 pub(crate) fn colour_button(initial: gdk::RGBA) -> crate::app::colour::ColourButton {
     crate::app::colour::ColourButton::new(initial, true)
 }
@@ -498,6 +585,7 @@ impl Window {
         tool_grid.set_selection_mode(gtk::SelectionMode::None);
         // Two across: three named buttons side by side made the whole sidebar
         // wider than the picture needed it to be.
+        tool_grid.set_min_children_per_line(2);
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
@@ -522,7 +610,7 @@ impl Window {
             face.append(&draw::ToolIcon::new(*tool));
             face.append(&gtk::Label::new(Some(tool.label())));
             button.set_child(Some(&face));
-            button.set_tooltip_text(Some(tool.label()));
+            button.set_tooltip_text(Some(tool.description()));
             match &anchor {
                 Some(first) => button.set_group(Some(first)),
                 None => anchor = Some(button.clone()),
@@ -594,13 +682,25 @@ impl Window {
                 }
             }
         ));
-        let fill_note = gtk::Label::new(Some("Rectangles and ellipses"));
+        let fill_note = gtk::Label::new(Some("Shapes with an inside"));
         fill_note.add_css_class("dim-label");
         fill_note.add_css_class("caption");
         fill_row.append(&fill_caption);
         fill_row.append(&imp.draw_fill);
         fill_row.append(&fill_note);
         strokes.append(&fill_row);
+
+        let corners = &imp.draw_corners;
+        corners.connect_changed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |n| {
+                // The picked one first: the panel is then refreshed from it.
+                window.imp().view.canvas().recorner_picked(n);
+                window.sync_draw_tool();
+            }
+        ));
+        strokes.append(&corners.row);
 
         let draw_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         draw_actions.set_homogeneous(true);
@@ -1132,6 +1232,7 @@ impl Window {
                 .iter()
                 .position(|button| button.is_active())
                 .and_then(|index| draw::TOOLS.get(index).copied())
+                .map(|tool| imp.draw_corners.tool(tool))
         } else if imp.redact_toggle.is_active() {
             Some(draw::Tool::Redact)
         } else {
@@ -1144,7 +1245,16 @@ impl Window {
         canvas.set_draw_fill(imp.draw_fill.rgba());
         canvas.set_draw_tool(chosen);
         canvas.set_mark_select(selecting);
+        self.sync_corners();
         self.sync_draw_hint();
+    }
+
+    /// The sides or points box, for the polygon or star in hand or picked up.
+    fn sync_corners(&self) {
+        let imp = self.imp();
+        let canvas = imp.view.canvas();
+        let shown = canvas.draw_tool().or_else(|| canvas.picked_mark().map(|mark| mark.tool));
+        imp.draw_corners.show(shown.filter(|_| imp.draw_toggle.is_active()));
     }
 
     /// What the tool in hand does, under the drawing tools.
@@ -1156,7 +1266,7 @@ impl Window {
             Some(_) => "Drag on the picture from one corner to the other.",
             None if canvas.picked_mark().is_some() => {
                 "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
-                 Width, Colour and Fill change it, and Delete removes it."
+                 Width, Colour, Fill and a polygon's sides change it, and Delete removes it."
             }
             None if imp.draw_select.is_active() => "Click a drawing to pick it up.",
             None => "Pick a tool, then drag on the picture.",
@@ -1178,6 +1288,7 @@ impl Window {
             }
             imp.syncing_panel.set(false);
         }
+        self.sync_corners();
         self.sync_draw_hint();
     }
 

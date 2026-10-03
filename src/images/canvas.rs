@@ -1319,7 +1319,6 @@ impl ImageCanvas {
     /// Give the picked mark another colour, thickness or fill. A fill only
     /// takes on a shape with an inside, and a see-through one is none.
     pub fn restyle_picked(&self, colour: Option<gdk::RGBA>, width: Option<f64>, fill: Option<gdk::RGBA>) {
-        let imp = self.imp();
         let Some(before) = self.picked_mark() else { return };
         let mut after = before.clone();
         if let Some(colour) = colour {
@@ -1331,7 +1330,25 @@ impl ImageCanvas {
         if let Some(fill) = fill.filter(|_| before.tool.fillable()) {
             after.fill = (fill.alpha() > 0.0).then_some(fill);
         }
-        if after.colour == before.colour && (after.width - before.width).abs() < 1e-9 && after.fill == before.fill {
+        self.restyle_to(before, after);
+    }
+
+    /// Give the picked polygon or star another number of sides or points.
+    pub fn recorner_picked(&self, corners: u8) {
+        let Some(before) = self.picked_mark() else { return };
+        if before.tool.corners().is_none() {
+            return;
+        }
+        let after = Mark { tool: before.tool.with_corners(corners), ..before.clone() };
+        self.restyle_to(before, after);
+    }
+
+    /// The picked mark becomes `after`, as one step of undo however many
+    /// small changes in a row it takes to get there.
+    fn restyle_to(&self, before: Mark, after: Mark) {
+        let imp = self.imp();
+        let same_width = (after.width - before.width).abs() < 1e-9;
+        if after.colour == before.colour && same_width && after.fill == before.fill && after.tool == before.tool {
             return;
         }
         // Stepping the width a point at a time is one change, not twenty.

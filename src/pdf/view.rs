@@ -2675,7 +2675,7 @@ impl Inner {
             return;
         }
         let ink = self.ink.get();
-        let fill = if tool.fillable() { ink.fill().map(Rgb::to_rgba) } else { None };
+        let fill = if ink::can_fill(tool) { ink.fill().map(Rgb::to_rgba) } else { None };
         let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.colour, width: ink.width, fill, sequence: 0 };
         // A new drawing replaces any sketch still waiting for its page.
         if let Some(page) = self.sketched.take() {

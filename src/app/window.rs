@@ -136,6 +136,8 @@ mod imp {
         pub draw_tools: RefCell<Vec<gtk::ToggleButton>>,
         /// The Select tool, for picking up what has been drawn.
         pub draw_select: gtk::ToggleButton,
+        /// A polygon's sides and a star's points.
+        pub draw_corners: crate::images::edit::panel::Corners,
         pub draw_colour: crate::app::colour::ColourButton,
         /// What rectangles and ellipses are filled with: see-through for none.
         pub draw_fill: crate::app::colour::ColourButton,
@@ -338,6 +340,7 @@ mod imp {
                 draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_tools: RefCell::new(Vec::new()),
                 draw_select: gtk::ToggleButton::new(),
+                draw_corners: crate::images::edit::panel::Corners::new(),
                 draw_colour: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0)),
                 draw_fill: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0)),
                 draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),

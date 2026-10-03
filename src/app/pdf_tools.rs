@@ -95,8 +95,9 @@ impl PdfTools {
         let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
         column.set_margin_top(12);
         column.set_margin_bottom(12);
-        column.set_margin_start(12);
-        column.set_margin_end(12);
+        // A little narrower than the rest, so two tools fit side by side.
+        column.set_margin_start(10);
+        column.set_margin_end(10);
 
         let draw_toggle = section_toggle("applications-graphics-symbolic", "Draw");
         draw_toggle.set_tooltip_text(Some("Draw on the page"));
@@ -110,6 +111,7 @@ impl PdfTools {
         strokes.set_visible(false);
         let tool_grid = gtk::FlowBox::new();
         tool_grid.set_selection_mode(gtk::SelectionMode::None);
+        tool_grid.set_min_children_per_line(2);
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
@@ -126,7 +128,7 @@ impl PdfTools {
             face.append(&draw::ToolIcon::new(*tool));
             face.append(&gtk::Label::new(Some(tool.label())));
             button.set_child(Some(&face));
-            button.set_tooltip_text(Some(tool.label()));
+            button.set_tooltip_text(Some(tool.description()));
             button.set_group(Some(&select));
             tool_grid.append(&button);
             tools.push((*tool, button));
@@ -167,6 +169,9 @@ impl PdfTools {
         fill_row.append(&fill_note);
         fill_row.set_sensitive(pdf::can_draw());
         strokes.append(&fill_row);
+        // A polygon's sides and a star's points.
+        let corners = crate::images::edit::panel::Corners::new();
+        strokes.append(&corners.row);
         strokes.append(&history_buttons());
         let draw_hint = hint(if pdf::can_draw() {
             "Pick a tool, then drag on the page."
@@ -317,12 +322,16 @@ impl PdfTools {
             let (draw_toggle, text_toggle, tools) = (draw_toggle.clone(), text_toggle.clone(), tools.clone());
             let (redact_toggle, by_text) = (redact_toggle.clone(), by_text.clone());
             let (width, ink, fill, controls) = (width.clone(), ink.clone(), fill.clone(), controls.clone());
+            let corners = corners.clone();
             Rc::new(move || {
                 let Some(window) = window.upgrade() else { return };
                 let view = &window.imp().pdf_view;
                 view.set_ink(pdf::Ink { colour: ink.rgba(), width: width.value(), fill: fill.rgba() });
                 let tool = if draw_toggle.is_active() {
-                    tools.iter().find(|(_, b)| b.is_active()).map_or(pdf::Tool::Select, |(t, _)| pdf::Tool::Draw(*t))
+                    tools
+                        .iter()
+                        .find(|(_, b)| b.is_active())
+                        .map_or(pdf::Tool::Select, |(t, _)| pdf::Tool::Draw(corners.tool(*t)))
                 } else if text_toggle.is_active() {
                     pdf::Tool::Text
                 } else if redact_toggle.is_active() && by_text.is_active() {
@@ -333,6 +342,10 @@ impl PdfTools {
                     pdf::Tool::Select
                 };
                 view.set_tool(tool);
+                corners.show(match tool {
+                    pdf::Tool::Draw(tool) => Some(tool),
+                    _ => None,
+                });
                 if tool == pdf::Tool::Text {
                     view.set_text_look(controls.entry.text().to_string(), controls.style());
                 }
@@ -387,6 +400,10 @@ impl PdfTools {
                 });
                 push_tool();
             });
+        }
+        {
+            let push_tool = push_tool.clone();
+            corners.connect_changed(move |_| push_tool());
         }
         // The pen's colour and thickness, and the picked drawing's too.
         let reink = {

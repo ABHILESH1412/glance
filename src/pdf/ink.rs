@@ -17,6 +17,13 @@ use crate::images::edit::shape::{self, Outline};
 use super::annots::{self, Rgb};
 use super::newer;
 
+/// Whether a shape can be filled on a page. Only a rectangle and an ellipse:
+/// they are a PDF's square and circle, which have an inside colour; anything
+/// else is ink, which is lines only.
+pub fn can_fill(tool: Tool) -> bool {
+    matches!(tool, Tool::Rectangle | Tool::Ellipse)
+}
+
 /// A drawing on one page. Positions are points from the page's top-left.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {
@@ -44,14 +51,14 @@ impl Drawing {
             strokes,
             colour: Rgb::from_rgba(&mark.colour),
             width: mark.width,
-            fill: mark.inside().map(|fill| Rgb::from_rgba(&fill)),
+            fill: mark.inside().filter(|_| can_fill(mark.tool)).map(|fill| Rgb::from_rgba(&fill)),
         })
     }
 
     /// The box a rectangle or ellipse is drawn in, x1, y1, x2, y2: the
     /// middle of its line all round. None for anything else.
     pub fn shape(&self) -> Option<[f64; 4]> {
-        if !self.tool.fillable() {
+        if !can_fill(self.tool) {
             return None;
         }
         let [x, y, w, h] = shape::frame_of(self.strokes.iter().flatten())?;
@@ -90,7 +97,9 @@ impl Drawing {
     /// The ends of a line or arrow; None for any other drawing.
     fn ends(&self) -> Option<((f64, f64), (f64, f64))> {
         match (self.tool, self.strokes.as_slice()) {
-            (Tool::Line, [shaft]) | (Tool::Arrow, [shaft, _]) if shaft.len() == 2 => Some((shaft[0], shaft[1])),
+            (Tool::Line, [shaft]) | (Tool::Arrow, [shaft, _]) | (Tool::DoubleArrow, [shaft, _, _]) if shaft.len() == 2 => {
+                Some((shaft[0], shaft[1]))
+            }
             _ => None,
         }
     }
@@ -127,7 +136,7 @@ impl Drawing {
             Some((a, b)) => self.redrawn(vec![a, b], width),
             None => self.strokes.clone(),
         };
-        let fill = if self.tool.fillable() { fill } else { None };
+        let fill = if can_fill(self.tool) { fill } else { None };
         Drawing { strokes, colour, width, fill, ..self.clone() }
     }
 
@@ -163,6 +172,11 @@ fn tool_of(strokes: &[Vec<(f64, f64)>], see_through: bool) -> Tool {
         _ if see_through => Tool::Highlighter,
         [shaft] if shaft.len() == 2 && !near(shaft[0], shaft[1]) => Tool::Line,
         [shaft, head] if shaft.len() == 2 && head.len() == 3 && near(head[1], shaft[1]) => Tool::Arrow,
+        [shaft, head, tail]
+            if shaft.len() == 2 && head.len() == 3 && tail.len() == 3 && near(head[1], shaft[1]) && near(tail[1], shaft[0]) =>
+        {
+            Tool::DoubleArrow
+        }
         _ => Tool::Pen,
     }
 }
@@ -391,6 +405,8 @@ mod tests {
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], false), Tool::Line);
         let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
         assert_eq!(tool_of(&arrow.strokes(), false), Tool::Arrow);
+        let both = Mark { tool: Tool::DoubleArrow, ..arrow.clone() };
+        assert_eq!(tool_of(&both.strokes(), false), Tool::DoubleArrow);
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], true), Tool::Highlighter);
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)]], false), Tool::Pen);
         assert_eq!(tool_of(&[vec![(3.0, 3.0), (3.0, 3.0)]], false), Tool::Pen, "a dot is not a line");
@@ -562,6 +578,48 @@ mod tests {
         }
         annots::save(&doc, &path).unwrap();
         assert!(on_page(&open(), 0).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A star and a tick are ink on a page; a star cannot be filled there,
+    /// a double arrow comes back as one.
+    #[test]
+    fn the_other_shapes_are_saved_as_ink() {
+        use super::super::annots::{self, Annotation};
+        use super::super::document;
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("glance-more-shapes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, blank_page()).unwrap();
+        let open = || poppler::Document::from_file(&document::uri(&path), None).unwrap();
+        let star = Mark {
+            tool: Tool::Star(5),
+            points: vec![(100.0, 100.0), (200.0, 200.0)],
+            colour: gtk::gdk::RGBA::new(0.0, 0.5, 0.0, 1.0),
+            width: 2.0,
+            fill: Some(gtk::gdk::RGBA::new(1.0, 1.0, 0.0, 1.0)),
+            sequence: 0,
+        };
+        let both = Mark { tool: Tool::DoubleArrow, points: vec![(100.0, 300.0), (300.0, 300.0)], fill: None, ..star.clone() };
+        let made = [Drawing::from_mark(0, &star).unwrap(), Drawing::from_mark(0, &both).unwrap()];
+        assert_eq!(made[0].fill, None, "only a rectangle or an ellipse is filled on a page");
+        let doc = open();
+        for drawing in &made {
+            Annotation::Ink(drawing.clone()).add(&doc);
+        }
+        annots::settle(&doc, &[0]);
+        annots::save(&doc, &path).unwrap();
+        let doc = open();
+        let page = annots::page(&doc, 0).unwrap();
+        assert!(annots::list(&page).iter().all(|f| f.kind == poppler::ffi::POPPLER_ANNOT_INK));
+        let read = on_page(&doc, 0);
+        assert_eq!(read.len(), 2);
+        assert!(read[0].same_strokes(&made[0].strokes), "the star's eleven corners, round and closed");
+        assert_eq!(read[1].tool, Tool::DoubleArrow);
+        assert!(matches!(read[1].outline(), Some(Outline::Ends(..))));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

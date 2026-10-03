@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 52 / 64 | 5 |
+| Images | 53 / 64 | 4 |
 | PDF | 17 / 28 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 3 / 8 | 1 |
-| **Total** | **72 / 122** | **8** |
+| **Total** | **73 / 122** | **7** |
 
 ---
 
@@ -65,7 +65,7 @@ annotations, so every PDF reader shows them.
 - [x] Freehand pen (Preview: Sketch / Draw)
 - [x] Highlighter
 - [x] Line, arrow, rectangle, ellipse
-- [ ] More shapes: star, polygon, rounded rectangle, speech bubble — *partial:* speech bubbles, on PDFs
+- [x] More shapes: star, polygon, rounded rectangle, speech bubble — and a double-headed arrow, a tick and a cross; polygons from 3 to 24 sides, stars from 3 to 24 points. Every one can be filled on a picture; on a PDF they are ink, which only outlines (rectangles and ellipses fill there too)
 - [x] Stroke thickness and colour
 - [x] Fill colour for shapes — rectangles and ellipses, on pictures and PDFs; on a PDF they are saved as its own square and circle annotations, so other readers fill them too
 - [x] Text boxes with font, size and colour
