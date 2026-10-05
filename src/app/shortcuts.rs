@@ -80,6 +80,7 @@ pub const PAGES: &[Page] = &[
                 title: "Combining into a PDF",
                 shortcuts: &[
                     local("Add files", "<Primary>o"),
+                    local("Put a blank page after the selected one", "<Primary>b"),
                     local("Turn the selected pages", "bracketleft bracketright"),
                     local("Take out the selected pages", "Delete"),
                     local("Move the selected pages along", "<Primary>Left <Primary>Right"),

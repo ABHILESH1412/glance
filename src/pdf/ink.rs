@@ -47,7 +47,8 @@ impl Drawing {
         let strokes = mark.strokes();
         (!strokes.is_empty()).then(|| Drawing {
             page,
-            tool: mark.tool,
+            // Ink like any pen's, and read back as one; held by its box.
+            tool: if mark.tool == Tool::Signature { Tool::Pen } else { mark.tool },
             strokes,
             colour: Rgb::from_rgba(&mark.colour),
             width: mark.width,
@@ -142,7 +143,7 @@ impl Drawing {
 
     /// A line or arrow's strokes, between the ends given.
     fn redrawn(&self, ends: Vec<(f64, f64)>, width: f64) -> Vec<Vec<(f64, f64)>> {
-        Mark { tool: self.tool, points: ends, colour: self.colour.to_rgba(), width, fill: None, sequence: 0 }.strokes()
+        Mark { tool: self.tool, points: ends, colour: self.colour.to_rgba(), width, fill: None, sequence: 0, signature: None }.strokes()
     }
 
     /// Whether a press at `p` lands on the drawing's ink, give or take
@@ -240,7 +241,7 @@ fn shape_of(found: &annots::Found, tool: Tool, page: usize) -> Option<Drawing> {
         })
     };
     let colour = found.colour.unwrap_or(Rgb(0, 0, 0));
-    let mark = Mark { tool, points: corners, colour: colour.to_rgba(), width, fill: None, sequence: 0 };
+    let mark = Mark { tool, points: corners, colour: colour.to_rgba(), width, fill: None, sequence: 0, signature: None };
     Some(Drawing { page, tool, strokes: mark.strokes(), colour, width, fill })
 }
 
@@ -403,7 +404,7 @@ mod tests {
     #[test]
     fn what_a_drawing_was_made_with_is_told_from_its_strokes() {
         assert_eq!(tool_of(&[vec![(0.0, 0.0), (10.0, 5.0)]], false), Tool::Line);
-        let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
+        let arrow = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0, signature: None };
         assert_eq!(tool_of(&arrow.strokes(), false), Tool::Arrow);
         let both = Mark { tool: Tool::DoubleArrow, ..arrow.clone() };
         assert_eq!(tool_of(&both.strokes(), false), Tool::DoubleArrow);
@@ -414,7 +415,7 @@ mod tests {
 
     #[test]
     fn an_arrow_keeps_its_head_when_its_end_is_dragged() {
-        let mark = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
+        let mark = Mark { tool: Tool::Arrow, points: vec![(0.0, 0.0), (100.0, 0.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0, signature: None };
         let arrow = Drawing::from_mark(0, &mark).unwrap();
         let Some(Outline::Ends(a, _)) = arrow.outline() else { panic!("held by its ends") };
         let turned = arrow.reshaped(&Outline::Ends(a, (0.0, 100.0)));
@@ -468,6 +469,7 @@ mod tests {
             width: 6.0,
             fill: None,
             sequence: 0,
+            signature: None,
         };
         let arrow = Mark { tool: Tool::Arrow, points: vec![(300.0, 300.0), (400.0, 350.0)], ..pen.clone() };
         let arrow = Mark { tool: Tool::Arrow, width: 3.0, ..arrow };
@@ -532,6 +534,7 @@ mod tests {
             width: 4.0,
             fill: Some(yellow),
             sequence: 0,
+            signature: None,
         };
         let ellipse = Mark { tool: Tool::Ellipse, points: vec![(100.0, 400.0), (250.0, 500.0)], fill: None, ..rectangle.clone() };
         let made = [Drawing::from_mark(0, &rectangle).unwrap(), Drawing::from_mark(0, &ellipse).unwrap()];
@@ -602,6 +605,7 @@ mod tests {
             width: 2.0,
             fill: Some(gtk::gdk::RGBA::new(1.0, 1.0, 0.0, 1.0)),
             sequence: 0,
+            signature: None,
         };
         let both = Mark { tool: Tool::DoubleArrow, points: vec![(100.0, 300.0), (300.0, 300.0)], fill: None, ..star.clone() };
         let made = [Drawing::from_mark(0, &star).unwrap(), Drawing::from_mark(0, &both).unwrap()];
@@ -647,7 +651,7 @@ mod tests {
 
     #[test]
     fn a_click_with_a_shape_tool_draws_nothing() {
-        let mark = Mark { tool: Tool::Rectangle, points: vec![(5.0, 5.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0 };
+        let mark = Mark { tool: Tool::Rectangle, points: vec![(5.0, 5.0)], colour: gtk::gdk::RGBA::BLACK, width: 2.0, fill: None, sequence: 0, signature: None };
         assert_eq!(Drawing::from_mark(0, &mark), None);
     }
 }

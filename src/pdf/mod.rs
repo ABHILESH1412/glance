@@ -45,7 +45,7 @@ pub use markup::Style;
 pub use notes::TextStyle;
 pub use qpdf::{Permissions, Protection};
 pub use redact::redact;
-pub use combine::{combine, parse_pages, Leaf, Origin, Paper};
+pub use combine::{combine, parse_pages, picture_page, Leaf, Origin, Paper};
 pub use pages::PageImages;
 pub use rewrite::{
     install, keep_as, opens_with, permissions as current_permissions, protect, shrink, temporary_beside, Level,

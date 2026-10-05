@@ -13,7 +13,10 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
+use std::sync::Arc;
+
 use crate::images::edit::shape::{self, Outline};
+use crate::images::edit::signature::Signature;
 use crate::images::edit::text::Patch;
 
 /// How see-through a highlighter is. Low enough to read what is under it.
@@ -50,6 +53,9 @@ pub enum Tool {
     Tick,
     /// A cross, for crossing them out.
     Cross,
+    /// A signature from the signature pad, stretched over its box. Not in
+    /// `TOOLS`: signatures are put down whole, not drawn.
+    Signature,
     /// Black out an area for good. Shown see-through until it is applied,
     /// so what is under it can be checked first. Not in `TOOLS`: it has a
     /// section of its own in the editing panels, apart from the pens.
@@ -115,6 +121,7 @@ impl Tool {
             Tool::Tick => "Tick",
             Tool::Cross => "Cross",
             Tool::Redact => "Redact",
+            Tool::Signature => "Signature",
         }
     }
 
@@ -193,6 +200,8 @@ pub struct Mark {
     /// When this was drawn, so marks and text stack in the order they were
     /// made rather than by which list they live in.
     pub sequence: u64,
+    /// What a signature mark shows; None for every other kind.
+    pub signature: Option<Arc<Signature>>,
 }
 
 impl Mark {
@@ -293,7 +302,7 @@ impl Mark {
                 }
             }
             // Drawn as the very steps a PDF is given, so all three agree.
-            _ if self.tool.ringed() || matches!(self.tool, Tool::Tick | Tool::Cross) => {
+            _ if self.tool.ringed() || matches!(self.tool, Tool::Tick | Tool::Cross | Tool::Signature) => {
                 let strokes = self.strokes();
                 if strokes.is_empty() {
                     return None;
@@ -301,6 +310,10 @@ impl Mark {
                 for stroke in &strokes {
                     let (first, rest) = stroke.split_first()?;
                     builder.move_to(first.0 as f32, first.1 as f32);
+                    if rest.is_empty() {
+                        // The dot over an i.
+                        builder.line_to(first.0 as f32, first.1 as f32);
+                    }
                     for point in rest {
                         builder.line_to(point.0 as f32, point.1 as f32);
                     }
@@ -374,6 +387,10 @@ impl Mark {
                 let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
                 vec![vec![(x, y), (x + w, y + h)], vec![(x + w, y), (x, y + h)]]
             }
+            Tool::Signature => match (&self.signature, self.rect()) {
+                (Some(signature), Some((x, y, w, h))) => signature.fitted([x, y, w, h]),
+                _ => Vec::new(),
+            },
             Tool::Rectangle | Tool::Redact => {
                 let Some((x, y, w, h)) = self.rect() else { return Vec::new() };
                 vec![vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)]]
@@ -564,6 +581,11 @@ impl Mark {
     /// Whether a press at `p` picks the mark up: on its ink, give or take
     /// `slack`, or anywhere inside a rectangle or ellipse when `inside`.
     pub fn is_at(&self, p: (f64, f64), slack: f64, inside: bool) -> bool {
+        // A signature is a scribble with gaps everywhere: anywhere in its box.
+        if self.tool == Tool::Signature {
+            let Some((x, y, w, h)) = self.rect() else { return false };
+            return p.0 >= x - slack && p.0 <= x + w + slack && p.1 >= y - slack && p.1 <= y + h + slack;
+        }
         let strokes = self.strokes();
         let closed = matches!(self.tool, Tool::Rectangle | Tool::Ellipse | Tool::Redact) || self.tool.ringed();
         // A filled shape is picked up by its inside wherever it is.
@@ -617,6 +639,7 @@ mod tests {
             width: 8.0,
             fill: None,
             sequence: 0,
+            signature: None,
         }
     }
 
@@ -965,7 +988,14 @@ mod icon {
             Tool::Line | Tool::Arrow | Tool::DoubleArrow => vec![(x0, y1), (x1, y0)],
             // A star or polygon fills the square it is drawn in.
             Tool::Polygon(_) | Tool::Star(_) => vec![(x0 - 1.0, y0 - 1.0), (x1 + 1.0, y1 + 1.0)],
-            Tool::Rectangle | Tool::RoundedRectangle | Tool::Ellipse | Tool::Bubble | Tool::Tick | Tool::Cross | Tool::Redact => {
+            Tool::Rectangle
+            | Tool::RoundedRectangle
+            | Tool::Ellipse
+            | Tool::Bubble
+            | Tool::Tick
+            | Tool::Cross
+            | Tool::Redact
+            | Tool::Signature => {
                 vec![(x0, y0), (x1, y1)]
             }
         };
@@ -976,6 +1006,7 @@ mod icon {
             width: if tool == Tool::Highlighter { (h - pad * 2.0).max(2.0) } else { 1.6 },
             fill: None,
             sequence: 0,
+            signature: None,
         }
     }
 }

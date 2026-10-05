@@ -137,6 +137,17 @@ impl PdfTools {
             pen.set_active(true);
         }
         strokes.append(&tool_grid);
+        // A kept signature, put down whole as ink and picked up to move.
+        let sign = {
+            let (weak, select) = (window.downgrade(), select.clone());
+            crate::app::signatures::button(window, move |signature| {
+                let Some(window) = weak.upgrade() else { return };
+                select.set_active(true);
+                window.imp().pdf_view.place_signature(&signature);
+            })
+        };
+        sign.set_sensitive(pdf::can_draw());
+        strokes.append(&sign);
 
         let width = gtk::SpinButton::with_range(0.5, 50.0, 0.5);
         width.set_digits(1);

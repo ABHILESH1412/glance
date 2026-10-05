@@ -625,6 +625,17 @@ impl Window {
         }
         strokes.append(&tool_grid);
 
+        // A kept signature, put down whole and picked up to move into place.
+        let sign = crate::app::signatures::button(
+            self,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |signature| window.place_signature_on_picture(&signature)
+            ),
+        );
+        strokes.append(&sign);
+
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let width_caption = gtk::Label::new(Some("Width"));
         width_caption.add_css_class("dim-label");
@@ -1247,6 +1258,16 @@ impl Window {
         canvas.set_mark_select(selecting);
         self.sync_corners();
         self.sync_draw_hint();
+    }
+
+    /// Put a signature on the picture, picked up with the Select tool so it
+    /// can be dragged into place and sized at once.
+    fn place_signature_on_picture(&self, signature: &std::sync::Arc<crate::images::edit::signature::Signature>) {
+        let imp = self.imp();
+        imp.draw_select.set_active(true);
+        if imp.view.canvas().place_signature(signature) {
+            self.sync_draw_hint();
+        }
     }
 
     /// The sides or points box, for the polygon or star in hand or picked up.

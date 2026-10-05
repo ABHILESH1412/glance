@@ -27,6 +27,8 @@ pub enum Origin {
     /// A page of a PDF, counting from zero.
     Pdf { path: PathBuf, password: Option<String>, page: usize },
     Picture { path: PathBuf },
+    /// An empty page of this width and height, in points.
+    Blank { width: f64, height: f64 },
 }
 
 /// One page of the new document: where it comes from, and how many quarter
@@ -65,7 +67,7 @@ impl Paper {
     }
 
     /// Width and height in points, portrait, or `None` for a picture's own.
-    fn size(self) -> Option<(f64, f64)> {
+    pub fn size(self) -> Option<(f64, f64)> {
         match self {
             Paper::A4 => Some((595.276, 841.89)),
             Paper::Letter => Some((612.0, 792.0)),
@@ -149,6 +151,10 @@ pub fn combine(leaves: &[Leaf], paper: Paper, out: &Path) -> Result<usize, Strin
                 let page = picture(&document, path, paper)?;
                 document.add_page(&document, page).map_err(|e| e.to_string())?
             }
+            Origin::Blank { width, height } => {
+                let page = blank(&document, *width, *height);
+                document.add_page(&document, page).map_err(|e| e.to_string())?
+            }
         };
         if leaf.turn % 4 != 0 {
             let now = document.get(page, "Rotate").and_then(|r| document.integer(r)).unwrap_or(0);
@@ -163,6 +169,18 @@ pub fn combine(leaves: &[Leaf], paper: Paper, out: &Path) -> Result<usize, Strin
 
 fn name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// A page with nothing on it.
+fn blank(document: &Qpdf, width: f64, height: f64) -> Object {
+    let contents = document.new_stream(b"", None, Vec::new());
+    let resources = document.new_dictionary(Vec::new());
+    document.new_dictionary(vec![
+        ("Type", Value::Name("Page")),
+        ("MediaBox", Value::Array(vec![Value::Integer(0), Value::Integer(0), Value::Real(width), Value::Real(height)])),
+        ("Resources", Value::Object(resources)),
+        ("Contents", Value::Object(contents)),
+    ])
 }
 
 /// A page showing one picture.
@@ -339,6 +357,28 @@ mod tests {
         let jpeg = std::fs::read(&photo).unwrap();
         let written = std::fs::read(&out).unwrap();
         assert!(written.windows(jpeg.len()).any(|w| w == jpeg.as_slice()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_blank_page_goes_in_at_its_size_with_nothing_on_it() {
+        let dir = std::env::temp_dir().join(format!("glance-blank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (pdf, out) = (dir.join("two.pdf"), dir.join("out.pdf"));
+        two_pages(&pdf);
+        let leaves = vec![
+            Leaf { origin: Origin::Pdf { path: pdf.clone(), password: None, page: 0 }, turn: 0 },
+            Leaf { origin: Origin::Blank { width: 612.0, height: 792.0 }, turn: 1 },
+            Leaf { origin: Origin::Pdf { path: pdf.clone(), password: None, page: 1 }, turn: 0 },
+        ];
+        assert_eq!(combine(&leaves, Paper::A4, &out), Ok(3));
+        let document = poppler::Document::from_file(&super::super::document::uri(&out), None).unwrap();
+        assert_eq!(document.n_pages(), 3);
+        let page = document.page(1).unwrap();
+        let (w, h) = page.size();
+        assert_eq!((w.round(), h.round()), (792.0, 612.0), "Letter, turned a quarter");
+        assert!(page.text().unwrap_or_default().trim().is_empty());
+        assert!(document.page(2).unwrap().text().unwrap().contains("Bravo"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -49,6 +49,19 @@ impl Outline {
         }
     }
 
+    /// Whether a press at `p` lands within a picked shape's box, give or take
+    /// `slack`: anywhere there takes hold of it to move, gaps between its
+    /// strokes included. A line or arrow has no box to speak of.
+    pub fn holds(&self, p: Point, slack: f64) -> bool {
+        match self {
+            Outline::Ends(..) => false,
+            Outline::Frame(_) => {
+                let [x, y, w, h] = self.bounds();
+                p.0 >= x - slack && p.0 <= x + w + slack && p.1 >= y - slack && p.1 <= y + h + slack
+            }
+        }
+    }
+
     /// Every grip, and where it is.
     pub fn grips(&self) -> Vec<(Grip, Point)> {
         match *self {
@@ -247,6 +260,17 @@ pub fn append_picked(snapshot: &gtk::Snapshot, frame: Option<[f64; 4]>, grips: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picked_box_is_held_anywhere_inside_and_a_line_only_on_itself() {
+        let frame = Outline::Frame([10.0, 10.0, 100.0, 40.0]);
+        assert!(frame.holds((60.0, 30.0), 0.0), "in a gap between strokes");
+        assert!(frame.holds((112.0, 30.0), 3.0), "just outside, within reach");
+        assert!(!frame.holds((120.0, 30.0), 3.0));
+        // Turned over by a drag, still the same box.
+        assert!(Outline::Frame([110.0, 50.0, -100.0, -40.0]).holds((60.0, 30.0), 0.0));
+        assert!(!Outline::Ends((0.0, 0.0), (100.0, 100.0)).holds((50.0, 50.0), 5.0));
+    }
 
     #[test]
     fn a_frame_has_eight_grips_and_a_line_two() {

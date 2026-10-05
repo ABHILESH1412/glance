@@ -33,6 +33,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
@@ -40,6 +41,7 @@ use gtk::{cairo, gdk, gio, glib, graphene, pango};
 
 use crate::images::edit::draw;
 use crate::images::edit::shape::{self, Grip, Outline};
+use crate::images::edit::signature::Signature;
 
 use super::annots::{self, Annotation, Rgb};
 use super::bookmark_list::Request;
@@ -822,6 +824,12 @@ impl PdfView {
     /// and for the chosen one, which follows once typing pauses.
     pub fn set_text_look(&self, text: String, style: TextStyle) {
         self.inner.set_text_look(text, style);
+    }
+
+    /// Put a signature in the middle of what is in view, and pick it up, so
+    /// it can be dragged into place and sized. False if it could not be.
+    pub fn place_signature(&self, signature: &Arc<Signature>) -> bool {
+        self.inner.place_signature(signature)
     }
 
     /// Put a new text box near the top of the page being read.
@@ -2163,10 +2171,12 @@ impl Inner {
         let drawing = picked.as_ref().filter(|d| d.page == spot.page)?;
         let per_point = self.pixels_per_point(spot.page);
         let at = (spot.x, spot.y);
-        if let Some(grip) = drawing.outline().and_then(|outline| outline.grip_at(at, shape::GRIP_REACH / per_point)) {
+        let outline = drawing.outline();
+        if let Some(grip) = outline.and_then(|outline| outline.grip_at(at, shape::GRIP_REACH / per_point)) {
             return Some(grip);
         }
-        drawing.is_at(at, 4.0 / per_point).then_some(Grip::Body)
+        let slack = 4.0 / per_point;
+        (outline.is_some_and(|outline| outline.holds(at, slack)) || drawing.is_at(at, slack)).then_some(Grip::Body)
     }
 
     /// The pointer for a handle of the picked drawing, judged on screen.
@@ -2642,6 +2652,55 @@ impl Inner {
         });
     }
 
+    fn place_signature(&self, signature: &Arc<Signature>) -> bool {
+        if !ink::available() {
+            self.report("Putting a signature on a PDF needs Poppler 25.06 or newer.".to_string());
+            return false;
+        }
+        // Where the middle of the view falls, if on a page; otherwise the
+        // middle of the page being read.
+        let (h, v) = (self.root.hadjustment(), self.root.vadjustment());
+        let middle = self.hit(h.value() + h.page_size() / 2.0, v.value() + v.page_size() / 2.0);
+        let spot = middle.or_else(|| {
+            let page = self.current_page();
+            let (w, h) = *self.pages.borrow().get(page)?;
+            Some(Spot { page, x: w / 2.0, y: h / 2.0 })
+        });
+        let Some(spot) = spot else { return false };
+        let Some(&(pw, ph)) = self.pages.borrow().get(spot.page) else { return false };
+        // About as big as a signature is on paper: two and a half inches
+        // across at most, less on a small page or for a tall signature.
+        let aspect = signature.aspect();
+        let mut w = (pw * 0.35).min(180.0);
+        let mut h = w / aspect;
+        if h > ph * 0.12 {
+            h = ph * 0.12;
+            w = h * aspect;
+        }
+        let x = (spot.x - w / 2.0).clamp(0.0, (pw - w).max(0.0));
+        let y = (spot.y - h / 2.0).clamp(0.0, (ph - h).max(0.0));
+        let mark = draw::Mark {
+            tool: draw::Tool::Signature,
+            points: vec![(x, y), (x + w, y + h)],
+            colour: signature.colour,
+            width: signature.pen_at(w),
+            fill: None,
+            sequence: 0,
+            signature: Some(signature.clone()),
+        };
+        let Some(drawing) = Drawing::from_mark(spot.page, &mark) else { return false };
+        match self.commit(Change { removed: Vec::new(), added: vec![Annotation::Ink(drawing.clone())] }) {
+            Ok(()) => {
+                self.pick(Some(drawing));
+                true
+            }
+            Err(error) => {
+                self.report(error);
+                false
+            }
+        }
+    }
+
     fn set_tool(&self, tool: Tool) {
         if self.tool.replace(tool) == tool {
             return;
@@ -2676,7 +2735,7 @@ impl Inner {
         }
         let ink = self.ink.get();
         let fill = if ink::can_fill(tool) { ink.fill().map(Rgb::to_rgba) } else { None };
-        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.colour, width: ink.width, fill, sequence: 0 };
+        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.colour, width: ink.width, fill, sequence: 0, signature: None };
         // A new drawing replaces any sketch still waiting for its page.
         if let Some(page) = self.sketched.take() {
             if let Some(widget) = self.widgets.borrow().get(page) {

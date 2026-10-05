@@ -17,6 +17,8 @@
 //!   keys step through, and Escape goes back to the grid where it was.
 //! - A PDF of more than one page asks which pages to take: all, or a list
 //!   like "2-5, 9".
+//! - Blank Page, or Ctrl+B, puts an empty page after the one picked, the
+//!   same size as it.
 //! - Everything can be undone.
 //!
 //! Nothing is written until Save, and then only to a new file: the files the
@@ -55,9 +57,14 @@ const COLOURS: &[(f32, f32, f32)] = &[
     (0.53, 0.53, 0.50),
 ];
 
+/// The stripe on blank pages: plain grey, apart from the files' colours.
+const BLANK_COLOUR: (f32, f32, f32) = (0.66, 0.66, 0.64);
+
 enum Kind {
     Pdf { password: Option<String>, images: pdf::PageImages },
     Picture,
+    /// Empty pages put in, one shape each, in points.
+    Blank,
 }
 
 /// A file pages came from.
@@ -66,11 +73,27 @@ struct Source {
     name: String,
     kind: Kind,
     colour: gdk::RGBA,
-    /// Each page's own width and height: points for a PDF, pixels for a
-    /// picture, which has one page.
-    shapes: Vec<(f64, f64)>,
+    /// Each page's own width and height: points for a PDF or a blank page,
+    /// pixels for a picture, which has one page. Blank pages are added to.
+    shapes: RefCell<Vec<(f64, f64)>>,
     /// Pictures of its pages so far, and the scale each was drawn at.
     thumbs: RefCell<HashMap<usize, (f64, gdk::Texture)>>,
+}
+
+impl Source {
+    fn shape(&self, page: usize) -> (f64, f64) {
+        self.shapes.borrow().get(page).copied().unwrap_or((1.0, 1.0))
+    }
+
+    /// What a page is called under it, and across the top when shown alone.
+    fn caption(&self, page: usize, long: bool) -> String {
+        match self.kind {
+            Kind::Picture => self.name.clone(),
+            Kind::Blank => "Blank page".to_string(),
+            Kind::Pdf { .. } if long => format!("{}, page {}", self.name, page + 1),
+            Kind::Pdf { .. } => format!("{} · p. {}", self.name, page + 1),
+        }
+    }
 }
 
 /// One page of the document being put together.
@@ -143,6 +166,10 @@ impl Combine {
             .child(&adw::ButtonContent::builder().icon_name("list-add-symbolic").label("_Add Files…").use_underline(true).build())
             .tooltip_text("Add PDFs or pictures (Ctrl+O)")
             .build();
+        let blank = gtk::Button::builder()
+            .child(&adw::ButtonContent::builder().icon_name("document-new-symbolic").label("_Blank Page").use_underline(true).build())
+            .tooltip_text("Put an empty page after the one picked, the same size as it (Ctrl+B)")
+            .build();
         let save = gtk::Button::builder().label("_Save as PDF…").use_underline(true).css_classes(["suggested-action"]).build();
         save.set_tooltip_text(Some("Write the pages as one new PDF (Ctrl+S)"));
         let undo_button = gtk::Button::builder().icon_name("edit-undo-symbolic").tooltip_text("Undo (Ctrl+Z)").build();
@@ -150,6 +177,7 @@ impl Combine {
             gtk::Button::builder().icon_name("edit-redo-symbolic").tooltip_text("Redo (Ctrl+Shift+Z)").build();
         header.pack_start(&cancel);
         header.pack_start(&add);
+        header.pack_start(&blank);
         header.pack_end(&save);
         header.pack_end(&redo_button);
         header.pack_end(&undo_button);
@@ -303,6 +331,8 @@ impl Combine {
         };
         let (a, b, c) = (on(Inner::choose_files), on(Inner::choose_files), on(Inner::ask_to_save));
         add.connect_clicked(move |_| a());
+        let empty_page = on(Inner::insert_blank);
+        blank.connect_clicked(move |_| empty_page());
         add_first.connect_clicked(move |_| b());
         inner.save.connect_clicked(move |_| c());
         let (u, r, x) = (on(Inner::step_undo), on(Inner::step_redo), on(Inner::ask_to_leave));
@@ -559,16 +589,72 @@ impl Inner {
 
     fn new_source(&self, path: &Path, kind: Kind, shapes: Vec<(f64, f64)>) -> usize {
         let mut sources = self.sources.borrow_mut();
-        let (r, g, b) = COLOURS[sources.len() % COLOURS.len()];
+        let (r, g, b) = if matches!(kind, Kind::Blank) {
+            BLANK_COLOUR
+        } else {
+            // Blank pages take no colour from the files'.
+            let files = sources.iter().filter(|s| !matches!(s.kind, Kind::Blank)).count();
+            COLOURS[files % COLOURS.len()]
+        };
         sources.push(Rc::new(Source {
             path: path.to_path_buf(),
-            name: file_name(path),
+            name: if matches!(kind, Kind::Blank) { "Blank".to_string() } else { file_name(path) },
             kind,
             colour: gdk::RGBA::new(r, g, b, 1.0),
-            shapes,
+            shapes: RefCell::new(shapes),
             thumbs: RefCell::default(),
         }));
         sources.len() - 1
+    }
+
+    /// An empty page after the one picked or shown, or at the end, the size
+    /// of the page before it as that page will stand. With nothing to go by,
+    /// the paper last chosen for pictures, or A4.
+    fn insert_blank(self: &Rc<Self>) {
+        let sheets = self.sheets.borrow().clone();
+        let after = match self.previewing.get() {
+            Some(at) => Some(at),
+            None => {
+                let picked = self.picked.borrow();
+                sheets.iter().rposition(|s| picked.contains(&s.id)).or(sheets.len().checked_sub(1))
+            }
+        };
+        let paper = self.paper.get().filter(|p| p.size().is_some()).unwrap_or(pdf::Paper::A4);
+        let size = after.and_then(|i| sheets.get(i)).map(|sheet| {
+            let source = self.sources.borrow()[sheet.source].clone();
+            let (w, h) = source.shape(sheet.page);
+            let (w, h) = match source.kind {
+                // A picture's page is only settled when saving; as it is now.
+                Kind::Picture => pdf::picture_page(w, h, self.paper.get().unwrap_or(paper)).0,
+                _ => (w, h),
+            };
+            if sheet.turn % 2 == 1 { (h, w) } else { (w, h) }
+        });
+        let size = size.or_else(|| paper.size()).unwrap_or((595.276, 841.89));
+        let source = {
+            let found = self.sources.borrow().iter().position(|s| matches!(s.kind, Kind::Blank));
+            found.unwrap_or_else(|| self.new_source(Path::new(""), Kind::Blank, Vec::new()))
+        };
+        let page = {
+            let sources = self.sources.borrow();
+            let mut shapes = sources[source].shapes.borrow_mut();
+            shapes.push(size);
+            shapes.len() - 1
+        };
+        self.remember();
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let at = after.map_or(sheets.len(), |i| i + 1);
+        self.sheets.borrow_mut().insert(at, Sheet { id, source, page, turn: 0 });
+        self.changed.set(true);
+        self.refresh();
+        if self.previewing.get().is_some() {
+            self.previewing.set(Some(at));
+            self.show_preview();
+        } else {
+            self.pick([id], false);
+            self.anchor.set(Some(id));
+        }
     }
 
     fn insert_pages(self: &Rc<Self>, source: usize, pages: Vec<usize>) {
@@ -744,16 +830,13 @@ impl Inner {
         for (i, sheet) in sheets.iter().enumerate() {
             let tile = tiles.entry(sheet.id).or_insert_with(|| self.new_tile(sheet.id));
             let source = &sources[sheet.source];
-            let (w, h) = source.shapes.get(sheet.page).copied().unwrap_or((1.0, 1.0));
+            let (w, h) = source.shape(sheet.page);
             tile.picture.set_shape(w, h);
             tile.picture.set_turn(sheet.turn);
             tile.picture.set_stripe(Some(source.colour));
             tile.picture.set_texture(source.thumbs.borrow().get(&sheet.page).map(|(_, t)| t.clone()));
             tile.number.set_text(&(i + 1).to_string());
-            let caption = match source.kind {
-                Kind::Picture => source.name.clone(),
-                Kind::Pdf { .. } => format!("{} · p. {}", source.name, sheet.page + 1),
-            };
+            let caption = source.caption(sheet.page, false);
             tile.caption.set_text(&caption);
             tile.child.set_tooltip_text(Some(&caption));
             self.size_tile(tile);
@@ -773,7 +856,9 @@ impl Inner {
             used.dedup();
             used
         };
-        self.title.set_subtitle(&match (pages, used.len()) {
+        let files = used.iter().filter(|&&i| !matches!(sources[i].kind, Kind::Blank)).count();
+        self.title.set_subtitle(&match (pages, files) {
+            (p, 0) if p > 1 => format!("{p} pages"),
             (0, _) => String::new(),
             (1, _) => "1 page".to_string(),
             (p, 1) => format!("{p} pages from 1 file"),
@@ -795,7 +880,9 @@ impl Inner {
             let count = sheets.iter().filter(|s| s.source == index).count();
             let label = gtk::Label::new(Some(&match source.kind {
                 Kind::Picture => source.name.clone(),
-                Kind::Pdf { .. } => format!("{} · {count} {}", source.name, if count == 1 { "page" } else { "pages" }),
+                Kind::Pdf { .. } | Kind::Blank => {
+                    format!("{} · {count} {}", source.name, if count == 1 { "page" } else { "pages" })
+                }
             }));
             label.add_css_class("caption");
             let entry = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -954,7 +1041,7 @@ impl Inner {
                 continue;
             }
             let source = &sources[sheet.source];
-            let (w, h) = source.shapes.get(sheet.page).copied().unwrap_or((1.0, 1.0));
+            let (w, h) = source.shape(sheet.page);
             let scale = longest_px / w.max(h).max(1.0);
             let have = source.thumbs.borrow().get(&sheet.page).map_or(0.0, |(s, _)| *s);
             if have < scale * 0.95 {
@@ -1018,22 +1105,20 @@ impl Inner {
         let Some(at) = self.previewing.get() else { return };
         let Some(sheet) = self.sheets.borrow().get(at).copied() else { return };
         let source = self.sources.borrow()[sheet.source].clone();
-        let (w, h) = source.shapes.get(sheet.page).copied().unwrap_or((1.0, 1.0));
+        let (w, h) = source.shape(sheet.page);
         self.preview.set_shape(w, h);
         self.preview.set_turn(sheet.turn);
         self.preview.set_stripe(None);
         self.preview.set_texture(source.thumbs.borrow().get(&sheet.page).map(|(_, t)| t.clone()));
         let count = self.sheets.borrow().len();
-        let from = match source.kind {
-            Kind::Picture => source.name.clone(),
-            Kind::Pdf { .. } => format!("{}, page {}", source.name, sheet.page + 1),
-        };
+        let from = source.caption(sheet.page, true);
         self.preview_title.set_text(&format!("Page {} of {count} · {from}", at + 1));
         // Sharp at the size it is shown.
         let screen = self.root.native().and_then(|n| n.surface()).map_or(1.0, |s| s.scale()).max(1.0);
         let longest = f64::from(self.root.width().max(self.root.height()).max(800)) * screen;
         match &source.kind {
             Kind::Pdf { images, .. } => images.want(&[(sheet.page, longest / w.max(h).max(1.0))]),
+            Kind::Blank => {}
             Kind::Picture => {
                 let path = source.path.clone();
                 let weak = Rc::downgrade(self);
@@ -1209,6 +1294,10 @@ impl Inner {
                     inner.ask_to_save();
                     true
                 }
+                Key::b if ctrl => {
+                    inner.insert_blank();
+                    true
+                }
                 _ if previewing => false,
                 Key::Delete | Key::KP_Delete | Key::BackSpace => {
                     let ids = inner.selected();
@@ -1333,6 +1422,10 @@ impl Inner {
                             pdf::Origin::Pdf { path: source.path.clone(), password: password.clone(), page: sheet.page }
                         }
                         Kind::Picture => pdf::Origin::Picture { path: source.path.clone() },
+                        Kind::Blank => {
+                            let (width, height) = source.shape(sheet.page);
+                            pdf::Origin::Blank { width, height }
+                        }
                     };
                     pdf::Leaf { origin, turn: sheet.turn }
                 })

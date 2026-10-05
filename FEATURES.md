@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 53 / 64 | 4 |
-| PDF | 17 / 28 | 2 |
+| Images | 54 / 64 | 4 |
+| PDF | 20 / 28 | 1 |
 | 3D | 0 / 22 | 0 |
-| Capture and general | 3 / 8 | 1 |
-| **Total** | **73 / 122** | **7** |
+| Capture and general | 4 / 8 | 0 |
+| **Total** | **78 / 122** | **5** |
 
 ---
 
@@ -73,7 +73,7 @@ annotations, so every PDF reader shows them.
 - [x] Select, move and resize a shape after drawing it — the Select tool picks a drawing up to move by its body, resize by its handles (Shift keeps the proportions), recolour, thicken or delete; on a PDF that includes drawings made earlier or by another program. Text can be dragged but not resized
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
-- [ ] Signatures
+- [x] Signatures — written once on a signature pad, kept, and put on any picture or PDF page from the Signature button in the Draw panel; picked up to move and size like any drawing
 - [x] Redact / black out a region — marked first, then applied to a copy or the original
 
 ## 4. Colour
@@ -130,15 +130,15 @@ annotations, so every PDF reader shows them.
 
 - [ ] Fill in interactive form fields
 - [x] Add text boxes to forms that aren't interactive — the PDF text tool
-- [ ] Draw a signature with the mouse or touchpad and place it on a page
+- [x] Draw a signature with the mouse or touchpad and place it on a page — saved into the PDF as ink, so every reader shows it, and kept sharp at any size
 - [ ] Capture a signature from paper with the webcam
-- [ ] Save signatures for reuse
+- [x] Save signatures for reuse — kept on this computer, listed in Preferences to remove (with undo) or add to
 
 ## 9. PDF — pages
 
 - [x] Combine several PDFs into one — and pictures, in any order, with only the pages wanted
 - [x] Add, delete and reorder pages — in Combine into PDF, saved as a new file
-- [ ] Insert a blank page, or pages from another file — *partial:* pages from other files and pictures, but no blank page yet
+- [x] Insert a blank page, or pages from another file — in Combine into PDF: pages from other files and pictures, and Blank Page (Ctrl+B) puts an empty page after the one picked, the size of it as it stands
 - [x] Rotate pages — in Combine into PDF, page by page, saved as a new file; the reader's turning is for the view only
 - [ ] Crop pages
 - [ ] Apply effects to a whole document (black and white, sepia, lighter/darker)
@@ -202,7 +202,7 @@ onward) covers.
 - [x] Save in place and export a copy
 - [x] Print — pictures and PDFs
 - [ ] Share to other apps
-- [ ] Settings window — *partial:* appearance (light / dark / system) is in the menu
+- [x] Settings window — Preferences (Ctrl+,): appearance, the slideshow, PDF layout, night mode, highlight colour and paper for pictures, signatures, and Live Text
 
 ---
 
@@ -232,10 +232,10 @@ Things Glance does that Preview doesn't:
 
 Roughly in order of value for effort:
 
-1. **PDF forms and signatures** (section 8) — filling in form fields, and a signature
-   drawn once and placed anywhere, building on the pen the Draw panel already has.
-2. **The rest of PDF pages** (section 9) — a blank page, cropping, and effects over a
-   whole document, all at home in Combine into PDF.
+1. **PDF forms** (section 8) — filling in interactive form fields, and capturing a
+   signature from paper with the webcam.
+2. **The rest of PDF pages** (section 9) — cropping, and effects over a whole document,
+   both at home in Combine into PDF.
 3. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
 4. **3D** (sections 11–13) — the largest project. glTF, OBJ, STL and PLY have good
    pure-Rust loaders; USD does not, and would need bindings to Pixar's C++ library.

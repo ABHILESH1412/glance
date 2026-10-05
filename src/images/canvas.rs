@@ -1234,6 +1234,7 @@ impl ImageCanvas {
             width: imp.draw_width.get(),
             fill: if tool.fillable() { imp.draw_fill.get() } else { None },
             sequence: self.next_sequence(),
+            signature: None,
         }));
     }
 
@@ -1256,6 +1257,42 @@ impl ImageCanvas {
             self.notify_text();
         }
         self.queue_draw();
+    }
+
+    /// Put a signature in the middle of what is in view, picked up, so it
+    /// can be dragged into place and sized. The Select tool should be in
+    /// hand, for the grips to answer.
+    pub fn place_signature(&self, signature: &std::sync::Arc<crate::images::edit::signature::Signature>) -> bool {
+        let Some((bw, bh)) = self.display_size() else { return false };
+        // The part of the picture in view.
+        let (x1, y1) = self.to_display((0.0, 0.0));
+        let (x2, y2) = self.to_display((f64::from(self.width()), f64::from(self.height())));
+        let (left, top, right, bottom) = (x1.min(x2).max(0.0), y1.min(y2).max(0.0), x1.max(x2).min(bw), y1.max(y2).min(bh));
+        let (seen_w, seen_h) = ((right - left).max(1.0), (bottom - top).max(1.0));
+        let aspect = signature.aspect();
+        let mut w = seen_w * 0.4;
+        let mut h = w / aspect;
+        if h > seen_h * 0.3 {
+            h = seen_h * 0.3;
+            w = h * aspect;
+        }
+        let (cx, cy) = ((left + right) / 2.0, (top + bottom) / 2.0);
+        let sequence = self.next_sequence();
+        let imp = self.imp();
+        imp.marks.borrow_mut().push(Mark {
+            tool: Tool::Signature,
+            points: vec![(cx - w / 2.0, cy - h / 2.0), (cx + w / 2.0, cy + h / 2.0)],
+            colour: signature.colour,
+            width: signature.pen_at(w).max(1.0),
+            fill: None,
+            sequence,
+            signature: Some(signature.clone()),
+        });
+        imp.picked.set(Some(sequence));
+        self.notify_picked();
+        self.notify_text();
+        self.queue_draw();
+        true
     }
 
     /// The topmost item under a widget point, if any.
@@ -1417,10 +1454,12 @@ impl ImageCanvas {
     fn picked_grip_at(&self, point: (f64, f64)) -> Option<Grip> {
         let mark = self.picked_mark()?;
         let at = self.to_display(point);
-        if let Some(grip) = mark.outline().and_then(|outline| outline.grip_at(at, self.reach(shape::GRIP_REACH))) {
+        let outline = mark.outline();
+        if let Some(grip) = outline.and_then(|outline| outline.grip_at(at, self.reach(shape::GRIP_REACH))) {
             return Some(grip);
         }
-        mark.is_at(at, self.reach(4.0), true).then_some(Grip::Body)
+        let slack = self.reach(4.0);
+        (outline.is_some_and(|outline| outline.holds(at, slack)) || mark.is_at(at, slack, true)).then_some(Grip::Body)
     }
 
     /// A press with the Select tool: take hold of a grip of the picked mark,
