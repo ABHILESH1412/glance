@@ -146,13 +146,18 @@ Users then get: **flathub.org → Install.** Nothing else.
 
 The AUR closes new registrations from time to time, and Flathub review takes as
 long as it takes. Neither has to stop you handing someone a working install
-today, because pacman will install a package straight from a URL:
+today, because pacman will install a package downloaded from a release:
 
 ```bash
-sudo pacman -U https://github.com/ABHILESH1412/glance/releases/download/v2.0.0/glance-image-viewer-2.0.0-1-x86_64.pkg.tar.zst
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/glance-image-viewer-x86_64.pkg.tar.zst
+sudo pacman -U ./glance-image-viewer-x86_64.pkg.tar.zst
 ```
 
-That one line downloads it, pulls `gtk4`, `libadwaita` and `libheif` from the
+Download it first rather than passing pacman the URL: given a URL, pacman also fetches
+`<file>.sig` from beside it and gives up when there is none. (Signing the package with
+`gpg --detach-sign` and uploading the `.sig` too would let the URL form work.)
+
+That installs it, pulls `gtk4`, `libadwaita` and `libheif` from the
 official repositories if they are missing, installs the binary, the desktop
 entry, the icons and the metainfo, and refreshes the icon and desktop caches.
 Afterwards Glance is in the launcher and in "Open With" like anything else, and
@@ -415,7 +420,7 @@ accepted, but expect discussion.
 
 | Command a user types | Works after |
 |---|---|
-| `sudo pacman -U <release URL>` | you upload one file — **today** |
+| `curl -LO <release URL>` then `sudo pacman -U ./<file>` | you upload one file — **today** |
 | Install button on flathub.org | Flathub PR merged — days |
 | `yay -S glance-image-viewer` | you push to the AUR — today, when registration reopens |
 | `sudo dnf copr enable you/glance && sudo dnf install glance` | a COPR build — today |

@@ -136,8 +136,13 @@ flatpak run io.github.abhilesh1412.Glance
 A native package, installed with pacman, which also installs everything it needs:
 
 ```bash
-sudo pacman -U https://github.com/ABHILESH1412/glance/releases/latest/download/glance-image-viewer-x86_64.pkg.tar.zst
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/glance-image-viewer-x86_64.pkg.tar.zst
+sudo pacman -U ./glance-image-viewer-x86_64.pkg.tar.zst
 ```
+
+Download it first, as above, rather than giving pacman the web address: from a web
+address pacman also looks for a signature file beside the package, and stops when there
+is none.
 
 Then run `glance`, or find Glance among your applications. It is called
 `glance-image-viewer` because Arch already has an unrelated `glance`; the two cannot be
