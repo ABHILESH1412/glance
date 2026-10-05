@@ -109,6 +109,8 @@ modules:
   # libjpeg come from the runtime. Only the library is kept.
   - name: qpdf
     buildsystem: cmake-ninja
+    # qpdf refuses to be configured inside its own source tree.
+    builddir: true
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DUSE_IMPLICIT_CRYPTO=OFF
@@ -132,6 +134,9 @@ modules:
   - name: glance
     buildsystem: simple
     build-commands:
+      # `make install` never builds (it is the step run as root elsewhere),
+      # so the build is its own step. The crates come from cargo-sources.json.
+      - make build
       # The Makefile owns the list of what gets installed and where, so the
       # Flatpak and a plain `make install` cannot drift apart.
       - make install PREFIX=/app

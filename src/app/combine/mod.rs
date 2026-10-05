@@ -39,6 +39,9 @@ use tile::PageTile;
 
 /// Smallest, starting and largest thumbnail, in pixels along the longer side.
 const SIZES: (f64, f64, f64) = (90.0, 150.0, 300.0);
+/// How many characters of a file's name the legend shows before cutting it
+/// short.
+const LEGEND_NAME: i32 = 18;
 /// A picture's own thumbnail is made this large, at most.
 const PICTURE_THUMB: u32 = 512;
 /// Text that marks a drag as pages from this grid, not files from elsewhere.
@@ -878,16 +881,27 @@ impl Inner {
                 let _ = cr.fill();
             });
             let count = sheets.iter().filter(|s| s.source == index).count();
-            let label = gtk::Label::new(Some(&match source.kind {
-                Kind::Picture => source.name.clone(),
-                Kind::Pdf { .. } | Kind::Blank => {
-                    format!("{} · {count} {}", source.name, if count == 1 { "page" } else { "pages" })
-                }
-            }));
-            label.add_css_class("caption");
+            // A long name is cut short in the middle, where it is least
+            // missed; the whole of it shows when pointed at.
+            let name = gtk::Label::builder()
+                .label(&source.name)
+                .ellipsize(gtk::pango::EllipsizeMode::Middle)
+                .max_width_chars(LEGEND_NAME)
+                .build();
+            name.add_css_class("caption");
             let entry = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             entry.append(&swatch);
-            entry.append(&label);
+            entry.append(&name);
+            let pages = if count == 1 { "1 page".to_string() } else { format!("{count} pages") };
+            if !matches!(source.kind, Kind::Picture) {
+                let count = gtk::Label::new(Some(&format!("· {pages}")));
+                count.add_css_class("caption");
+                entry.append(&count);
+            }
+            entry.set_tooltip_text(Some(&match source.kind {
+                Kind::Picture => source.name.clone(),
+                Kind::Pdf { .. } | Kind::Blank => format!("{} · {pages}", source.name),
+            }));
             self.legend.append(&entry);
         }
         drop(sources);

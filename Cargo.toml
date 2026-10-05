@@ -23,8 +23,10 @@ async-channel = "2"
 
 # SVG: pure-Rust vector rendering.
 resvg = "0.48"
-# HEIC/HEIF + AVIF: wraps the system libheif.
-libheif-rs = "3"
+# HEIC/HEIF + AVIF: wraps the system libheif. Asked for at 1.17, Ubuntu
+# 24.04's, like GTK above: by default it wants the newest libheif there is
+# (1.23), which the GNOME runtime and most distributions do not have yet.
+libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }
 # Camera raw: pure-Rust parsers for ~all common raw formats.
 rawler = "0.8"
 # PDF: bindings to poppler-glib, the engine GNOME's document viewers use.

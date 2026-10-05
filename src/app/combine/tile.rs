@@ -14,8 +14,9 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene, gsk};
 
-/// How thick the stripe is, in pixels.
-const STRIPE: f32 = 4.0;
+/// How thick the stripe is, in pixels: enough to tell the colours apart at
+/// the smallest size the pages are drawn.
+const STRIPE: f32 = 8.0;
 
 mod imp {
     use super::*;
