@@ -61,12 +61,12 @@ The big one: one build, every distribution, and an Install button.
 ### Step 1 — Tag and release
 
 ```bash
-git tag -a v1.0.0 -m "Glance 1.0.0"
-git push origin v1.0.0
-git rev-parse v1.0.0^{commit}      # note this hash, you need it next
+git tag -a v2.0.0 -m "Glance 2.0.0"
+git push origin v2.0.0
+git rev-parse v2.0.0^{commit}      # note this hash, you need it next
 ```
 
-Then on GitHub: **Releases → Draft a new release → choose `v1.0.0` → Publish**.
+Then on GitHub: **Releases → Draft a new release → choose `v2.0.0` → Publish**.
 
 ### Step 2 — Point the manifest at that commit
 
@@ -77,7 +77,7 @@ it, and paste in the hash from step 1:
 ```yaml
       - type: git
         url: https://github.com/ABHILESH1412/glance.git
-        tag: v1.0.0
+        tag: v2.0.0
         commit: <the hash>
       - cargo-sources.json
 ```
@@ -149,7 +149,7 @@ long as it takes. Neither has to stop you handing someone a working install
 today, because pacman will install a package straight from a URL:
 
 ```bash
-sudo pacman -U https://github.com/ABHILESH1412/glance/releases/download/v1.0.0/glance-image-viewer-1.0.0-1-x86_64.pkg.tar.zst
+sudo pacman -U https://github.com/ABHILESH1412/glance/releases/download/v2.0.0/glance-image-viewer-2.0.0-1-x86_64.pkg.tar.zst
 ```
 
 That one line downloads it, pulls `gtk4`, `libadwaita` and `libheif` from the
@@ -162,7 +162,7 @@ Afterwards Glance is in the launcher and in "Open With" like anything else, and
 
 ```bash
 cd packaging/aur
-updpkgsums          # once the v1.0.0 tag exists
+updpkgsums          # once the v2.0.0 tag exists
 makepkg -f
 ls *.pkg.tar.zst    # this is what you upload
 ```
@@ -227,7 +227,7 @@ ssh aur@aur.archlinux.org help      # should greet you by username
 ### Step 2 — Fill in the release checksum
 
 `packaging/aur/PKGBUILD` ships with `sha256sums=('SKIP')`, which is fine for
-testing and **not** acceptable for a real package. After the v1.0.0 tag exists:
+testing and **not** acceptable for a real package. After the v2.0.0 tag exists:
 
 ```bash
 cd packaging/aur
@@ -245,7 +245,7 @@ cp ~/work/glance/packaging/aur/PKGBUILD .
 makepkg --printsrcinfo > .SRCINFO
 
 git add PKGBUILD .SRCINFO
-git commit -m "Initial release: glance-image-viewer 1.0.0"
+git commit -m "Initial release: glance-image-viewer 2.0.0"
 git push
 ```
 
@@ -309,7 +309,7 @@ users a working `dnf install` at the cost of one extra command to add the repo.
 ```bash
 cd ~/work/glance
 cargo vendor
-tar caf glance-1.0.0-vendor.tar.xz vendor/
+tar caf glance-2.0.0-vendor.tar.xz vendor/
 # Upload both the release tarball and the vendor tarball, or point COPR at a
 # dist-git style repo containing packaging/fedora/glance.spec
 ```
@@ -366,7 +366,7 @@ cd ~/work/glance
 cp -r packaging/debian debian
 cargo vendor                          # Debian builders have no network
 debuild -S -sa                        # builds a source package and signs it
-dput ppa:<your-launchpad-name>/glance ../glance-image-viewer_1.0.0-1_source.changes
+dput ppa:<your-launchpad-name>/glance ../glance-image-viewer_2.0.0-1_source.changes
 ```
 
 Users then run:
@@ -392,7 +392,7 @@ Put that bug number in `debian/changelog` where it says `#NNNNNN`.
 
 ```bash
 debuild -us -uc
-lintian -EviIL +pedantic ../glance-image-viewer_1.0.0-1_amd64.changes
+lintian -EviIL +pedantic ../glance-image-viewer_2.0.0-1_amd64.changes
 ```
 
 3. **Upload to [mentors.debian.net](https://mentors.debian.net/)** and file an

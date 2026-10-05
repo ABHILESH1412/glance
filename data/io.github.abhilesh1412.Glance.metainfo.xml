@@ -119,6 +119,21 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.0.0" date="2026-10-05">
+      <description>
+        <p>Glance now reads PDFs as well as pictures.</p>
+        <ul>
+          <li>PDFs: search, select and copy text, highlight, underline and strike through, notes and speech bubbles, contents and bookmarks, night mode, one or two pages at a time</li>
+          <li>Draw and write on PDFs, sign them with a signature written once and kept, and redact them for good</li>
+          <li>Combine PDFs and pictures into one PDF, with pages in any order, turned, or blank; protect PDFs with a password and make them smaller</li>
+          <li>Live Text: select and copy the text in pictures and in pictures inside PDFs, read on this computer</li>
+          <li>More shapes, filled or not, that can be picked up again to move, resize and recolour</li>
+          <li>Exposure, highlights and shadows, white balance, sharpness, levels and auto levels</li>
+          <li>Opens JPEG 2000, Photoshop, OpenEXR, Radiance HDR, macOS icons and Illustrator files, and saves to more formats</li>
+          <li>Slideshow, photo details, animated GIF frames, printing, and a Preferences window</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.0" date="2026-09-24">
       <description>
         <p>The first release.</p>

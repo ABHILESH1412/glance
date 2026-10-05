@@ -338,11 +338,175 @@ language — but stops at crop and rotate.
 
 ## Installing
 
-Two ways in. **From source** is the short one if your distribution is recent enough;
-**Flatpak** works anywhere, because GTK, libadwaita and libheif come from the GNOME
-runtime instead of from your system.
+Ready-made packages are on the [Releases page](https://github.com/ABHILESH1412/glance/releases/latest),
+for 64-bit Intel and AMD computers. Pick the line for your distribution:
 
-### From source
+| Your distribution | Easiest way | Also works |
+|---|---|---|
+| Ubuntu 24.04 or newer, Linux Mint 22+, Pop!_OS 24.04+, Zorin 18+, elementary OS 8+ | [Flatpak](#ubuntu-linux-mint-pop_os-zorin-elementary-os) | [AppImage](#appimage-any-distribution-from-2024-on) |
+| Older Ubuntu (22.04), Linux Mint 21, Debian 12 | [Flatpak](#ubuntu-linux-mint-pop_os-zorin-elementary-os) | — |
+| Debian 13 | [Flatpak](#debian) | [AppImage](#appimage-any-distribution-from-2024-on) |
+| Fedora 40 or newer | [Flatpak](#fedora) | [AppImage](#appimage-any-distribution-from-2024-on) |
+| openSUSE Tumbleweed, Leap 16 | [Flatpak](#opensuse) | [AppImage](#appimage-any-distribution-from-2024-on) |
+| Arch, Manjaro, EndeavourOS, Garuda, CachyOS | [Arch package](#arch-manjaro-endeavouros) | [Flatpak](#any-other-distribution) |
+| Anything else | [Flatpak](#any-other-distribution) | [AppImage](#appimage-any-distribution-from-2024-on) |
+
+Open a terminal (Ctrl+Alt+T on most desktops) and paste the commands for your
+distribution, one block at a time. Each block downloads the latest release, so the
+commands stay the same from one release to the next.
+
+The Flatpak brings its own GTK, libadwaita, Poppler and qpdf with it, through GNOME's
+shared runtime (about 1 GB the first time, shared with every other GNOME Flatpak), so it
+works the same everywhere. The AppImage is a single file with everything inside it and
+nothing to install, for distributions from 2024 on.
+
+### Ubuntu, Linux Mint, Pop!_OS, Zorin, elementary OS
+
+```bash
+# 1. Flatpak itself (Linux Mint and Pop!_OS already have it; this does no harm)
+sudo apt update
+sudo apt install -y flatpak
+
+# 2. Flathub, where Glance's runtime comes from
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+
+# 3. Download and install Glance
+wget https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.flatpak
+flatpak install --user -y ./Glance-x86_64.flatpak
+
+# 4. Run it, or find Glance among your applications
+flatpak run io.github.abhilesh1412.Glance
+```
+
+If Glance does not appear in the applications menu straight away, log out and back in
+once: that is when a desktop first learns about Flatpak's applications.
+
+### Debian
+
+```bash
+sudo apt update
+sudo apt install -y flatpak wget
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+wget https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.flatpak
+flatpak install --user -y ./Glance-x86_64.flatpak
+flatpak run io.github.abhilesh1412.Glance
+```
+
+Log out and back in once if Glance is not in the applications menu yet.
+
+### Fedora
+
+Fedora has Flatpak already.
+
+```bash
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.flatpak
+flatpak install --user -y ./Glance-x86_64.flatpak
+flatpak run io.github.abhilesh1412.Glance
+```
+
+### openSUSE
+
+```bash
+sudo zypper install -y flatpak
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.flatpak
+flatpak install --user -y ./Glance-x86_64.flatpak
+flatpak run io.github.abhilesh1412.Glance
+```
+
+### Arch, Manjaro, EndeavourOS
+
+A native package, installed with pacman, which also installs everything it needs:
+
+```bash
+sudo pacman -U https://github.com/ABHILESH1412/glance/releases/latest/download/glance-image-viewer-x86_64.pkg.tar.zst
+```
+
+Then run `glance`, or find Glance among your applications. It is called
+`glance-image-viewer` because Arch already has an unrelated `glance`; the two cannot be
+installed together.
+
+### Any other distribution
+
+Install Flatpak with your distribution's package manager (the
+[Flatpak setup page](https://flatpak.org/setup/) has the command for each one), then:
+
+```bash
+flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.flatpak
+flatpak install --user -y ./Glance-x86_64.flatpak
+flatpak run io.github.abhilesh1412.Glance
+```
+
+### AppImage (any distribution from 2024 on)
+
+One file, nothing to install: Ubuntu 24.04 or newer, Linux Mint 22+, Debian 13, Fedora 40+,
+openSUSE Tumbleweed, Arch and others as new. It does not run on older systems such as
+Ubuntu 22.04 or Debian 12; use the Flatpak there.
+
+```bash
+mkdir -p ~/Applications
+cd ~/Applications
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/Glance-x86_64.AppImage
+chmod +x Glance-x86_64.AppImage
+./Glance-x86_64.AppImage
+```
+
+An AppImage mounts itself with FUSE, which almost every desktop already has. If it says
+no `fusermount` was found, install it once:
+
+```bash
+sudo apt install -y fuse3           # Ubuntu, Linux Mint, Debian
+sudo dnf install -y fuse3           # Fedora
+sudo zypper install -y fuse3        # openSUSE
+sudo pacman -S fuse3                # Arch
+```
+
+Or start it without FUSE, which unpacks it to a temporary folder first:
+`./Glance-x86_64.AppImage --appimage-extract-and-run`.
+
+An AppImage does not add itself to the applications menu. To have it there, and to open
+pictures with it from the file manager, use [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
+or [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher).
+
+### Checking the download (optional)
+
+Each release lists the SHA-256 of its files in `SHA256SUMS`. In the folder you downloaded
+to:
+
+```bash
+curl -LO https://github.com/ABHILESH1412/glance/releases/latest/download/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+Every file you downloaded should say `OK`.
+
+### Updating
+
+Run your distribution's install commands again: they always fetch the newest release. A
+Flatpak installed from a file does not update itself, and installing the newer file over
+it keeps your settings, signatures and everything else.
+
+### Uninstalling
+
+```bash
+flatpak uninstall --user io.github.abhilesh1412.Glance    # Flatpak
+sudo pacman -R glance-image-viewer                        # Arch package
+rm ~/Applications/Glance-x86_64.AppImage                  # AppImage
+```
+
+Your settings stay in `~/.config/glance` and your signatures and Live Text's download in
+`~/.local/share/glance` (for the Flatpak, both under `~/.var/app/io.github.abhilesh1412.Glance`).
+Delete those folders as well to remove every trace.
+
+### Building from source
+
+Two ways. **Natively** is the short one if your distribution is recent enough; **the
+Flatpak** works anywhere, because GTK, libadwaita and libheif come from the GNOME runtime
+instead of from your system.
+
+#### Natively
 
 **1. Install what it builds against.** GTK 4.14 and libadwaita 1.5 or newer — the
 versions in Ubuntu 24.04 LTS, so anything that recent will do — plus libheif for HEIC and
@@ -398,7 +562,7 @@ To remove it again:
 sudo make uninstall
 ```
 
-### Flatpak
+#### As a Flatpak
 
 **1. Install the build tool, and the runtime it builds against.** The runtime is about a
 gigabyte and is shared with every other GNOME Flatpak you have.
