@@ -1,6 +1,6 @@
 [package]
 name = "glance"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "Look at pictures, and make small changes to them"
 authors = ["Abhilesh Singh <sabhilesh260@gmail.com>"]

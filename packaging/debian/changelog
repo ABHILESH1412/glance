@@ -1,3 +1,12 @@
+glance-image-viewer (2.0.1-1) unstable; urgency=medium
+
+  * [fix] Release script: dry run, ARGS, full commit messages in notes
+  * [feat] Auto-update for AppImage, Flatpak and Arch
+  * [fix] Highlights, notes, shapes and ink now show in phone PDF viewers
+  * updated readme.md
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 08 Oct 2026 18:17:59 +0530
+
 glance-image-viewer (2.0.0-1) unstable; urgency=medium
 
   * New upstream release: PDFs, signatures, Live Text, more shapes and formats.

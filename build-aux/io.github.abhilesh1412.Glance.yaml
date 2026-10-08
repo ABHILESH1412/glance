@@ -163,7 +163,7 @@ modules:
       #
       #  - type: git
       #    url: https://github.com/ABHILESH1412/glance.git
-      #    tag: v2.0.0
+      #    tag: v2.0.1
       #    commit: <the hash that tag points at>
       #
       - cargo-sources.json

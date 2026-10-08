@@ -5,7 +5,7 @@
 # too, so the two genuinely cannot share a system — hence the conflicts line.
 pkgname=glance-image-viewer
 _appid=io.github.abhilesh1412.Glance
-pkgver=2.0.0
+pkgver=2.0.1
 pkgrel=1
 pkgdesc="A fast, native image viewer for Linux"
 arch=('x86_64' 'aarch64')
@@ -16,7 +16,7 @@ depends=('gtk4' 'libadwaita' 'libheif' 'poppler-glib' 'qpdf' 'libsoup3' 'hicolor
 optdepends=('x265: saving pictures as HEIC')
 makedepends=('cargo' 'make' 'glib2')  # glib2 for glib-compile-resources
 conflicts=('glance')
-# GitHub strips the leading v: the tarball for tag v2.0.0 unpacks to glance-2.0.0/,
+# GitHub strips the leading v: the tarball for tag v2.0.1 unpacks to glance-2.0.1/,
 # which is what build() and package() cd into.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # SKIP is only good enough for testing against a local tarball. Before pushing to
