@@ -76,13 +76,13 @@ clean:
 # Releasing, once your work is committed: version bumped, tested, tagged,
 # built, pushed and published on GitHub. See scripts/release.sh.
 release:
-	scripts/release.sh patch
+	scripts/release.sh patch $(ARGS)
 
 release-minor:
-	scripts/release.sh minor
+	scripts/release.sh minor $(ARGS)
 
 release-major:
-	scripts/release.sh major
+	scripts/release.sh major $(ARGS)
 
 # The three packages for the commit checked out, without releasing them.
 packages:

@@ -58,12 +58,18 @@ for tool in git cargo makepkg flatpak docker gh sha256sum; do
 done
 command -v flatpak-builder > /dev/null || flatpak info org.flatpak.Builder > /dev/null 2>&1 \
     || fail "flatpak-builder is not installed (flatpak install --user flathub org.flatpak.Builder)."
-docker info > /dev/null 2>&1 || fail "Docker is not running (sudo systemctl start docker)."
-gh auth status > /dev/null 2>&1 || fail "The GitHub CLI is not signed in (gh auth login)."
+# A dry run builds and publishes nothing, so these two can wait.
+if ! $dry_run; then
+    docker info > /dev/null 2>&1 || fail "Docker is not running (sudo systemctl start docker)."
+    gh auth status > /dev/null 2>&1 || fail "The GitHub CLI is not signed in (gh auth login)."
+fi
 
 branch=$(git rev-parse --abbrev-ref HEAD)
 [ "$branch" = main ] || fail "This is the '$branch' branch; releases are made from main."
-[ -z "$(git status --porcelain)" ] || fail "There are uncommitted changes. Commit them first (git add, git commit)."
+if [ -n "$(git status --porcelain)" ]; then
+    $dry_run || fail "There are uncommitted changes. Commit them first (git add, git commit)."
+    echo "Note: there are uncommitted changes; a real release would stop here."
+fi
 git fetch --quiet --tags origin
 [ "$(git rev-list --count HEAD..origin/main)" = 0 ] || fail "GitHub has commits this copy does not. Pull them first (git pull)."
 
@@ -80,7 +86,10 @@ git rev-parse -q --verify "refs/tags/$tag" > /dev/null && fail "The tag $tag alr
 
 last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2> /dev/null || true)
 range=${last:+$last..}HEAD
-mapfile -t changes < <(git log --no-merges --format=%s "$range" | grep -v '^Release v' || true)
+# Every line of every commit message, so a commit with a [feat] line and a
+# [fix] line gives both; not the release commits, sign-offs or repeats.
+mapfile -t changes < <(git log --no-merges --format=%B "$range" | sed 's/^\s*//; s/\s*$//' \
+    | grep -v -e '^$' -e '^Release v' -e '^[A-Za-z-]*-by: ' | awk '!seen[$0]++' || true)
 [ ${#changes[@]} -gt 0 ] || fail "Nothing has been committed since ${last:-the start}."
 
 notes="$ROOT/target/release-notes.md"
