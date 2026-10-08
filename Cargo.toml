@@ -8,6 +8,8 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/ABHILESH1412/glance"
 homepage = "https://github.com/ABHILESH1412/glance"
 readme = "README.md"
+# The viewer; the other binary is Live Text's helper, which Glance starts itself.
+default-run = "glance"
 keywords = ["image", "viewer", "gtk", "photo", "editor"]
 categories = ["multimedia::images"]
 exclude = ["data/screenshots/*", "testdata/*"]

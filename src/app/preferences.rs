@@ -167,6 +167,7 @@ impl Window {
         ));
         pictures.add(&slideshow);
         page.add(&pictures);
+        page.add(&crate::app::updates::preferences_group());
         page
     }
 

@@ -478,8 +478,7 @@ mod tests {
         for drawing in &drawings {
             Annotation::Ink(drawing.clone()).add(&doc);
         }
-        annots::settle(&doc, &[0]);
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
 
         let doc = open();
         let read = on_page(&doc, 0);
@@ -496,8 +495,7 @@ mod tests {
         let moved = read[0].reshaped(&Outline::Frame([x + 50.0, y + 200.0, w, h]));
         assert!(Annotation::Ink(read[0].clone()).remove(&doc), "the drawing read back is found to take away");
         Annotation::Ink(moved.clone()).add(&doc);
-        annots::settle(&doc, &[0]);
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
         let doc = open();
         let read = on_page(&doc, 0);
         assert_eq!(read.len(), 2);
@@ -506,7 +504,7 @@ mod tests {
         for drawing in &read {
             assert!(Annotation::Ink(drawing.clone()).remove(&doc));
         }
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
         assert!(on_page(&open(), 0).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -543,8 +541,7 @@ mod tests {
         for drawing in &made {
             Annotation::Ink(drawing.clone()).add(&doc);
         }
-        annots::settle(&doc, &[0]);
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
 
         let doc = open();
         let page = annots::page(&doc, 0).unwrap();
@@ -568,8 +565,7 @@ mod tests {
         let changed = read[0].restyled(read[0].colour, 2.0, None).reshaped(&Outline::Frame([x + 50.0, y, w, h]));
         assert!(Annotation::Ink(read[0].clone()).remove(&doc));
         Annotation::Ink(changed.clone()).add(&doc);
-        annots::settle(&doc, &[0]);
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
         let doc = open();
         let read = on_page(&doc, 0);
         let moved = read.iter().find(|d| d.tool == Tool::Rectangle).unwrap();
@@ -579,7 +575,7 @@ mod tests {
         for drawing in &read {
             assert!(Annotation::Ink(drawing.clone()).remove(&doc), "{drawing:?} not found to remove");
         }
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
         assert!(on_page(&open(), 0).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -614,8 +610,7 @@ mod tests {
         for drawing in &made {
             Annotation::Ink(drawing.clone()).add(&doc);
         }
-        annots::settle(&doc, &[0]);
-        annots::save(&doc, &path).unwrap();
+        annots::save(&doc, &path, None).unwrap();
         let doc = open();
         let page = annots::page(&doc, 0).unwrap();
         assert!(annots::list(&page).iter().all(|f| f.kind == poppler::ffi::POPPLER_ANNOT_INK));

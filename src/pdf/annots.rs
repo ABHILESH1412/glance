@@ -18,7 +18,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::path::Path;
 
-use gtk::{cairo, glib};
+use gtk::glib;
 
 use super::document;
 use super::markup::Mark;
@@ -235,30 +235,15 @@ pub(super) fn colour_of(page: &poppler::Page, kind: poppler::ffi::PopplerAnnotTy
     find(page, kind, rect).map(|annot| annot.color().map(|c| Rgb::from_poppler(&c)))
 }
 
-/// Have Poppler work out how new annotations look, so the file carries their
-/// appearance with it. Poppler only does that when it draws them, and a reader
-/// that finds none has to guess, each in its own way.
-pub(super) fn settle(document: &poppler::Document, pages: &[usize]) {
-    let Ok(surface) = cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1) else { return };
-    let Ok(cr) = cairo::Context::new(&surface) else { return };
-    for &index in pages {
-        if let Some(page) = page(document, index) {
-            let (w, h) = page.size();
-            cr.save().ok();
-            cr.scale(1.0 / w.max(1.0), 1.0 / h.max(1.0));
-            page.render(&cr);
-            cr.restore().ok();
-        }
-    }
-}
-
 /// Write the document, annotations and all, over the file it came from.
 ///
 /// The file is replaced whole: written beside the original, then renamed over
 /// it. Poppler reads the document lazily from the original while it writes, so
 /// writing into that same file would pull it out from under itself, and a
 /// crash halfway through would leave half a PDF.
-pub fn save(document: &poppler::Document, path: &Path) -> Result<(), String> {
+/// Every highlight, note, shape and drawing is saved with its appearance, so
+/// readers that draw only what a file stores — most on phones — show it too.
+pub fn save(document: &poppler::Document, path: &Path, password: Option<&str>) -> Result<(), String> {
     let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
     // The file itself, not a link to it: replacing a link would leave the
     // real file as it was and turn the link into a copy.
@@ -275,7 +260,7 @@ pub fn save(document: &poppler::Document, path: &Path) -> Result<(), String> {
         });
     }
     let temp = target.with_file_name(format!(".{name}.glance-{}", std::process::id()));
-    if let Err(error) = replace(document, &temp, &target) {
+    if let Err(error) = replace(document, &temp, &target, password) {
         let _ = fs::remove_file(&temp);
         eprintln!("glance: {}: {error}", target.display());
         return Err(format!("Could not save “{name}”: {error}"));
@@ -283,10 +268,23 @@ pub fn save(document: &poppler::Document, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Write to `temp`, then put it in `target`'s place.
-fn replace(document: &poppler::Document, temp: &Path, target: &Path) -> Result<(), String> {
+/// Write to `temp`, with every annotation's appearance, then put it in
+/// `target`'s place.
+fn replace(document: &poppler::Document, temp: &Path, target: &Path, password: Option<&str>) -> Result<(), String> {
     let io = |e: std::io::Error| e.to_string();
     document.save(&document::uri(temp)).map_err(|e| e.message().to_string())?;
+    // Poppler stores no appearance for most kinds of annotation; they are
+    // added here. Should that fail, the file is still saved as Poppler wrote
+    // it, which every desktop reader draws.
+    let finished = temp.with_extension("appearances");
+    match super::appearance::add_missing(temp, &finished, password) {
+        Ok(0) => {}
+        Ok(_) => fs::rename(&finished, temp).map_err(io)?,
+        Err(error) => {
+            let _ = fs::remove_file(&finished);
+            eprintln!("glance: could not add annotation appearances: {error}");
+        }
+    }
     let permissions = fs::metadata(target).map_err(io)?.permissions();
     fs::set_permissions(temp, permissions).map_err(io)?;
     // On the disk before it takes the original's place, so a crash leaves
@@ -390,8 +388,7 @@ mod tests {
         for a in all {
             a.add(&doc);
         }
-        settle(&doc, &[0]);
-        save(&doc, &path).unwrap();
+        save(&doc, &path, None).unwrap();
         drop(doc);
 
         // Read back by another document, as the next run would.
@@ -400,16 +397,28 @@ mod tests {
         assert_eq!(pinned, vec![note.clone(), bubble.clone(), words.clone()]);
         let Annotation::Mark(m) = &mark else { unreachable!() };
         assert_eq!(super::super::markup::existing_colour(&doc, m), Some(m.colour));
-        // The text box carries its own appearance, for other readers.
-        let bytes = fs::read(&path).unwrap();
-        assert!(bytes.windows(4).any(|w| w == b"/AP "), "no appearance stream written");
+        // Every annotation carries its own appearance, for readers that draw
+        // only what the file stores, as most on phones do. Pop-ups aside,
+        // which are drawn by the note they belong to.
+        let stored = super::super::qpdf::Qpdf::read(&path, None).unwrap();
+        let first = stored.pages()[0];
+        let annots = stored.items(stored.get(first, "Annots").unwrap()).unwrap();
+        let mut kinds = Vec::new();
+        for annot in annots {
+            let kind = stored.get(annot, "Subtype").and_then(|k| stored.name(k)).unwrap();
+            if kind != "Popup" {
+                assert!(stored.get(annot, "AP").is_some(), "a {kind} was saved without its appearance");
+                kinds.push(kind);
+            }
+        }
+        kinds.sort();
+        assert_eq!(kinds, ["FreeText", "FreeText", "Highlight", "Ink", "Line", "Text"]);
 
         // And each can be taken off again, tail and all.
         for a in all {
             assert!(a.remove(&doc), "{a:?} not found to remove");
         }
-        settle(&doc, &[0]);
-        save(&doc, &path).unwrap();
+        save(&doc, &path, None).unwrap();
         let doc = open();
         let page = page(&doc, 0).unwrap();
         assert!(list(&page).is_empty(), "annotations left behind");
@@ -419,16 +428,15 @@ mod tests {
         for a in all {
             a.add(&doc);
         }
-        save(&doc, &path).unwrap();
+        save(&doc, &path, None).unwrap();
         for a in all {
             assert!(a.remove(&doc), "{a:?} not there to take back");
         }
-        save(&doc, &path).unwrap();
+        save(&doc, &path, None).unwrap();
         for a in all {
             a.add(&doc);
         }
-        settle(&doc, &[0]);
-        save(&doc, &path).unwrap();
+        save(&doc, &path, None).unwrap();
         let again = list(&super::page(&open(), 0).unwrap()).len();
         // Five, the bubble's tail making a sixth.
         assert_eq!(again, 6, "not everything came back after undo and redo");

@@ -28,5 +28,6 @@ pub mod redact;
 pub mod shortcuts;
 pub mod shrink;
 pub mod signatures;
+pub mod updates;
 pub mod viewing;
 pub mod window;

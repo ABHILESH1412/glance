@@ -664,6 +664,8 @@ impl Window {
         header.pack_start(&open_button);
         header.pack_start(&imp.page_box);
         header.pack_end(menu_button);
+        // Hidden until there is an update to tell about.
+        header.pack_end(&crate::app::updates::header_button(self));
         let info_button = &imp.info_button;
         info_button.set_icon_name("document-properties-symbolic");
         info_button.set_tooltip_text(Some("Image Info (Ctrl+I)"));
@@ -2829,7 +2831,8 @@ impl Window {
 
     pub(crate) fn update_prefs(&self, change: impl FnOnce(&mut prefs::Reader)) {
         let imp = self.imp();
-        let mut prefs = imp.reader_prefs.get();
+        // From what is on disk, which updates and other windows also write.
+        let mut prefs = prefs::Reader::load();
         change(&mut prefs);
         imp.reader_prefs.set(prefs);
         prefs.save();

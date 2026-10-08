@@ -205,9 +205,23 @@ Every file you downloaded should say `OK`.
 
 ### Updating
 
-Run your distribution's install commands again: they always fetch the newest release. A
-Flatpak installed from a file does not update itself, and installing the newer file over
-it keeps your settings, signatures and everything else.
+Glance updates itself, from the first release after 2.0.0. When it starts it asks GitHub, at most every
+six hours, whether there is a newer release; nothing else is sent, and nothing about you or
+your files.
+
+- **AppImage and Flatpak:** a new version is downloaded, checked against the release's
+  checksums, and installed by itself. A **Restart to Update** button appears in the
+  header; the new version is used from the next start either way.
+- **Arch package:** the update is downloaded by itself, and **Install Update** in the
+  header asks for your password, since pacman installs for the whole system.
+- **Built from source:** an update is only announced, with a link to the download page.
+
+Turn **Update automatically** off in Preferences → General → Updates and nothing is
+downloaded until you say so: an **Update Available** button stays in the header, at every
+start, until you update. **Check Now** in the same place asks GitHub there and then.
+
+Installing a newer package over an older one by hand works too, and keeps your settings,
+signatures and everything else.
 
 ### Uninstalling
 
@@ -532,7 +546,8 @@ and shrinks to fit whichever is showing.
 **Preferences** (Ctrl+,, or in the menu) gathers what Glance remembers in one window:
 light, dark or the desktop's style; how long a slideshow lingers; a PDF's page layout,
 night mode and highlight colour, and the paper pictures go on when combined; the
-signatures kept, to remove (with undo) or add to; and what Live Text has downloaded.
+signatures kept, to remove (with undo) or add to; whether updates install themselves; and
+what Live Text has downloaded.
 Each is the same switch the menus use, so the two always agree.
 
 **Editing** — one panel, one section at a time:
@@ -701,6 +716,22 @@ make check     # those, plus desktop-entry and AppStream validation
 ```
 
 `make check` runs the same validation a distribution or Flathub will run on the way in.
+
+**Releasing.** Commit your work, then:
+
+```bash
+make release           # 2.0.0 → 2.0.1
+make release-minor     # 2.0.0 → 2.1.0
+make release-major     # 2.0.0 → 3.0.0
+```
+
+[`scripts/release.sh`](scripts/release.sh) writes the new version everywhere it appears,
+runs `make check`, commits and tags `Release vX.Y.Z`, builds the AppImage, the Flatpak and
+the Arch package one after another, and only then pushes and publishes the GitHub release
+with them and their `SHA256SUMS`. Release notes are made from the commit messages since
+the last release, and shown before anything happens; `--dry-run` shows them and stops. It
+needs Docker running and the GitHub CLI signed in (`gh auth login`). `make packages` builds
+the three packages without releasing them.
 [`testdata/`](testdata/README.md) holds fixtures chosen to catch specific mistakes — an
 EXIF-rotated JPEG, a transparent SVG that exposes premultiplied-alpha errors, a corrupt
 file, and four CC0 camera raws covering different decode paths.

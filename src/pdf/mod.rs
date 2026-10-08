@@ -13,6 +13,7 @@
 //! and text tools in `images::edit` are the obvious ones for annotating a page.
 
 mod annots;
+mod appearance;
 mod combine;
 mod bookmark_list;
 mod bookmarks;

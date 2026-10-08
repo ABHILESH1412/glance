@@ -47,6 +47,11 @@ finish-args:
   # used, after asking, rather than making every download of Glance 41 MB
   # bigger. Pictures are never sent anywhere.
   - --share=network
+  # Updating itself: the release's bundle is reinstalled by Flatpak on the
+  # host, as `flatpak install --reinstall` would be from a terminal. Drop this
+  # for a Flathub build, where Flathub does the updating; Glance then only
+  # announces new versions.
+  - --talk-name=org.freedesktop.Flatpak
 
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin

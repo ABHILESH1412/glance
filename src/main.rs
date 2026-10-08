@@ -6,6 +6,7 @@ mod images;
 mod live_text;
 mod model3d;
 mod pdf;
+mod update;
 
 use app::window::Window;
 
@@ -384,6 +385,9 @@ fn main() -> glib::ExitCode {
 
         apply_accels(app, false, false, false, false);
     });
+
+    // A restart into a new version starts it once this one has ended.
+    app.connect_shutdown(|_| app::updates::shared().relaunch_if_asked());
 
     app.connect_activate(|app| {
         Window::new(app).present();

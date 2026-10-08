@@ -21,7 +21,7 @@ HELPERDIR = $(DESTDIR)$(PREFIX)/libexec/glance
 DATADIR  = $(DESTDIR)$(PREFIX)/share
 ICONDIR  = $(DATADIR)/icons/hicolor
 
-.PHONY: all build install uninstall check clean
+.PHONY: all build install uninstall check clean release release-minor release-major packages
 
 all: build
 
@@ -72,3 +72,18 @@ endif
 
 clean:
 	$(CARGO) clean
+
+# Releasing, once your work is committed: version bumped, tested, tagged,
+# built, pushed and published on GitHub. See scripts/release.sh.
+release:
+	scripts/release.sh patch
+
+release-minor:
+	scripts/release.sh minor
+
+release-major:
+	scripts/release.sh major
+
+# The three packages for the commit checked out, without releasing them.
+packages:
+	scripts/build-packages.sh target/packaging/release/local

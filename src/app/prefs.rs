@@ -12,6 +12,7 @@
 use gtk::glib;
 
 use crate::pdf::{Mode, Paper, Rgb, SidebarView};
+use crate::update::Version;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reader {
@@ -23,6 +24,13 @@ pub struct Reader {
     pub paper: Option<Paper>,
     /// Seconds each picture stays up in a slideshow.
     pub slideshow: u32,
+    /// Whether updates are put in by themselves, or only announced.
+    pub auto_update: bool,
+    /// When GitHub was last asked for the newest version, in seconds since
+    /// 1970, and what it said: so an update found once is announced at
+    /// every start, even with no network.
+    pub update_checked: i64,
+    pub newest: Option<Version>,
 }
 
 impl Default for Reader {
@@ -34,6 +42,9 @@ impl Default for Reader {
             sidebar: SidebarView::Pages,
             paper: None,
             slideshow: 5,
+            auto_update: true,
+            update_checked: 0,
+            newest: None,
         }
     }
 }
@@ -75,6 +86,9 @@ impl Reader {
                 "layout" => reader.mode = mode_from(value).unwrap_or(reader.mode),
                 "sidebar" => reader.sidebar = SidebarView::from_name(value).unwrap_or(reader.sidebar),
                 "paper" => reader.paper = Paper::from_name(value).or(reader.paper),
+                "auto-update" => reader.auto_update = value != "false",
+                "update-checked" => reader.update_checked = value.parse().unwrap_or(0),
+                "newest" => reader.newest = Version::parse(value),
                 "slideshow" => {
                     reader.slideshow = value.parse().ok().filter(|s| (1..=600).contains(s)).unwrap_or(reader.slideshow)
                 }
@@ -86,13 +100,16 @@ impl Reader {
 
     fn text(&self) -> String {
         format!(
-            "highlight={}\nnight={}\nlayout={}\nsidebar={}\nslideshow={}\n{}",
+            "highlight={}\nnight={}\nlayout={}\nsidebar={}\nslideshow={}\nauto-update={}\nupdate-checked={}\n{}{}",
             self.highlight.hex(),
             self.night,
             mode_name(self.mode),
             self.sidebar.name(),
             self.slideshow,
-            self.paper.map(|p| format!("paper={}\n", p.name())).unwrap_or_default()
+            self.auto_update,
+            self.update_checked,
+            self.paper.map(|p| format!("paper={}\n", p.name())).unwrap_or_default(),
+            self.newest.map(|v| format!("newest={v}\n")).unwrap_or_default()
         )
     }
 
@@ -118,6 +135,9 @@ mod tests {
             sidebar: SidebarView::Contents,
             paper: Some(Paper::Letter),
             slideshow: 10,
+            auto_update: false,
+            update_checked: 1_791_500_000,
+            newest: Some(Version(2, 1, 0)),
         };
         assert_eq!(Reader::parse(&reader.text()), reader);
     }

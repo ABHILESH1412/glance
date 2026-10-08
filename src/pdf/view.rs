@@ -2030,8 +2030,8 @@ impl Inner {
         pages.sort_unstable();
         pages.dedup();
         edit(take, put);
-        annots::settle(reader, &pages);
-        if let Err(error) = annots::save(reader, &path) {
+        let password = self.password.borrow().clone();
+        if let Err(error) = annots::save(reader, &path, password.as_deref()) {
             edit(put, take);
             return Err(error);
         }

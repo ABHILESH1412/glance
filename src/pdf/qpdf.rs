@@ -23,6 +23,7 @@ const QPDF_ERRORS: ErrorCode = 1 << 1;
 const ERROR_PASSWORD: c_int = 4;
 
 /// `qpdf_object_stream_e`
+const OBJECT_STREAMS_PRESERVE: c_int = 1;
 const OBJECT_STREAMS_GENERATE: c_int = 2;
 /// `qpdf_stream_decode_level_e`
 const DECODE_NONE: c_int = 0;
@@ -82,6 +83,8 @@ extern "C" {
     fn qpdf_oh_get_numeric_value(qpdf: Data, oh: Handle) -> f64;
     fn qpdf_oh_get_int_value_as_int(qpdf: Data, oh: Handle) -> c_int;
     fn qpdf_oh_get_name(qpdf: Data, oh: Handle) -> *const c_char;
+    fn qpdf_oh_is_string(qpdf: Data, oh: Handle) -> Bool;
+    fn qpdf_oh_get_utf8_value(qpdf: Data, oh: Handle) -> *const c_char;
     fn qpdf_oh_get_array_n_items(qpdf: Data, oh: Handle) -> c_int;
     fn qpdf_oh_get_array_item(qpdf: Data, oh: Handle, n: c_int) -> Handle;
     fn qpdf_oh_has_key(qpdf: Data, oh: Handle, key: *const c_char) -> Bool;
@@ -303,6 +306,21 @@ impl Qpdf {
         }
     }
 
+    /// Write the document to `path` much as it was read: its streams left as
+    /// they are and its protection kept, only what was changed written anew.
+    /// For a small change to a large file, this is the quick way.
+    pub fn write_as_is(&self, path: &Path) -> Result<(), Error> {
+        let filename = c_path(path)?;
+        // SAFETY: a live handle; the string outlives the call.
+        unsafe {
+            self.check(qpdf_init_write(self.data, filename.as_ptr()))?;
+            qpdf_set_object_stream_mode(self.data, OBJECT_STREAMS_PRESERVE);
+            qpdf_set_compress_streams(self.data, 1);
+            qpdf_set_decode_level(self.data, DECODE_NONE);
+            self.check(qpdf_write(self.data))
+        }
+    }
+
     // --- Objects, for finding and replacing pictures. ---
 
     pub fn pages(&self) -> Vec<Object> {
@@ -367,6 +385,18 @@ impl Qpdf {
             }
             let name = qpdf_oh_get_name(self.data, object.0);
             (!name.is_null()).then(|| CStr::from_ptr(name).to_string_lossy().trim_start_matches('/').to_string())
+        }
+    }
+
+    /// A text string, decoded from whichever encoding the file used.
+    pub fn string(&self, object: Object) -> Option<String> {
+        // SAFETY: a live handle and object; the text is copied at once.
+        unsafe {
+            if qpdf_oh_is_string(self.data, object.0) == 0 {
+                return None;
+            }
+            let text = qpdf_oh_get_utf8_value(self.data, object.0);
+            (!text.is_null()).then(|| CStr::from_ptr(text).to_string_lossy().into_owned())
         }
     }
 
