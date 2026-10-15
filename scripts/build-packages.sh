@@ -70,8 +70,11 @@ done
 chmod +x "$TOOLS"/*
 rm -rf "$WORK/appimage" && mkdir -p "$WORK/appimage/src" "$WORK/appimage/out"
 git archive HEAD | tar -x -C "$WORK/appimage/src"
-# The host's network: Docker's own bridge often cannot resolve names.
-docker run --rm --network host --memory=5g -e JOBS="$JOBS" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+# The host's network, and the host's way of finding names on it: Docker's
+# own bridge often cannot resolve names, and DNS servers set in Docker's
+# daemon.json may not be reachable from every network this computer is on.
+docker run --rm --network host -v /etc/resolv.conf:/etc/resolv.conf:ro \
+    --memory=5g -e JOBS="$JOBS" -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
     -v "$WORK/appimage/src:/src:ro" -v "$TOOLS:/tools:ro" -v "$WORK/appimage/out:/out" \
     -v "$ROOT/packaging/appimage/build-in-container.sh:/build.sh:ro" \
     ubuntu:24.04 bash /build.sh > "$WORK/appimage.log" 2>&1 || { tail -30 "$WORK/appimage.log"; exit 1; }

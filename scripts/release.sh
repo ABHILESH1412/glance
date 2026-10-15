@@ -123,7 +123,7 @@ undo() {
 
 Nothing has been pushed or published. To take the release back:
     git tag -d $tag
-    git reset --hard HEAD~1
+    git reset --keep HEAD~1
 EOF
 }
 
