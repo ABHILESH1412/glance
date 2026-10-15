@@ -404,7 +404,9 @@ In a PDF, right-click a picture on a page for **Copy Image**, **Select Text in I
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and
 held in memory, so a long document costs about what a short one does. Zooming redraws
-the pages sharp once it stops moving. The header stays quiet — pages, open, the page
+the pages sharp once it stops moving. The arrow keys, Page Up and Page Down glide rather
+than jump, and ← → turn the page; holding the middle mouse button takes hold of the page
+to move it, which is handy zoomed in. The header stays quiet — pages, open, the page
 box, search and the menu — and the menu opens on a row of zoom, rotate and fullscreen
 buttons, which leave it open so you can press them again, and a row of highlight
 colours.
@@ -767,7 +769,8 @@ search box. The most used:
 | `Esc` | Leave fullscreen, close the panel, or cancel editing |
 | `Page Up` `Page Down` `Space` | In a PDF: back / forward a screen |
 | `Home` `End` | In a PDF: first / last page |
-| `←` `→` | In a PDF: scroll sideways when zoomed in |
+| `←` `→` | In a PDF: next or previous page, gliding there (zoomed wider than the window, across to the edge first) |
+| Middle-button drag | In a PDF: take hold of the page and move it, sideways and up and down |
 | `F9` | In a PDF: show or hide the sidebar (pages, contents, bookmarks) |
 | `Ctrl+D` | In a PDF: bookmark the page, or remove its bookmark |
 | `Ctrl+F` | In a PDF: find (fullscreen is `F11` there) |

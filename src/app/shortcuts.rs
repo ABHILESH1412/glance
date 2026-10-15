@@ -159,7 +159,7 @@ pub const PAGES: &[Page] = &[
                     key("Previous screen", "Page_Up BackSpace"),
                     key("Scroll down a little", "Down"),
                     key("Scroll up a little", "Up"),
-                    key("Scroll sideways", "Left Right"),
+                    key("Next or previous page", "Right Left"),
                     key("First page", "Home"),
                     key("Last page", "End"),
                     key("Sidebar: pages, contents and bookmarks", "F9"),

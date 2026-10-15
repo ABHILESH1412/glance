@@ -213,7 +213,7 @@ const ACCELS: &[Accel] = &[
 /// While a PDF is open, the keys every reader uses to move through a document
 /// go to the document rather than the folder. A PDF is read on its own, so
 /// nothing moves to another file, and Delete does not remove the document
-/// being read. Left and Right scroll sideways: left without a job, GTK would
+/// being read. Left and Right turn the page: left without a job, GTK would
 /// use them to walk keyboard focus into the page box, after which Space and
 /// Backspace would type into it instead of turning pages.
 const PDF_KEYS: &[(&str, &[&str])] = &[

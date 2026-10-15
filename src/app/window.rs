@@ -979,8 +979,8 @@ impl Window {
             ("page-up", |view| view.scroll_pages(-1.0)),
             ("line-down", |view| view.scroll_lines(1.0)),
             ("line-up", |view| view.scroll_lines(-1.0)),
-            ("scroll-right", |view| view.scroll_across(1.0)),
-            ("scroll-left", |view| view.scroll_across(-1.0)),
+            ("scroll-right", |view| view.left_right(1.0)),
+            ("scroll-left", |view| view.left_right(-1.0)),
             ("page-first", PdfView::scroll_to_start),
             ("page-last", PdfView::scroll_to_end),
         ];

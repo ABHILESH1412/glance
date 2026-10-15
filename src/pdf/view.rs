@@ -48,6 +48,7 @@ use super::bookmark_list::Request;
 use super::bookmarks::{self, Bookmark};
 use super::document::{self, Allowed, Opened, Pixels, Source, Spot, Unit};
 use super::editor::{Commit, Editor};
+use super::glide::Glide;
 use super::layout::{self, Layout, Mode, Rotation};
 use super::markup::{self, Mark, Style};
 use super::ink::{self, Drawing};
@@ -221,6 +222,9 @@ pub enum BookmarkEvent {
 
 struct Inner {
     root: gtk::ScrolledWindow,
+    /// Scrolling by key, eased, up and down and sideways.
+    down: Glide,
+    across: Glide,
     /// Every page, placed where the layout says.
     column: gtk::Fixed,
     sidebar: Sidebar,
@@ -265,6 +269,9 @@ struct Inner {
     /// Where the context menu was opened, in the window's coordinates.
     menu_point: Cell<Option<(f64, f64)>>,
     pinch_from: Cell<f64>,
+    /// Held with the middle button: where the view was when it was taken
+    /// hold of.
+    panning: Cell<Option<(f64, f64)>>,
     /// One page at a time: scrolling pushed past the page's end so far, and
     /// when the page last turned.
     push: Cell<f64>,
@@ -363,9 +370,13 @@ impl PdfView {
         column.set_valign(gtk::Align::Start);
         let root = gtk::ScrolledWindow::builder().hexpand(true).vexpand(true).child(&column).build();
         let editor = Editor::new(&root);
+        let down = Glide::new(&root, root.vadjustment());
+        let across = Glide::new(&root, root.hadjustment());
 
         let inner = Rc::new(Inner {
             root,
+            down,
+            across,
             column,
             sidebar: Sidebar::new(),
             editor,
@@ -392,6 +403,7 @@ impl PdfView {
             pointer: Cell::new(None),
             menu_point: Cell::new(None),
             pinch_from: Cell::new(layout::ACTUAL),
+            panning: Cell::new(None),
             push: Cell::new(0.0),
             turned_at: Cell::new(None),
             selection: Cell::new(None),
@@ -685,14 +697,24 @@ impl PdfView {
         self.inner.scroll_by(direction, 0.1);
     }
 
-    /// Sideways, for a page zoomed wider than the window.
-    pub fn scroll_across(&self, direction: f64) {
-        let h = self.inner.root.hadjustment();
-        h.set_value(h.value() + direction * h.page_size() * 0.1);
+    /// Left and Right: the next or previous page, or pair of pages. A page
+    /// zoomed wider than the window is first scrolled across to its edge, as
+    /// in other readers, so it can still be read by keyboard.
+    pub fn left_right(&self, direction: f64) {
+        let inner = &self.inner;
+        let h = inner.root.hadjustment();
+        let heading = inner.across.heading();
+        let room = if direction > 0.0 { h.upper() - h.page_size() - heading } else { heading - h.lower() };
+        if room > 0.5 {
+            inner.across.by(direction * h.page_size() * 0.1);
+        } else {
+            inner.turn_page(direction);
+        }
     }
 
     pub fn scroll_to_start(&self) {
         let inner = &self.inner;
+        inner.down.stop();
         if inner.mode.get() == Mode::Single {
             inner.show_page(0, false);
         } else {
@@ -702,6 +724,7 @@ impl PdfView {
 
     pub fn scroll_to_end(&self) {
         let inner = &self.inner;
+        inner.down.stop();
         if inner.mode.get() == Mode::Single {
             let last = inner.pages.borrow().len().saturating_sub(1);
             inner.show_page(last, true);
@@ -985,10 +1008,12 @@ impl Inner {
         let h = this.root.hadjustment();
 
         let weak = Rc::downgrade(this);
-        v.connect_value_changed(move |v| {
+        v.connect_value_changed(move |_| {
             if let Some(inner) = weak.upgrade() {
-                // Scrolled away from a page that was asked for by number.
-                if inner.jumped.get().is_some_and(|(_, at)| (v.value() - at).abs() > 0.5) {
+                // Scrolled away from a page that was asked for by number. One
+                // turned to by key counts while the view glides there, until
+                // it is heading somewhere else.
+                if inner.jumped.get().is_some_and(|(_, at)| (inner.down.heading() - at).abs() > 0.5) {
                     inner.jumped.set(None);
                 }
                 // While a zoom settles, pages are resized but not redrawn.
@@ -1087,6 +1112,9 @@ impl Inner {
             let Some(inner) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            // The wheel takes over from a key's glide rather than fight it.
+            inner.down.stop();
+            inner.across.stop();
             let smooth = controller
                 .current_event()
                 .and_then(|event| event.downcast::<gdk::ScrollEvent>().ok())
@@ -1118,6 +1146,37 @@ impl Inner {
             inner.set_scale(inner.pinch_from.get() * delta, anchor);
         });
         this.root.add_controller(pinch);
+
+        // The middle button takes hold of the page: it follows the pointer,
+        // sideways and up and down, and stops where the pointer stops. The
+        // offsets are the pointer's from where it was pressed, measured on
+        // the scrolled window, which does not move with the page.
+        let pan = gtk::GestureDrag::new();
+        pan.set_button(gdk::BUTTON_MIDDLE);
+        pan.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(this);
+        pan.connect_drag_begin(move |gesture, _, _| {
+            let Some(inner) = weak.upgrade() else { return };
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            inner.down.stop();
+            inner.across.stop();
+            inner.panning.set(Some((inner.root.hadjustment().value(), inner.root.vadjustment().value())));
+            inner.show_grab(true);
+        });
+        let weak = Rc::downgrade(this);
+        pan.connect_drag_update(move |_, dx, dy| {
+            let Some(inner) = weak.upgrade() else { return };
+            let Some((x, y)) = inner.panning.get() else { return };
+            inner.root.hadjustment().set_value(x - dx);
+            inner.root.vadjustment().set_value(y - dy);
+        });
+        let weak = Rc::downgrade(this);
+        pan.connect_drag_end(move |_, _, _| {
+            let Some(inner) = weak.upgrade() else { return };
+            inner.panning.set(None);
+            inner.show_grab(false);
+        });
+        this.root.add_controller(pan);
 
         // Selecting text, or moving a note. Positions are in the column's own
         // coordinates, which are the layout's.
@@ -1365,6 +1424,7 @@ impl Inner {
             0 | 2 => Some(self.rotation.get().apply(0.0, y, width, height).1),
             _ => None,
         });
+        self.down.stop();
         let Some(y) = y else {
             self.go_to_page(index);
             return;
@@ -1387,6 +1447,7 @@ impl Inner {
         if index >= self.pages.borrow().len() {
             return;
         }
+        self.down.stop();
         if self.mode.get() == Mode::Single {
             self.show_page(index, false);
             return;
@@ -1410,6 +1471,7 @@ impl Inner {
             return;
         }
         let index = index.min(count - 1);
+        self.down.stop();
         self.shown.set(index);
         self.apply_scale(self.scale.get());
         let bottom = (self.layout.borrow().extent().1 - self.root.vadjustment().page_size()).max(0.0);
@@ -1423,7 +1485,8 @@ impl Inner {
     fn scroll_by(&self, direction: f64, share: f64) {
         let v = self.root.vadjustment();
         if self.mode.get() == Mode::Single {
-            let (at_top, at_bottom) = (v.value() <= 0.5, v.value() + v.page_size() >= v.upper() - 0.5);
+            let heading = self.down.heading();
+            let (at_top, at_bottom) = (heading <= 0.5, heading + v.page_size() >= v.upper() - 0.5);
             let shown = self.shown.get();
             if direction > 0.0 && at_bottom {
                 if shown + 1 < self.pages.borrow().len() {
@@ -1438,7 +1501,49 @@ impl Inner {
                 return;
             }
         }
-        v.set_value(v.value() + direction * v.page_size() * share);
+        self.down.by(direction * v.page_size() * share);
+    }
+
+    /// The next page, or pair of pages, or the previous one, eased into place
+    /// at the top of the window. Going back from part way down a page goes
+    /// to that page's top first, as turning back a page in a book shows its
+    /// beginning. One page at a time, the page is changed instead.
+    fn turn_page(&self, direction: f64) {
+        let count = self.pages.borrow().len();
+        if count == 0 {
+            return;
+        }
+        if self.mode.get() == Mode::Single {
+            let shown = self.shown.get();
+            if direction > 0.0 && shown + 1 < count {
+                self.show_page(shown + 1, false);
+            } else if direction < 0.0 && shown > 0 {
+                self.show_page(shown - 1, false);
+            }
+            return;
+        }
+        let v = self.root.vadjustment();
+        let heading = self.down.heading();
+        // The page being read, or the one the last press is on its way to.
+        let current = match self.jumped.get() {
+            Some((page, at)) if (at - heading).abs() <= 0.5 => page,
+            _ => self.layout.borrow().page_at(heading + v.page_size() * READING_LINE),
+        };
+        let top = self.row_top(current);
+        let page = if direction > 0.0 {
+            (current + 1..count).find(|&page| self.row_top(page) > top + 0.5)
+        } else if heading > top + 0.5 {
+            Some(current)
+        } else {
+            (0..current).rev().find(|&page| self.row_top(page) < top - 0.5)
+        };
+        let Some(page) = page else { return };
+        // The first page of its row, which is the one a pair is known by.
+        let row = self.row_top(page);
+        let page = (0..=page).find(|&first| (self.row_top(first) - row).abs() < 0.5).unwrap_or(page);
+        let landing = self.down.to(row);
+        self.jumped.set(Some((page, landing)));
+        self.emit_status();
     }
 
     /// One page at a time, scrolling on past the end of a page turns it.
@@ -1477,6 +1582,8 @@ impl Inner {
     /// Scroll now as far as the current layout allows, and again once GTK has
     /// laid out the new page sizes, when the rest becomes reachable.
     fn scroll_to(&self, x: Option<f64>, y: Option<f64>) {
+        self.down.stop();
+        self.across.stop();
         self.pending.set((x, y));
         if let Some(x) = x {
             self.root.hadjustment().set_value(x);
@@ -2098,8 +2205,9 @@ impl Inner {
     /// A hand over a note, bubble or drawing, and over the drawing picked
     /// up, what a drag would do to it; the tool's own pointer elsewhere.
     fn hover(&self, x: f64, y: f64) {
-        // A pen draws over notes like anything else on the page.
-        if matches!(self.tool.get(), Tool::Draw(_)) {
+        // A pen draws over notes like anything else on the page, and a page
+        // held with the middle button keeps its hand.
+        if matches!(self.tool.get(), Tool::Draw(_)) || self.panning.get().is_some() {
             return;
         }
         let over = self.hit(x, y).and_then(|spot| self.hover_cursor(spot).map(|name| (spot.page, name)));
@@ -2712,6 +2820,17 @@ impl Inner {
         }
         for widget in self.widgets.borrow().iter() {
             widget.set_cursor_from_name(Some(self.cursor()));
+        }
+        self.hovering.set(None);
+    }
+
+    /// A closed hand over every page and the space around them while the
+    /// middle button holds the view, and the usual pointers after.
+    fn show_grab(&self, grabbing: bool) {
+        self.root.set_cursor_from_name(grabbing.then_some("grabbing"));
+        let name = if grabbing { "grabbing" } else { self.cursor() };
+        for widget in self.widgets.borrow().iter() {
+            widget.set_cursor_from_name(Some(name));
         }
         self.hovering.set(None);
     }

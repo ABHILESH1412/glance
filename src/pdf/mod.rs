@@ -20,6 +20,7 @@ mod bookmarks;
 mod contents;
 mod document;
 mod editor;
+mod glide;
 mod info;
 mod ink;
 mod layout;
