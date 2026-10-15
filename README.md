@@ -14,7 +14,7 @@ It opens a file, shows it properly, and gets out of the way.
 
 ## What it is
 
-An image viewer first: photographs, screenshots, vector art, camera raw, Photoshop and
+An  image viewer first: photographs, screenshots, vector art, camera raw, Photoshop and
 HDR files all open in the same window, and browsing a folder is a matter of pressing an
 arrow key. PDFs open in the same window too, and can be searched, highlighted, annotated,
 drawn and written on, signed, redacted, protected with a password, made smaller, and
