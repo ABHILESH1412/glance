@@ -95,21 +95,18 @@ fn view_buttons_slot() -> gio::Menu {
     row(&[slot])
 }
 
-/// The row of view buttons for the top of a menu: zoom, and for a PDF also
-/// turning and fullscreen. Pressing them leaves the menu open.
-pub fn view_buttons(pdf: bool) -> gtk::Box {
-    let mut buttons = vec![
+/// The row of view buttons for the top of a menu: zoom, turning and
+/// fullscreen, so the header can stay clear. Pressing them leaves the menu
+/// open.
+pub fn view_buttons() -> gtk::Box {
+    let buttons = [
         ("Zoom Out", "win.zoom-out", "zoom-out-symbolic"),
         ("Fit to Window", "win.zoom-fit", "zoom-fit-best-symbolic"),
         ("Zoom In", "win.zoom-in", "zoom-in-symbolic"),
+        ("Rotate Left", "win.rotate-left", "object-rotate-left-symbolic"),
+        ("Rotate Right", "win.rotate-right", "object-rotate-right-symbolic"),
+        ("Fullscreen", "win.fullscreen", "view-fullscreen-symbolic"),
     ];
-    if pdf {
-        buttons.extend([
-            ("Rotate Left", "win.rotate-left", "object-rotate-left-symbolic"),
-            ("Rotate Right", "win.rotate-right", "object-rotate-right-symbolic"),
-            ("Fullscreen", "win.fullscreen", "view-fullscreen-symbolic"),
-        ]);
-    }
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.set_homogeneous(true);
     row.add_css_class("view-buttons");
@@ -138,15 +135,12 @@ pub fn image_menu() -> gio::Menu {
     menu.append_section(None, &section(&[item("_Copy Image", "win.copy"), item("_Delete Image…", "win.delete")]));
     let turns = section(&[
         item("Rotate and _Flip…", "win.transform-open"),
-        item("Rotate _Left", "win.rotate-left"),
-        item("Rotate _Right", "win.rotate-right"),
         item("Flip _Horizontally", "win.flip-horizontal"),
         item("Flip _Vertically", "win.flip-vertical"),
         item("Reset Rotation", "win.rotate-reset"),
     ]);
     let view = section(&[
         item("_Actual Size", "win.zoom-actual"),
-        item("_Fullscreen", "win.fullscreen"),
         item("_Slideshow", "win.slideshow"),
         item("Select _Text in Image", "win.live-text"),
         item("Image _Info", "win.inspector"),

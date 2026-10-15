@@ -200,6 +200,13 @@ pub fn encode(image: &DynamicImage, extension: &str, quality: u8) -> Result<Vec<
     }
 }
 
+/// Whether `encode` can write a file with this extension, asked before Save
+/// offers to replace one it would then fail to write.
+pub fn can_write(extension: &str) -> bool {
+    matches!(extension, "jpg" | "jpeg" | "heic" | "heif" | "jp2" | "psd" | "icns" | "exr")
+        || image::ImageFormat::from_extension(extension).is_some_and(|format| format.writing_enabled())
+}
+
 /// Screen colours as linear light, for OpenEXR.
 fn linear(image: &DynamicImage) -> image::Rgba32FImage {
     let mut out = image.to_rgba32f();
@@ -412,6 +419,18 @@ mod format_tests {
                 assert_eq!(crate::images::resolution::read(&path), Some(300.0), "{}", target.label);
             }
             let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Save asks this before offering to replace a file, so it has to agree
+    /// with what Export can write, and refuse what is only ever read.
+    #[test]
+    fn save_knows_which_files_it_can_write_back() {
+        for target in TARGETS {
+            assert!(can_write(target.extension), "{}", target.label);
+        }
+        for read_only in ["jxl", "cr2", "dng", "svg", "ai", ""] {
+            assert!(!can_write(read_only), "{read_only}");
         }
     }
 

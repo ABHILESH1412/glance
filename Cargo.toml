@@ -31,6 +31,10 @@ resvg = "0.48"
 libheif-rs = { version = "3", default-features = false, features = ["v1_17"] }
 # Camera raw: pure-Rust parsers for ~all common raw formats.
 rawler = "0.8"
+# JPEG XL: pure Rust, and already in the tree through rawler; `moxcms` lets
+# it turn a picture with its own ICC profile into sRGB with the colour
+# library above.
+jxl-oxide = { version = "0.12", features = ["moxcms"] }
 # PDF: bindings to poppler-glib, the engine GNOME's document viewers use.
 # Its glib and cairo versions are the ones gtk4 already brings in. 21.05 for
 # telling a search match that wraps onto the next line from two matches; GTK

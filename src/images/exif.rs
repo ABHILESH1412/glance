@@ -244,6 +244,7 @@ pub fn read(path: &Path) -> Option<Camera> {
             head(path).and_then(|bytes| parse(&bytes)).filter(|camera| !camera.is_empty()).or_else(|| raw(path))
         }
         Format::Svg | Format::Jpeg2000 | Format::Psd | Format::Icns | Format::Illustrator => None,
+        Format::Jxl => jxl(path).and_then(|block| parse(&block)),
         Format::Raster => {
             let bytes = head(path)?;
             if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -333,6 +334,18 @@ fn heif(path: &Path) -> Option<Vec<u8>> {
     let skip = u32::from_be_bytes(data.get(0..4)?.try_into().ok()?) as usize;
     let rest = data.get(4 + skip..)?;
     Some(rest.strip_prefix(b"Exif\0\0").unwrap_or(rest).to_vec())
+}
+
+/// The Exif box of a JPEG XL file: the TIFF structure, after an offset to
+/// where its header starts.
+fn jxl(path: &Path) -> Option<Vec<u8>> {
+    let image = jxl_oxide::JxlImage::builder().open(path).ok()?;
+    let exif = image.aux_boxes().first_exif().ok()?;
+    if !exif.has_data() {
+        return None;
+    }
+    let exif = exif.unwrap();
+    Some(exif.payload().get(exif.tiff_header_offset() as usize..)?.to_vec())
 }
 
 fn raw(path: &Path) -> Option<Camera> {

@@ -108,6 +108,12 @@ impl Window {
             self.toast("No changes to save.");
             return;
         }
+        // A camera raw, a JPEG XL or a drawing: read here, but not written.
+        let extension = source.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if !export::can_write(&extension) {
+            self.toast("Glance cannot write this kind of file. Export saves the edits as a copy.");
+            return;
+        }
         let name = source
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

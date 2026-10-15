@@ -381,8 +381,13 @@ slideshow, full screen, every 2 to 30 seconds; Space pauses it.
 **Image Info** — `Ctrl+I` opens a panel beside the picture with the file's details (kind,
 size, dates, dimensions, print resolution, frames) and what the camera wrote into it:
 camera, lens, when it was taken, shutter speed, aperture, ISO, focal length, flash, and
-where, if the photo has GPS. It reads EXIF from JPEG, PNG, WebP, TIFF, HEIF and camera raw,
+where, if the photo has GPS. It reads EXIF from JPEG, PNG, WebP, TIFF, HEIF, JPEG XL and camera raw,
 and follows along as you browse.
+
+**The header** keeps to four buttons for a picture: **Live Text**, **Edit**, **Image
+Info** and the menu, with Open on the left. The menu opens on a row of zoom, rotate and
+fullscreen buttons, which leave it open so you can press them again; Copy Image and
+Delete Image are just below, and keep their keys (`Ctrl+C`, `Delete`).
 
 **Live Text** — `Ctrl+Shift+T`, or the button in the header, finds the text in a picture
 so it can be selected and copied: drag across it, double-click a word, `Ctrl+A` for all
@@ -532,7 +537,7 @@ dialog. A PDF prints page by page, each page fitted to the paper and turned to m
 A picture prints as it is on screen, edits included, at a natural size, shrunk to fit
 the paper when it is larger. A PDF whose author does not allow printing is not printed.
 
-A PDF is read on its own: the Edit and Delete bar and the filmstrip are for images, and
+A PDF is read on its own: the image Edit button and the filmstrip are for images, and
 arrow keys do not step to the next file. PDFs do not appear in an image folder's
 filmstrip either.
 
@@ -554,7 +559,7 @@ Each is the same switch the menus use, so the two always agree.
 
 | Section | What it does |
 |---|---|
-| **Rotate & Flip** | Quarter turns, or any angle typed into the box. A separate header button turns the picture 90° just to look at it, without changing the file |
+| **Rotate & Flip** | Quarter turns, or any angle typed into the box. The rotate buttons at the top of the menu, or `[` and `]`, turn the picture just to look at it, without changing the file |
 | **Crop** | Drag a rectangle, pull any of its eight handles, or pick an aspect preset |
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock. Sizes in pixels, percent, inches or centimetres, and the resolution in pixels per inch — resampled to keep the printed size, or not, to keep every pixel and change only the print size. The resolution is read from the file and saved with it |
 | **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
@@ -575,7 +580,7 @@ asks first too, with Save offered for edits.
 | Family | Formats |
 |---|---|
 | Raster | PNG, JPEG, GIF, WebP, TIFF, BMP, ICO, QOI, TGA, PNM |
-| Modern | HEIC / HEIF, AVIF, JPEG 2000 |
+| Modern | HEIC / HEIF, AVIF, JPEG XL (still and animated), JPEG 2000 |
 | High dynamic range | OpenEXR, Radiance HDR — fitted into the screen's range when brighter than white |
 | Design | PSD and PSB (the picture as last saved), Illustrator AI (through the PDF inside it), ICNS |
 | Vector | SVG, SVGZ |

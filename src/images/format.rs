@@ -26,6 +26,8 @@ pub enum Format {
     Raw,
     /// JPEG 2000, via OpenJPEG.
     Jpeg2000,
+    /// JPEG XL, via jxl-oxide.
+    Jxl,
     /// Photoshop documents.
     Psd,
     /// macOS icons.
@@ -60,6 +62,9 @@ pub fn detect(path: &Path) -> Format {
     }
     if crate::images::decoders::jpeg2000::sniff(&head) {
         return Format::Jpeg2000;
+    }
+    if crate::images::decoders::jxl::sniff(&head) {
+        return Format::Jxl;
     }
     if crate::images::decoders::psd::sniff(&head) {
         return Format::Psd;

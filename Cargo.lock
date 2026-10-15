@@ -802,6 +802,7 @@ dependencies = [
  "gtk4",
  "icns",
  "image",
+ "jxl-oxide",
  "libadwaita",
  "libc",
  "libheif-rs",
@@ -1281,6 +1282,7 @@ dependencies = [
  "jxl-oxide-common",
  "jxl-render",
  "jxl-threadpool",
+ "moxcms",
  "tracing",
 ]
 

@@ -99,9 +99,6 @@ mod imp {
         /// before the file was rewritten.
         pub reopen_at: Cell<Option<usize>>,
         pub toolbar: adw::ToolbarView,
-        pub fullscreen_button: gtk::Button,
-        pub delete_button: gtk::Button,
-        pub copy_button: gtk::Button,
         pub edit_button: gtk::ToggleButton,
         pub edit_panel: gtk::Box,
         pub crop_toggle: gtk::ToggleButton,
@@ -241,10 +238,6 @@ mod imp {
         pub monitor: RefCell<Option<gio::FileMonitor>>,
         pub rescan_timer: RefCell<Option<glib::SourceId>>,
         pub header_stack: gtk::Stack,
-        /// The second bar, under the header: the two actions that change the
-        /// file itself, kept away from the view controls.
-        pub action_bar: gtk::Box,
-        pub rotate_button: gtk::Button,
         pub flip_h_button: gtk::ToggleButton,
         pub flip_v_button: gtk::ToggleButton,
         pub strip: FilmStrip,
@@ -307,9 +300,6 @@ mod imp {
                 redactions_baked: Cell::new(false),
                 reopen_at: Cell::new(None),
                 toolbar: adw::ToolbarView::new(),
-                fullscreen_button: gtk::Button::from_icon_name("view-fullscreen-symbolic"),
-                delete_button: gtk::Button::from_icon_name("user-trash-symbolic"),
-                copy_button: gtk::Button::from_icon_name("edit-copy-symbolic"),
                 edit_button: gtk::ToggleButton::new(),
                 edit_panel: gtk::Box::new(gtk::Orientation::Vertical, 12),
                 crop_toggle: section_toggle("edit-cut-symbolic", "Crop"),
@@ -415,8 +405,6 @@ mod imp {
                 monitor: RefCell::new(None),
                 rescan_timer: RefCell::new(None),
                 header_stack: gtk::Stack::new(),
-                action_bar: gtk::Box::new(gtk::Orientation::Horizontal, 6),
-                rotate_button: gtk::Button::from_icon_name("object-rotate-right-symbolic"),
                 flip_h_button: gtk::ToggleButton::new(),
                 flip_v_button: gtk::ToggleButton::new(),
                 strip: FilmStrip::new(),
@@ -572,7 +560,7 @@ impl Window {
         menu_button.set_icon_name("open-menu-symbolic");
         menu_button.set_tooltip_text(Some("Main Menu"));
         menu_button.set_menu_model(Some(menu));
-        self.fill_menu(false);
+        self.fill_menu();
         menu_button.set_primary(true);
 
         // For PDFs only: the sidebar of pages, contents and bookmarks, and the
@@ -611,51 +599,15 @@ impl Window {
         page_box.append(&imp.page_total);
         page_box.set_visible(false);
 
-        // Opens the transform options. Nothing to transform until an image is
-        // loaded, so it starts switched off.
-        let rotate_button = &imp.rotate_button;
-        // A quick quarter turn to look at something sideways. Rotating in
-        // earnest — a free angle, flips, anything that gets saved — lives in
-        // the edit panel.
-        rotate_button.set_tooltip_text(Some("Turn 90° to look (])"));
-        rotate_button.set_action_name(Some("win.rotate-right"));
-        rotate_button.set_sensitive(false);
-
-        let copy_button = &imp.copy_button;
-        copy_button.set_tooltip_text(Some("Copy Image (Ctrl+C)"));
-        copy_button.set_action_name(Some("win.copy"));
-        copy_button.set_sensitive(false);
-
-        // These two act on the file rather than on the view, so they live on
-        // their own bar below with a name beside the icon. Colour says which
-        // is which before the label is read: amber for the reversible one,
-        // red for the one that removes a file.
+        // The header keeps to what is reached for every time: reading the
+        // text in a picture, editing it, its details and the menu. Turning,
+        // fullscreen and copying are the row of icons at the top of the menu,
+        // and deleting is in the menu too; all keep their keys.
         let edit_button = &imp.edit_button;
-        edit_button.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("document-edit-symbolic")
-                .label("Edit")
-                .build(),
-        ));
-        edit_button.set_tooltip_text(Some("Edit this image (Ctrl+E)"));
-        edit_button.add_css_class("edit-action");
+        edit_button.set_icon_name("document-edit-symbolic");
+        edit_button.set_tooltip_text(Some("Edit (Ctrl+E)"));
         edit_button.set_sensitive(false);
-
-        let delete_button = &imp.delete_button;
-        delete_button.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("user-trash-symbolic")
-                .label("Delete")
-                .build(),
-        ));
-        delete_button.set_tooltip_text(Some("Delete this image (Delete)"));
-        delete_button.add_css_class("delete-action");
-        delete_button.set_action_name(Some("win.delete"));
-        delete_button.set_sensitive(false);
-
-        let fullscreen_button = &imp.fullscreen_button;
-        fullscreen_button.set_tooltip_text(Some("Fullscreen (F11)"));
-        fullscreen_button.set_action_name(Some("win.fullscreen"));
+        edit_button.set_visible(false);
 
         let header = adw::HeaderBar::builder()
             .title_widget(&imp.title)
@@ -675,19 +627,9 @@ impl Window {
         live_button.set_icon_name("glance-live-text-symbolic");
         live_button.set_tooltip_text(Some("Select Text in Image (Ctrl+Shift+T)"));
         live_button.set_action_name(Some("win.live-text"));
+        header.pack_end(edit_button);
         header.pack_end(live_button);
-        header.pack_end(rotate_button);
-        header.pack_end(fullscreen_button);
-        header.pack_end(copy_button);
         header.pack_end(&imp.search_button);
-
-        let action_bar = &imp.action_bar;
-        action_bar.add_css_class("toolbar");
-        action_bar.add_css_class("image-actions");
-        action_bar.append(edit_button);
-        action_bar.append(delete_button);
-        // Nothing to act on until something is open.
-        action_bar.set_visible(false);
 
         let header_stack = &imp.header_stack;
         header_stack.add_named(&header, Some("normal"));
@@ -696,7 +638,6 @@ impl Window {
         let toolbar = &imp.toolbar;
         toolbar.add_top_bar(header_stack);
         toolbar.add_top_bar(&imp.search_bar);
-        toolbar.add_top_bar(action_bar);
         let banner = &imp.redaction_banner;
         banner.set_button_label(Some("_Apply…"));
         banner.set_use_markup(false);
@@ -837,16 +778,6 @@ impl Window {
         let bare = full || imp.slideshow.get();
         imp.toolbar.set_reveal_top_bars(!bare);
         imp.toolbar.set_reveal_bottom_bars(!bare);
-        imp.fullscreen_button.set_icon_name(if full {
-            "view-restore-symbolic"
-        } else {
-            "view-fullscreen-symbolic"
-        });
-        imp.fullscreen_button.set_tooltip_text(Some(if full {
-            "Leave Fullscreen (F11)"
-        } else {
-            "Fullscreen (F11)"
-        }));
     }
 
     /// Accepts a file dropped anywhere on the window.
@@ -1037,10 +968,6 @@ impl Window {
                     window.imp().text_toggle.set_active(false);
                     window.imp().draw_toggle.set_active(false);
                 }
-                // Deleting the file you are in the middle of editing is a
-                // trap, so it goes away along with the filmstrip.
-                let has_file = window.imp().current.borrow().is_some();
-                window.imp().delete_button.set_sensitive(!open && has_file);
                 window.update_navigation();
             }
         ));
@@ -1602,6 +1529,7 @@ impl Window {
             "image/heic",
             "image/avif",
             "image/svg+xml",
+            "image/jxl",
             "image/jp2",
             "image/jpx",
             "image/x-jp2-codestream",
@@ -1620,7 +1548,7 @@ impl Window {
         for suffix in [
             "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "kdc", "mef",
             "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf",
-            "srw", "x3f", "heic", "heif", "avif", "svg", "svgz", "pdf", "jp2", "j2k", "jpx", "psd",
+            "srw", "x3f", "heic", "heif", "avif", "svg", "svgz", "pdf", "jxl", "jp2", "j2k", "jpx", "psd",
             "exr", "hdr", "icns", "ai",
         ] {
             filter.add_suffix(suffix);
@@ -1790,12 +1718,9 @@ impl Window {
                         };
                         window.imp().view.show_image(image);
                         window.picture_shown(picture);
-                        window.imp().rotate_button.set_sensitive(true);
-                        window.imp().delete_button.set_sensitive(true);
                         window.imp().edit_button.set_sensitive(true);
-                        window.imp().copy_button.set_sensitive(true);
+                        window.imp().edit_button.set_visible(true);
                         window.describe_target_size();
-                        window.imp().action_bar.set_visible(true);
                         // The canvas drops the old selection, so put the panel
                         // back in step with it.
                         let imp = window.imp();
@@ -1821,6 +1746,10 @@ impl Window {
     /// Ask before removing anything, and keep the two kinds of removal clearly
     /// apart: the bin is recoverable, deleting is not.
     fn confirm_delete(&self) {
+        // Deleting the file you are in the middle of editing is a trap.
+        if self.imp().edit_button.is_active() {
+            return;
+        }
         let Some(path) = self.imp().current.borrow().clone() else {
             return;
         };
@@ -2031,13 +1960,10 @@ impl Window {
         self.leave_pdf();
         imp.title.set_title("Glance");
         imp.title.set_subtitle("");
-        imp.rotate_button.set_sensitive(false);
-        imp.delete_button.set_sensitive(false);
-        imp.copy_button.set_sensitive(false);
         // Turning the toggle off restores the filmstrip and the arrow keys.
         imp.edit_button.set_active(false);
         imp.edit_button.set_sensitive(false);
-        imp.action_bar.set_visible(false);
+        imp.edit_button.set_visible(false);
         self.picture_gone();
         self.update_navigation();
     }
@@ -2145,7 +2071,6 @@ impl Window {
         }
         imp.content.set_visible_child_name("pdf");
 
-        imp.rotate_button.set_sensitive(true);
         imp.edit_button.set_sensitive(false);
         self.show_chrome(true);
     }
@@ -2158,14 +2083,8 @@ impl Window {
         imp.title.set_title(name);
         imp.title.set_subtitle("Locked PDF");
         imp.shown.replace(Some(Shown { name: name.to_string(), subtitle: "Locked PDF".to_string() }));
-        imp.action_bar.set_visible(false);
-        for button in [&imp.delete_button, &imp.copy_button] {
-            button.set_sensitive(false);
-        }
         imp.edit_button.set_sensitive(false);
-        // Nothing to copy or turn until it is open.
-        imp.copy_button.set_visible(false);
-        imp.rotate_button.set_visible(false);
+        imp.edit_button.set_visible(false);
         imp.content.set_visible_child_name("locked");
         imp.locked.show(name, tried);
     }
@@ -2175,7 +2094,7 @@ impl Window {
     /// picture and gains its pages.
     fn show_chrome(&self, pdf: bool) {
         let imp = self.imp();
-        imp.action_bar.set_visible(!pdf);
+        imp.edit_button.set_visible(!pdf && imp.view.canvas().has_image());
         imp.info_button.set_visible(!pdf);
         imp.live_button.set_visible(!pdf);
         if pdf {
@@ -2184,14 +2103,9 @@ impl Window {
             imp.split.set_sidebar(Some(imp.pdf_view.sidebar()));
             imp.sidebar_button.set_tooltip_text(Some("Sidebar (F9)"));
         }
-        imp.copy_button.set_visible(!pdf);
         imp.sidebar_button.set_visible(pdf);
         imp.page_box.set_visible(pdf);
         imp.search_button.set_visible(pdf);
-        // A PDF keeps its header to finding its way round: the rest is in
-        // the menu. Pictures keep their own buttons.
-        imp.rotate_button.set_visible(!pdf);
-        imp.fullscreen_button.set_visible(!pdf);
         if !pdf {
             self.set_draw_panel(false);
         }
@@ -2199,7 +2113,7 @@ impl Window {
             imp.search_bar.set_search_mode(false);
         }
         imp.menu_button.set_menu_model(Some(if pdf { &imp.pdf_menu } else { &imp.image_menu }));
-        self.fill_menu(pdf);
+        self.fill_menu();
         if let Some(action) = self.lookup_action("show-pages").and_downcast::<gio::SimpleAction>() {
             action.set_enabled(pdf);
             if !pdf {
@@ -2642,10 +2556,10 @@ impl Window {
 
     /// Put the row of view buttons into the main menu. Setting a menu makes
     /// a new one each time, so this follows every change of menu.
-    fn fill_menu(&self, pdf: bool) {
+    fn fill_menu(&self) {
         let popover = self.imp().menu_button.popover().and_downcast::<gtk::PopoverMenu>();
         if let Some(popover) = popover {
-            popover.add_child(&menus::view_buttons(pdf), menus::VIEW_BUTTONS);
+            popover.add_child(&menus::view_buttons(), menus::VIEW_BUTTONS);
         }
     }
 

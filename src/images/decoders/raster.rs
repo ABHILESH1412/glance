@@ -13,12 +13,12 @@ use crate::images::loader::{open_error, unsupported, Frame, LoadedImage};
 
 /// A very long animation could otherwise hold a lot of decoded frames at once,
 /// so stop collecting past this and show what was gathered.
-const MAX_ANIMATION_BYTES: usize = 512 * 1024 * 1024;
-const MAX_FRAMES: usize = 2000;
+pub(crate) const MAX_ANIMATION_BYTES: usize = 512 * 1024 * 1024;
+pub(crate) const MAX_FRAMES: usize = 2000;
 /// Browsers treat absurdly short frame delays as a mistake and slow them down;
 /// matching that keeps old GIFs looking the way they are meant to.
-const MIN_DELAY: Duration = Duration::from_millis(20);
-const SLOW_DELAY: Duration = Duration::from_millis(100);
+pub(crate) const MIN_DELAY: Duration = Duration::from_millis(20);
+pub(crate) const SLOW_DELAY: Duration = Duration::from_millis(100);
 
 pub fn decode(path: &Path) -> Result<LoadedImage, String> {
     let reader = ImageReader::open(path)

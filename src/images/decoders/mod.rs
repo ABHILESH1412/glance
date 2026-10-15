@@ -5,6 +5,7 @@ pub mod heif;
 pub mod icns;
 pub mod illustrator;
 pub mod jpeg2000;
+pub mod jxl;
 pub mod psd;
 pub mod raster;
 pub mod raw;
