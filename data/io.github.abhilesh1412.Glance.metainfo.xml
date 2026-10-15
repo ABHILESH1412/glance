@@ -119,6 +119,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.0.2" date="2026-10-15">
+      <description>
+        <ul>
+          <li>[feat] smooth scroll</li>
+          <li>[feat] left and right arrow keys will change the pages now</li>
+          <li>[feat] middle click of the mouse will drag the pages now</li>
+          <li>[feat] Glance now supports the jxl format too</li>
+          <li>[fix] the image viewer header was too cluttered, it have been revamped</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.1" date="2026-10-08">
       <description>
         <ul>
