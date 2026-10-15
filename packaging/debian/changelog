@@ -1,3 +1,15 @@
+glance-image-viewer (2.0.3-1) unstable; urgency=medium
+
+  * [fix] AppImage build: use this computer's DNS inside the container
+  * updated readme.md
+  * [feat] smooth scroll
+  * [feat] left and right arrow keys will change the pages now
+  * [feat] middle click of the mouse will drag the pages now
+  * [feat] Glance now supports the jxl format too
+  * [fix] the image viewer header was too cluttered, it have been revamped
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 15 Oct 2026 13:37:58 +0530
+
 glance-image-viewer (2.0.2-1) unstable; urgency=medium
 
   * [feat] smooth scroll
