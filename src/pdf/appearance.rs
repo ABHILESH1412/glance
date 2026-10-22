@@ -17,6 +17,14 @@
 //! appearance is given one here, drawn the way Poppler draws it — a text box
 //! in Helvetica, laid out as Poppler lays it out — so it looks the same in
 //! Glance as before. Annotations that already have one are never touched.
+//!
+//! One more repair while the file is open. A text box names its font in its
+//! style, and the form's shared resources say which font that name is. Since
+//! Poppler 26.10, saving cuts each text box's font down to the letters it uses,
+//! keeps the cut-down copy in the box's appearance, and takes the full font out
+//! of the form, leaving the name pointing at nothing: read back, the box has
+//! lost its font and its weight. The copy in its appearance is put back under
+//! that name.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -32,9 +40,9 @@ const NOTE_DEFAULT: [f64; 3] = [1.0, 1.0, 0.0];
 /// The four-curve circle constant.
 const KAPPA: f64 = 0.552_284_749_83;
 
-/// Give each annotation in `path` that lacks an appearance one, and write
-/// the result to `out`, protected as `path` was. Ok(0), with nothing
-/// written, when none needed one.
+/// Give each annotation in `path` that lacks an appearance one, and each text
+/// box its font back, and write the result to `out`, protected as `path` was.
+/// Ok(0), with nothing written, when none needed either.
 pub fn add_missing(path: &Path, out: &Path, password: Option<&str>) -> Result<usize, String> {
     let document = Qpdf::read(path, password).map_err(|e| e.to_string())?;
     let mut added = 0;
@@ -42,6 +50,9 @@ pub fn add_missing(path: &Path, out: &Path, password: Option<&str>) -> Result<us
         let Some(annots) = document.get(page, "Annots").and_then(|a| document.items(a)) else { continue };
         for annot in annots {
             if give_appearance(&document, annot) {
+                added += 1;
+            }
+            if restore_form_font(&document, annot) {
                 added += 1;
             }
         }
@@ -136,6 +147,53 @@ fn give_appearance(document: &Qpdf, annot: Object) -> bool {
     let appearance = document.new_dictionary(vec![("N", Value::Object(stream))]);
     document.set(annot, "AP", Value::Object(appearance));
     true
+}
+
+/// Put a text box's font back among the form's fonts, from its appearance,
+/// when its style names one the form no longer has.
+fn restore_form_font(document: &Qpdf, annot: Object) -> bool {
+    if document.get(annot, "Subtype").and_then(|s| document.name(s)).as_deref() != Some("FreeText") {
+        return false;
+    }
+    let Some(tag) = document.get(annot, "DA").and_then(|d| document.string(d)).and_then(|da| font_tag(&da)) else {
+        return false;
+    };
+    let Some(font) = document
+        .get(annot, "AP")
+        .and_then(|ap| document.get(ap, "N"))
+        .filter(|n| document.is_stream(*n))
+        .and_then(|n| document.get(n, "Resources"))
+        .and_then(|r| document.get(r, "Font"))
+        .and_then(|f| document.get(f, &tag))
+    else {
+        return false;
+    };
+    let root = document.root();
+    let Some(form) = document.get(root, "AcroForm") else { return false };
+    let resources = document.get(form, "DR").unwrap_or_else(|| {
+        let made = document.new_dictionary(Vec::new());
+        document.set(form, "DR", Value::Object(made));
+        made
+    });
+    let fonts = document.get(resources, "Font").unwrap_or_else(|| {
+        let made = document.new_dictionary(Vec::new());
+        document.set(resources, "Font", Value::Object(made));
+        made
+    });
+    if document.get(fonts, &tag).is_some() {
+        return false;
+    }
+    document.set(fonts, &tag, Value::Object(font));
+    true
+}
+
+/// The font's name in a style such as "0 0 1 rg /Helv 12 Tf".
+fn font_tag(style: &str) -> Option<String> {
+    let tokens: Vec<&str> = style.split_whitespace().collect();
+    let at = tokens.iter().rposition(|t| *t == "Tf")?;
+    let name = tokens.get(at.checked_sub(2)?)?.strip_prefix('/')?;
+    // A name spelt with escapes is not one Poppler writes; left alone.
+    (!name.is_empty() && !name.contains('#')).then(|| name.to_string())
 }
 
 /// What an annotation is drawn with.
@@ -532,6 +590,14 @@ mod tests {
         assert_eq!(win_ansi('é'), 0xe9);
         assert_eq!(win_ansi('—'), 0x97);
         assert_eq!(win_ansi('漢'), b'?');
+    }
+
+    #[test]
+    fn a_text_box_font_is_found_by_name_in_its_style() {
+        assert_eq!(font_tag("0.75294 0.10980 0.15686 rg\n/popplerfont 18.00 Tf\n").as_deref(), Some("popplerfont"));
+        assert_eq!(font_tag("/Helv 12 Tf 0 0 1 rg").as_deref(), Some("Helv"));
+        assert_eq!(font_tag("0 g"), None);
+        assert_eq!(font_tag("12 Tf"), None);
     }
 
     #[test]

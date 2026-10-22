@@ -319,7 +319,8 @@ fn style_of(annot: &poppler::Annot, fill: Option<Rgb>) -> TextStyle {
             let desc = (fonts.get_desc)(raw);
             if !desc.is_null() {
                 if !(*desc).font_name.is_null() {
-                    style.family = Some(std::ffi::CStr::from_ptr((*desc).font_name).to_string_lossy().into_owned());
+                    let name = std::ffi::CStr::from_ptr((*desc).font_name).to_string_lossy();
+                    style.family = Some(without_subset_tag(&name).to_string());
                 }
                 style.size = (*desc).size_pt;
                 style.bold = (*desc).weight >= poppler::ffi::POPPLER_WEIGHT_SEMIBOLD;
@@ -333,6 +334,16 @@ fn style_of(annot: &poppler::Annot, fill: Option<Rgb>) -> TextStyle {
             }
         }
         style
+    }
+}
+
+/// A font's family without the tag marking a cut-down copy, as in
+/// "EXREUK+DejaVu Sans": six capitals and a plus. Poppler 26.10 saves a text
+/// box's font that way.
+fn without_subset_tag(name: &str) -> &str {
+    match name.split_once('+') {
+        Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+        _ => name,
     }
 }
 
@@ -395,6 +406,13 @@ pub fn under(annotations: &[Annotation], x: f64, y: f64) -> Option<&Annotation> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_down_font_keeps_its_family_name() {
+        assert_eq!(without_subset_tag("EXREUK+DejaVu Sans"), "DejaVu Sans");
+        assert_eq!(without_subset_tag("DejaVu Sans"), "DejaVu Sans");
+        assert_eq!(without_subset_tag("C++ Sans"), "C++ Sans");
+    }
 
     fn box_size_bubble(text: &str) -> (f64, f64) {
         box_size(text, &TextStyle::bubble(), None)
