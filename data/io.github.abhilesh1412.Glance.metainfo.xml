@@ -119,6 +119,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.0.4" date="2026-10-22">
+      <description>
+        <ul>
+          <li>[fix] Text boxes keep their font and boldness with Poppler 26.10</li>
+          <li>[feat] user can add images in the pdfs</li>
+          <li>[fix] now the user can drag and drop multiple files in the combine pdf section</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.3" date="2026-10-15">
       <description>
         <ul>

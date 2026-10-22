@@ -1,3 +1,11 @@
+glance-image-viewer (2.0.4-1) unstable; urgency=medium
+
+  * [fix] Text boxes keep their font and boldness with Poppler 26.10
+  * [feat] user can add images in the pdfs
+  * [fix] now the user can drag and drop multiple files in the combine pdf section
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 22 Oct 2026 17:56:51 +0530
+
 glance-image-viewer (2.0.3-1) unstable; urgency=medium
 
   * [fix] AppImage build: use this computer's DNS inside the container
