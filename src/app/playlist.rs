@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// thousand files would otherwise mean a few thousand file opens, and this has
 /// to answer instantly. A file that lies about its extension simply fails to
 /// decode later, with the usual message.
-const EXTENSIONS: &[&str] = &[
+pub(crate) const EXTENSIONS: &[&str] = &[
     // raster
     "png", "jpg", "jpeg", "jpe", "jfif", "gif", "webp", "tif", "tiff", "bmp", "ico", "qoi", "pnm",
     "pbm", "pgm", "ppm", "tga", //
@@ -26,7 +26,7 @@ const EXTENSIONS: &[&str] = &[
     "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
 ];
 
-fn is_image(path: &Path) -> bool {
+pub(crate) fn is_image(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())

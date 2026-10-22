@@ -177,6 +177,7 @@ pub fn pdf_menu() -> gio::Menu {
         None,
         &section(&[
             item("_Edit", "win.draw-panel"),
+            item("Add _Picture…", "win.add-picture"),
             item("Add _Note", "win.pin::note"),
             item("Add Speech _Bubble", "win.pin::bubble"),
             item("Mark for _Redaction", "win.mark-redact"),

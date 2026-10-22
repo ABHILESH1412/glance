@@ -444,6 +444,11 @@ it, and a read-only file is left untouched.
 - **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
   Ctrl+Shift+X, or from the right-click menu. Highlights come in six colours from the
   menu, or any other; marking text the same way again takes the mark off
+- **Pictures**: **Add Picture…** in the menu or the Edit panel, or drop picture files on
+  the page. Any picture Glance opens will do, transparency and all; it is saved as a stamp
+  that carries the picture, so every reader shows it, phones included, and it can be
+  moved, resized or removed again later. Photographs are kept at up to 2048 pixels on
+  their longer side, so the file does not swell by tens of megabytes
 - **Notes and speech bubbles**: right-click where one should go. A note is a
   sticky-note icon that opens when clicked; a speech bubble writes its words on the
   page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
@@ -452,9 +457,12 @@ it, and a read-only file is left untouched.
   highlighter, line, arrows, rectangles, rounded rectangles, ellipses, polygons, stars,
   speech bubbles, ticks and crosses, in any colour and thickness, rectangles and ellipses
   filled or not; **Signature**, to put a kept signature on the page as ink, sharp at any
-  size, or write a new one on the signature pad; and
-  **Select**, to pick up any drawing on the page (made earlier, or by another program) and
-  move it, resize it by its handles, recolour or thicken it, or delete it; **Text**,
+  size, or write a new one on the signature pad; **Add Picture…**, to put a picture
+  from a file on the page — or drop picture files on an open PDF, and they land where
+  they were dropped; and
+  **Select**, to pick up any drawing or picture on the page (made earlier, or by another program) and
+  move it, resize it by its handles (a picture keeps its proportions, unless Shift is
+  held), recolour or thicken it, or delete it; **Text**,
   for text boxes in any font, size, colour and background, bold or italic — click one to
   change it, drag it to move it; and **Redact** (see below). Opening another PDF puts the
   panel away

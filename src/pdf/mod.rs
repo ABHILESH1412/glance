@@ -29,6 +29,7 @@ mod newer;
 mod notes;
 mod outline;
 mod page;
+mod picture;
 mod pages;
 mod qpdf;
 mod redact;
@@ -59,6 +60,11 @@ pub use view::{NOT_ANNOTATABLE, BookmarkEvent, Ink, Marked, PageImage, PdfView, 
 /// Whether this Poppler can draw on pages: ink needs 25.06.
 pub fn can_draw() -> bool {
     ink::available()
+}
+
+/// Whether this Poppler can put a picture on a page: 22.07.
+pub fn can_place_pictures() -> bool {
+    newer::get().stamp.is_some()
 }
 
 /// Whether this Poppler can set a text box's font, size and colour: 24.12.

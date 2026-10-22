@@ -56,6 +56,7 @@ use super::notes::{self, Note, TextBox, TextStyle};
 use super::outline::{self, Heading};
 use super::redact::Area as RedactArea;
 use super::page::{Page, PageText, Picked};
+use super::picture;
 use crate::images::live_layer::{LiveLayer, Place, TextLine};
 use super::render::{Job, Rendered, Renderer};
 use super::search::{Found, Match, Searcher};
@@ -299,6 +300,9 @@ struct Inner {
     /// The page showing it, to clear when it is put down.
     picked_page: Cell<Option<usize>>,
     reshaping: RefCell<Option<Reshaping>>,
+    /// The picture last shown being dragged, as a texture, so a drag does
+    /// not make one for every motion: which pixels it was made from, and it.
+    dragged_picture: RefCell<Option<(Arc<picture::Pixels>, gdk::Texture)>>,
     /// A new colour and thickness for the picked drawing, waiting for the
     /// controls to be still.
     #[allow(clippy::type_complexity)]
@@ -417,6 +421,7 @@ impl PdfView {
             picked: RefCell::default(),
             picked_page: Cell::new(None),
             reshaping: RefCell::default(),
+            dragged_picture: RefCell::default(),
             reink: RefCell::default(),
             on_picked: RefCell::default(),
             text: RefCell::default(),
@@ -855,6 +860,40 @@ impl PdfView {
         self.inner.place_signature(signature)
     }
 
+    /// Put the picture in a file on the page being read, in the middle of
+    /// the view, picked up to be moved and sized.
+    pub fn add_picture(&self, path: &std::path::Path) -> bool {
+        match picture::open(path) {
+            Ok(pixels) => self.inner.place_picture(pixels, None),
+            Err(error) => {
+                self.inner.report(error);
+                false
+            }
+        }
+    }
+
+    /// Put pictures dropped on the view where they were dropped: `x`, `y`
+    /// in `widget`'s coordinates. Several are laid a little apart.
+    pub fn drop_pictures(&self, paths: &[std::path::PathBuf], widget: &impl IsA<gtk::Widget>, x: f64, y: f64) {
+        let inner = &self.inner;
+        let point = widget.compute_point(&inner.column, &graphene::Point::new(x as f32, y as f32));
+        let spot = point.and_then(|p| inner.hit(f64::from(p.x()), f64::from(p.y())));
+        for (i, path) in paths.iter().enumerate() {
+            let pixels = match picture::open(path) {
+                Ok(pixels) => pixels,
+                Err(error) => {
+                    inner.report(error);
+                    continue;
+                }
+            };
+            let step = 24.0 * i as f64;
+            let at = spot.map(|s| Spot { x: s.x + step, y: s.y + step, ..s });
+            if !inner.place_picture(pixels, at) {
+                break;
+            }
+        }
+    }
+
     /// Put a new text box near the top of the page being read.
     pub fn add_text_box(&self) {
         let inner = &self.inner;
@@ -961,6 +1000,11 @@ impl PdfView {
     /// The selected part of text read from a picture, if any is selected.
     pub fn image_selected_text(&self) -> Option<String> {
         self.inner.text.borrow().as_ref().and_then(|(_, layer)| layer.selected_text())
+    }
+
+    /// Whether what is picked up is a picture.
+    pub fn picked_is_picture(&self) -> bool {
+        self.inner.picked.borrow().as_ref().is_some_and(|drawing| drawing.picture.is_some())
     }
 
     /// Put down the picked drawing. False if nothing was picked.
@@ -2269,7 +2313,13 @@ impl Inner {
         let reader = self.reader()?;
         let slack = 4.0 / self.pixels_per_point(spot.page);
         let mut inked = self.inked.borrow_mut();
-        let here = inked.entry(spot.page).or_insert_with(|| ink::on_page(&reader, spot.page));
+        let here = inked.entry(spot.page).or_insert_with(|| {
+            let pictures = || {
+                let password = self.password.borrow().clone();
+                self.path().map(|path| picture::read_back(&path, password.as_deref(), spot.page)).unwrap_or_default()
+            };
+            ink::on_page(&reader, spot.page, pictures)
+        });
         here.iter().rev().find(|drawing| drawing.is_at((spot.x, spot.y), slack)).cloned()
     }
 
@@ -2461,12 +2511,30 @@ impl Inner {
         if drawing.tool == draw::Tool::Highlighter {
             paint.set_alpha(draw::HIGHLIGHT_ALPHA);
         }
+        // A picture is shown itself while it is dragged, rather than its
+        // corners as a line; only upright, as the stamp would be.
+        let picture = drawing
+            .picture
+            .as_ref()
+            .filter(|_| reshaping.is_some() && self.rotation.get().quarters() == 0)
+            .map(|pixels| {
+                let mut cached = self.dragged_picture.borrow_mut();
+                match cached.as_ref() {
+                    Some((from, texture)) if Arc::ptr_eq(from, pixels) => texture.clone(),
+                    _ => {
+                        let texture = pixels.texture();
+                        cached.replace((pixels.clone(), texture.clone()));
+                        texture
+                    }
+                }
+            });
         widget.set_picked(Some(Picked {
-            strokes: if reshaping.is_some() {
+            strokes: if reshaping.is_some() && drawing.picture.is_none() {
                 drawing.strokes.iter().map(|stroke| stroke.iter().map(|&p| to_page(p)).collect()).collect()
             } else {
                 Vec::new()
             },
+            picture,
             paint,
             fill: drawing.fill.map(Rgb::to_rgba),
             width: drawing.width / tw.max(1e-9),
@@ -2497,6 +2565,9 @@ impl Inner {
                 return;
             }
             let Some(outline) = reshaping.before.outline() else { return };
+            // A picture keeps its proportions unless told otherwise; a
+            // drawing keeps them only when told.
+            let keep_aspect = keep_aspect != reshaping.before.picture.is_some();
             let outline = outline.dragged(reshaping.grip, (reshaping.from.x, reshaping.from.y), (to.x, to.y), keep_aspect);
             reshaping.now = reshaping.before.reshaped(&outline);
         }
@@ -2758,6 +2829,46 @@ impl Inner {
                 inner.report(error);
             }
         });
+    }
+
+    /// Put a picture on a page, centred on `spot` or, without one, in the
+    /// middle of the view, and pick it up so it can be moved and sized at
+    /// once. As big as it is at 150 pixels to the inch, but no more than
+    /// half the page either way.
+    fn place_picture(&self, pixels: picture::Pixels, spot: Option<Spot>) -> bool {
+        if super::newer::get().stamp.is_none() {
+            self.report("Putting a picture on a PDF needs Poppler 22.07 or newer.".to_string());
+            return false;
+        }
+        let spot = spot.or_else(|| {
+            let (h, v) = (self.root.hadjustment(), self.root.vadjustment());
+            self.hit(h.value() + h.page_size() / 2.0, v.value() + v.page_size() / 2.0)
+        });
+        let spot = spot.or_else(|| {
+            let page = self.current_page();
+            let (w, h) = *self.pages.borrow().get(page)?;
+            Some(Spot { page, x: w / 2.0, y: h / 2.0 })
+        });
+        let Some(spot) = spot else { return false };
+        let Some(&(pw, ph)) = self.pages.borrow().get(spot.page) else { return false };
+        let aspect = pixels.aspect();
+        let mut w = f64::from(pixels.width) * 72.0 / 150.0;
+        let mut h = w / aspect;
+        let fit = (pw * 0.5 / w).min(ph * 0.5 / h).min(1.0);
+        (w, h) = ((w * fit).max(8.0), (h * fit).max(8.0));
+        let x = (spot.x - w / 2.0).clamp(0.0, (pw - w).max(0.0));
+        let y = (spot.y - h / 2.0).clamp(0.0, (ph - h).max(0.0));
+        let drawing = Drawing::picture(spot.page, [x, y, x + w, y + h], Arc::new(pixels));
+        match self.commit(Change { removed: Vec::new(), added: vec![Annotation::Ink(drawing.clone())] }) {
+            Ok(()) => {
+                self.pick(Some(drawing));
+                true
+            }
+            Err(error) => {
+                self.report(error);
+                false
+            }
+        }
     }
 
     fn place_signature(&self, signature: &Arc<Signature>) -> bool {

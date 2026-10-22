@@ -1168,7 +1168,11 @@ impl Inner {
 
     fn connect_drops(this: &Rc<Self>) {
         let target = gtk::DropTarget::new(glib::Type::INVALID, gdk::DragAction::COPY | gdk::DragAction::MOVE);
-        target.set_types(&[glib::Type::STRING, gdk::FileList::static_type(), gio::File::static_type()]);
+        // Files before text: a file manager offers a dropped file as text
+        // too, and taken as text it would be neither a page of ours nor a
+        // file, and the drop would be refused. Pages dragged within the
+        // grid come as text alone.
+        target.set_types(&[gdk::FileList::static_type(), gio::File::static_type(), glib::Type::STRING]);
         target.connect_accept(|target, drop| {
             let offered = drop.formats();
             target.types().iter().any(|t| offered.types().contains(t))
@@ -1196,9 +1200,14 @@ impl Inner {
                 inner.move_to(&ids, at);
                 return true;
             }
-            let files: Vec<PathBuf> = match value.get::<gdk::FileList>() {
-                Ok(list) => list.files().iter().filter_map(|f| f.path()).collect(),
-                Err(_) => value.get::<gio::File>().ok().and_then(|f| f.path()).into_iter().collect(),
+            let files: Vec<PathBuf> = if let Ok(list) = value.get::<gdk::FileList>() {
+                list.files().iter().filter_map(|f| f.path()).collect()
+            } else if let Ok(file) = value.get::<gio::File>() {
+                file.path().into_iter().collect()
+            } else {
+                // Text from somewhere that offers nothing else: a line per
+                // file, as a URI or a path.
+                value.get::<String>().map(|text| dropped_paths(&text)).unwrap_or_default()
             };
             if files.is_empty() {
                 return false;
@@ -1531,6 +1540,22 @@ fn texture_of(decoded: crate::images::loader::LoadedImage, longest: u32) -> Opti
     Some(crate::images::canvas::texture_from(w, h, premultiplied, image.into_raw()))
 }
 
+/// Files named in dropped text, one a line: `file://` URIs or plain paths.
+fn dropped_paths(text: &str) -> Vec<PathBuf> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            if line.starts_with("file://") {
+                gio::File::for_uri(line).path()
+            } else {
+                Some(PathBuf::from(line)).filter(|path| path.is_absolute())
+            }
+        })
+        .filter(|path| path.is_file())
+        .collect()
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())
 }
@@ -1685,6 +1710,20 @@ fn ask_paper(parent: &impl IsA<gtk::Widget>, last: Option<pdf::Paper>, done: imp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn files_dropped_as_text_are_found_by_uri_or_path() {
+        let dir = std::env::temp_dir().join(format!("glance-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a b.png"), dir.join("c.png"));
+        std::fs::write(&a, b"x").unwrap();
+        std::fs::write(&b, b"x").unwrap();
+        let uri = gio::File::for_path(&a).uri();
+        let text = format!("{uri}\r\n{}\n# a comment\nnot a path\n{}\n", b.display(), dir.join("gone.png").display());
+        let found = dropped_paths(&text);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found, vec![a, b]);
+    }
 
     fn list(n: u64) -> Vec<Sheet> {
         (1..=n).map(|id| Sheet { id, source: 0, page: id as usize - 1, turn: 0 }).collect()

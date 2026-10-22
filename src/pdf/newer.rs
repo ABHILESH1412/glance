@@ -36,8 +36,15 @@ pub struct Border {
     pub get: unsafe extern "C" fn(*mut PopplerAnnot, *mut f64) -> i32,
 }
 
+/// A stamp with a picture of its own, from Poppler 22.07.
+pub struct Stamp {
+    pub new: unsafe extern "C" fn(*mut PopplerDocument, *mut PopplerRectangle) -> *mut PopplerAnnot,
+    pub set_image: unsafe extern "C" fn(*mut PopplerAnnot, *mut gtk::cairo::ffi::cairo_surface_t, *mut *mut gtk::glib::ffi::GError) -> i32,
+}
+
 pub struct Newer {
     pub ink: Option<Ink>,
+    pub stamp: Option<Stamp>,
     pub fonts: Option<Fonts>,
     pub border: Option<Border>,
 }
@@ -84,7 +91,13 @@ pub fn get() -> &'static Newer {
                 get: lookup(c"poppler_annot_get_border_width")?,
             })
         })();
-        Newer { ink, fonts, border }
+        let stamp = (|| {
+            Some(Stamp {
+                new: lookup(c"poppler_annot_stamp_new")?,
+                set_image: lookup(c"poppler_annot_stamp_set_custom_image")?,
+            })
+        })();
+        Newer { ink, stamp, fonts, border }
     })
 }
 
@@ -106,5 +119,8 @@ mod tests {
         assert_eq!(newer.fonts.is_some(), v >= (24, 12), "Poppler {v:?}");
         assert_eq!(newer.border.is_some(), v >= (24, 12), "Poppler {v:?}");
         assert_eq!(newer.ink.is_some(), v >= (25, 6), "Poppler {v:?}");
+        if v >= (23, 1) {
+            assert!(newer.stamp.is_some(), "Poppler {v:?}");
+        }
     }
 }

@@ -58,6 +58,8 @@ pub struct Picked {
     /// The box round it, x, y, width, height, for anything but a line.
     pub frame: Option<[f64; 4]>,
     pub grips: Vec<(f64, f64)>,
+    /// A picture being dragged, drawn in its frame.
+    pub picture: Option<gdk::Texture>,
 }
 
 /// Text read from a picture on the page: each line's corners, and the
@@ -166,6 +168,13 @@ mod imp {
                 stroke.set_line_cap(gsk::LineCap::Round);
                 stroke.set_line_join(gsk::LineJoin::Round);
                 snapshot.append_stroke(&path, &stroke, &picked.paint);
+            }
+            if let Some(picked) = picked.as_ref() {
+                if let (Some(texture), Some([x, y, rw, rh])) = (&picked.picture, picked.frame) {
+                    let (fw, fh) = (f64::from(w), f64::from(h));
+                    let area = graphene::Rect::new((x * fw) as f32, (y * fh) as f32, (rw * fw) as f32, (rh * fh) as f32);
+                    snapshot.append_texture(texture, &area);
+                }
             }
             if night {
                 snapshot.pop();

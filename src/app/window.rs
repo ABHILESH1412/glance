@@ -827,7 +827,7 @@ impl Window {
             self,
             #[upgrade_or]
             false,
-            move |_, value, _, _| {
+            move |_, value, x, y| {
                 window.remove_css_class("drop-active");
                 let files = match value.get::<gdk::FileList>() {
                     Ok(list) => list.files(),
@@ -835,6 +835,16 @@ impl Window {
                 };
                 if files.is_empty() {
                     return false;
+                }
+                // Pictures dropped on an open PDF go onto its page, where
+                // they were dropped, rather than replacing it on screen.
+                let imp = window.imp();
+                if imp.showing_pdf.get() && !imp.combining.get() {
+                    let paths: Vec<std::path::PathBuf> = files.iter().filter_map(|f| f.path()).collect();
+                    if paths.len() == files.len() && paths.iter().all(|p| crate::app::playlist::is_image(p)) {
+                        window.place_pictures(&paths, Some((x, y)));
+                        return true;
+                    }
                 }
                 // Several files: open the first, or combine them all.
                 window.open_files(files);
@@ -1509,6 +1519,69 @@ impl Window {
             move |_, _| window.close()
         ));
         self.add_action(&close);
+    }
+
+    /// Pick a picture to put on the PDF being read.
+    fn choose_picture(&self) {
+        if !self.imp().showing_pdf.get() {
+            return;
+        }
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Pictures"));
+        filter.add_mime_type("image/*");
+        for suffix in crate::app::playlist::EXTENSIONS {
+            filter.add_suffix(suffix);
+        }
+        let filters = gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title("Add Picture")
+            .accept_label("_Add")
+            .modal(true)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        dialog.open(
+            Some(self),
+            gio::Cancellable::NONE,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |result| match result {
+                    Ok(file) => match file.path() {
+                        Some(path) => window.place_pictures(&[path], None),
+                        None => window.toast("That location is not a local file."),
+                    },
+                    Err(error) => {
+                        if !error.matches(gtk::DialogError::Dismissed) {
+                            window.toast(&format!("Could not open file: {error}"));
+                        }
+                    }
+                }
+            ),
+        );
+    }
+
+    /// Put pictures on the PDF being read, where they were dropped if they
+    /// were, and hand over the Select tool to move and size them.
+    fn place_pictures(&self, paths: &[std::path::PathBuf], dropped: Option<(f64, f64)>) {
+        let imp = self.imp();
+        if !imp.pdf_view.allowed().annotate {
+            self.toast(pdf::NOT_ANNOTATABLE);
+            return;
+        }
+        self.set_draw_panel(true);
+        if let Some(tools) = imp.pdf_tools.get() {
+            tools.hold_select();
+        }
+        match dropped {
+            Some((x, y)) => imp.pdf_view.drop_pictures(paths, self, x, y),
+            None => {
+                for path in paths {
+                    imp.pdf_view.add_picture(path);
+                }
+            }
+        }
     }
 
     fn choose_file(&self) {
@@ -2272,6 +2345,15 @@ impl Window {
             }
         ));
         self.add_action(&pin);
+
+        // A picture from a file on the page being read.
+        let add_picture = gio::SimpleAction::new("add-picture", None);
+        add_picture.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.choose_picture()
+        ));
+        self.add_action(&add_picture);
 
         // The Draw and Text panel, open or not: a check in the menu, Ctrl+E,
         // and the panel's own close button.

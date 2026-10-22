@@ -26,6 +26,8 @@ pub struct PdfTools {
     draw: gtk::ToggleButton,
     text: gtk::ToggleButton,
     redact: gtk::ToggleButton,
+    /// The Select tool, for picking up what is on the page.
+    select: gtk::ToggleButton,
 }
 
 /// The text controls, kept together so the chosen box can be shown in them.
@@ -148,6 +150,14 @@ impl PdfTools {
         };
         sign.set_sensitive(pdf::can_draw());
         strokes.append(&sign);
+        // A picture from a file, put down whole and picked up to move.
+        let picture = gtk::Button::builder()
+            .child(&adw::ButtonContent::builder().icon_name("insert-image-symbolic").label("Add Picture…").build())
+            .tooltip_text("Put a picture on the page, to move and size")
+            .action_name("win.add-picture")
+            .build();
+        picture.set_sensitive(pdf::can_place_pictures());
+        strokes.append(&picture);
 
         let width = gtk::SpinButton::with_range(0.5, 50.0, 0.5);
         width.set_digits(1);
@@ -380,11 +390,14 @@ impl PdfTools {
         }
         let pick_hint = {
             let (draw_hint, select) = (draw_hint.clone(), select.clone());
-            Rc::new(move |picked: bool| {
-                if !pdf::can_draw() {
+            Rc::new(move |picked: bool, picture: bool| {
+                if !pdf::can_draw() && !picture {
                     return;
                 }
-                draw_hint.set_text(if picked {
+                draw_hint.set_text(if picture {
+                    "Drag it to move it, or drag a handle to resize it; Shift lets a corner stretch it. \
+                     Delete removes it."
+                } else if picked {
                     "Drag it to move it, or drag a handle to resize it; Shift keeps a corner in proportion. \
                      Width, Colour and Fill change it, and Delete removes it."
                 } else if select.is_active() {
@@ -398,7 +411,7 @@ impl PdfTools {
             let (push_tool, pick_hint) = (push_tool.clone(), pick_hint.clone());
             button.connect_toggled(move |_| {
                 push_tool();
-                pick_hint(false);
+                pick_hint(false, false);
             });
         }
         {
@@ -452,15 +465,18 @@ impl PdfTools {
         }
         {
             let (width, ink, fill) = (width.clone(), ink.clone(), fill.clone());
+            let weak = window.downgrade();
             window.imp().pdf_view.connect_picked(move |picked| {
-                if let Some(picked) = picked {
+                // A picture has no ink: the controls keep what they had.
+                let picture = weak.upgrade().is_some_and(|window| window.imp().pdf_view.picked_is_picture());
+                if let Some(picked) = picked.filter(|_| !picture) {
                     showing_picked.set(true);
                     width.set_value(picked.width);
                     ink.set_rgba(&picked.colour);
                     fill.set_rgba(&picked.fill);
                     showing_picked.set(false);
                 }
-                pick_hint(picked.is_some());
+                pick_hint(picked.is_some(), picture);
             });
         }
 
@@ -511,7 +527,14 @@ impl PdfTools {
         let shown = controls.clone();
         window.imp().pdf_view.connect_chosen(move |chosen| shown.show(chosen));
 
-        PdfTools { root, draw: draw_toggle, text: text_toggle, redact: redact_toggle }
+        PdfTools { root, draw: draw_toggle, text: text_toggle, redact: redact_toggle, select }
+    }
+
+    /// Drawing with the Select tool in hand, for moving and sizing what was
+    /// just put on the page.
+    pub fn hold_select(&self) {
+        self.draw.set_active(true);
+        self.select.set_active(true);
     }
 
     /// Show the panel, or put it away; put away, a press on the page selects

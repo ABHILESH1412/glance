@@ -9,6 +9,8 @@
 //! What is drawn is the image editor's own `Mark`, in page points rather than
 //! pixels: the same tools, drawn the same way while the pointer moves.
 
+use std::sync::Arc;
+
 use gtk::glib;
 
 use crate::images::edit::draw::{self, Mark, Tool};
@@ -16,6 +18,7 @@ use crate::images::edit::shape::{self, Outline};
 
 use super::annots::{self, Rgb};
 use super::newer;
+use super::picture::{self, Pixels};
 
 /// Whether a shape can be filled on a page. Only a rectangle and an ellipse:
 /// they are a PDF's square and circle, which have an inside colour; anything
@@ -35,6 +38,9 @@ pub struct Drawing {
     pub width: f64,
     /// What a rectangle or ellipse is filled with, if anything.
     pub fill: Option<Rgb>,
+    /// For a picture put on the page, its pixels. Its one stroke is then two
+    /// opposite corners of the box it fills, and it has no ink.
+    pub picture: Option<Arc<Pixels>>,
 }
 
 impl Drawing {
@@ -53,13 +59,37 @@ impl Drawing {
             colour: Rgb::from_rgba(&mark.colour),
             width: mark.width,
             fill: mark.inside().filter(|_| can_fill(mark.tool)).map(|fill| Rgb::from_rgba(&fill)),
+            picture: None,
         })
+    }
+
+    /// A picture filling the box x1, y1, x2, y2.
+    pub fn picture(page: usize, area: [f64; 4], pixels: Arc<Pixels>) -> Self {
+        let [x1, y1, x2, y2] = area;
+        Drawing {
+            page,
+            tool: Tool::Pen,
+            strokes: vec![vec![(x1, y1), (x2, y2)]],
+            colour: Rgb(0, 0, 0),
+            width: 0.0,
+            fill: None,
+            picture: Some(pixels),
+        }
+    }
+
+    /// The box round the points themselves, with nothing added for a line.
+    fn corners(&self) -> [f64; 4] {
+        let (mut x1, mut y1, mut x2, mut y2) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for &(x, y) in self.strokes.iter().flatten() {
+            (x1, y1, x2, y2) = (x1.min(x), y1.min(y), x2.max(x), y2.max(y));
+        }
+        [x1, y1, x2, y2]
     }
 
     /// The box a rectangle or ellipse is drawn in, x1, y1, x2, y2: the
     /// middle of its line all round. None for anything else.
     pub fn shape(&self) -> Option<[f64; 4]> {
-        if !can_fill(self.tool) {
+        if !can_fill(self.tool) || self.picture.is_some() {
             return None;
         }
         let [x, y, w, h] = shape::frame_of(self.strokes.iter().flatten())?;
@@ -68,6 +98,9 @@ impl Drawing {
 
     /// The kind of annotation this is saved as.
     fn kind(&self) -> poppler::ffi::PopplerAnnotType {
+        if self.picture.is_some() {
+            return poppler::ffi::POPPLER_ANNOT_STAMP;
+        }
         match self.tool {
             Tool::Rectangle => poppler::ffi::POPPLER_ANNOT_SQUARE,
             Tool::Ellipse => poppler::ffi::POPPLER_ANNOT_CIRCLE,
@@ -86,10 +119,10 @@ impl Drawing {
             let half = self.width / 2.0;
             return [x1 - half, y1 - half, x2 + half, y2 + half];
         }
-        let points = self.strokes.iter().flatten();
-        let (mut x1, mut y1, mut x2, mut y2) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for &(x, y) in points {
-            (x1, y1, x2, y2) = (x1.min(x), y1.min(y), x2.max(x), y2.max(y));
+        let [x1, y1, x2, y2] = self.corners();
+        // A picture fills its box exactly.
+        if self.picture.is_some() {
+            return [x1, y1, x2, y2];
         }
         let margin = self.width;
         [x1 - margin, y1 - margin, x2 + margin, y2 + margin]
@@ -133,6 +166,10 @@ impl Drawing {
     /// The drawing in another colour or thickness. An arrow's head is sized
     /// from its line, so it is drawn again.
     pub fn restyled(&self, colour: Rgb, width: f64, fill: Option<Rgb>) -> Drawing {
+        // A picture has no ink to colour.
+        if self.picture.is_some() {
+            return self.clone();
+        }
         let strokes = match self.ends() {
             Some((a, b)) => self.redrawn(vec![a, b], width),
             None => self.strokes.clone(),
@@ -149,6 +186,10 @@ impl Drawing {
     /// Whether a press at `p` lands on the drawing's ink, give or take
     /// `slack`.
     pub fn is_at(&self, p: (f64, f64), slack: f64) -> bool {
+        if self.picture.is_some() {
+            let [x1, y1, x2, y2] = self.corners();
+            return (x1 - slack..=x2 + slack).contains(&p.0) && (y1 - slack..=y2 + slack).contains(&p.1);
+        }
         shape::touches(&self.strokes, self.width, p, slack) || (self.fill.is_some() && shape::encloses(&self.strokes, p))
     }
 
@@ -183,13 +224,30 @@ fn tool_of(strokes: &[Vec<(f64, f64)>], see_through: bool) -> Tool {
 }
 
 /// The drawings on a page, read back from the document, including any
-/// another program made.
-pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Drawing> {
+/// another program made, and the pictures put on it. A picture's pixels are
+/// read from the file by `pictures`, and only for a page that has one.
+pub fn on_page(
+    document: &poppler::Document,
+    index: usize,
+    pictures: impl FnOnce() -> Vec<([f64; 4], Arc<Pixels>)>,
+) -> Vec<Drawing> {
     let Some(page) = annots::page(document, index) else { return Vec::new() };
     let (_, height) = page.size();
-    annots::list(&page)
+    let found = annots::list(&page);
+    let stamps = found.iter().any(|found| found.kind == poppler::ffi::POPPLER_ANNOT_STAMP);
+    let pictures = if stamps { pictures() } else { Vec::new() };
+    found
         .into_iter()
         .filter_map(|found| {
+            if found.kind == poppler::ffi::POPPLER_ANNOT_STAMP {
+                // Matched to its pixels by its box, which the file and Poppler
+                // give alike.
+                const CLOSE: f64 = 0.05;
+                let (rect, pixels) = pictures.iter().find(|(rect, _)| {
+                    annots::flip(*rect, height).iter().zip(found.area).all(|(a, b)| (a - b).abs() < CLOSE)
+                })?;
+                return Some(Drawing::picture(index, annots::flip(*rect, height), pixels.clone()));
+            }
             let shaped = match found.kind {
                 poppler::ffi::POPPLER_ANNOT_SQUARE => Some(Tool::Rectangle),
                 poppler::ffi::POPPLER_ANNOT_CIRCLE => Some(Tool::Ellipse),
@@ -214,6 +272,7 @@ pub fn on_page(document: &poppler::Document, index: usize) -> Vec<Drawing> {
                 colour: found.colour.unwrap_or(Rgb(0, 0, 0)),
                 width,
                 fill: None,
+                picture: None,
             })
         })
         .collect()
@@ -242,7 +301,7 @@ fn shape_of(found: &annots::Found, tool: Tool, page: usize) -> Option<Drawing> {
     };
     let colour = found.colour.unwrap_or(Rgb(0, 0, 0));
     let mark = Mark { tool, points: corners, colour: colour.to_rgba(), width, fill: None, sequence: 0, signature: None };
-    Some(Drawing { page, tool, strokes: mark.strokes(), colour, width, fill })
+    Some(Drawing { page, tool, strokes: mark.strokes(), colour, width, fill, picture: None })
 }
 
 /// An ink annotation's strokes, in points from the page's top-left corner.
@@ -316,9 +375,23 @@ pub(super) fn add(document: &poppler::Document, page: &poppler::Page, drawing: &
     use glib::translate::{from_glib_full, ToGlibPtr};
 
     let newer = newer::get();
-    let (Some(ink), Some(border)) = (&newer.ink, &newer.border) else { return };
     let (_, height) = page.size();
     let mut rect = annots::rectangle(annots::flip(drawing.area(), height));
+    if let Some(pixels) = &drawing.picture {
+        let Some(stamp) = &newer.stamp else { return };
+        // SAFETY: Poppler's own call, found by name with its header's
+        // signature. The picture is given once the stamp is on its page.
+        unsafe {
+            let raw = (stamp.new)(document.to_glib_none().0, &mut rect);
+            let annot: poppler::Annot = from_glib_full(raw);
+            annots::attach(page, &annot, None, true);
+            if !picture::paint(raw, pixels) {
+                page.remove_annot(&annot);
+            }
+        }
+        return;
+    }
+    let (Some(ink), Some(border)) = (&newer.ink, &newer.border) else { return };
     if drawing.shape().is_some() {
         // SAFETY: Poppler's own calls; the colour is copied by Poppler.
         unsafe {
@@ -397,6 +470,7 @@ mod tests {
             colour: Rgb(0, 0, 0),
             width: 4.0,
             fill: None,
+            picture: None,
         };
         assert_eq!(drawing.area(), [6.0, 16.0, 54.0, 24.0]);
     }
@@ -481,7 +555,7 @@ mod tests {
         annots::save(&doc, &path, None).unwrap();
 
         let doc = open();
-        let read = on_page(&doc, 0);
+        let read = on_page(&doc, 0, Vec::new);
         assert_eq!(read.len(), 2);
         for (got, made) in read.iter().zip(&drawings) {
             assert!(got.same_strokes(&made.strokes), "{got:?} is not {made:?}");
@@ -497,7 +571,7 @@ mod tests {
         Annotation::Ink(moved.clone()).add(&doc);
         annots::save(&doc, &path, None).unwrap();
         let doc = open();
-        let read = on_page(&doc, 0);
+        let read = on_page(&doc, 0, Vec::new);
         assert_eq!(read.len(), 2);
         assert!(read.iter().any(|d| d.same_strokes(&moved.strokes)), "moved where it was put");
         // And taken away.
@@ -505,7 +579,69 @@ mod tests {
             assert!(Annotation::Ink(drawing.clone()).remove(&doc));
         }
         annots::save(&doc, &path, None).unwrap();
-        assert!(on_page(&open(), 0).is_empty());
+        assert!(on_page(&open(), 0, Vec::new).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A picture is a stamp drawing it, read back from the file with its
+    /// pixels, moved by being put down again whole, and taken away.
+    #[test]
+    fn a_picture_comes_back_from_the_file_and_moves_whole() {
+        use super::super::annots::{self, Annotation};
+        use super::super::document;
+        if newer::get().stamp.is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("glance-picture-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, blank_page()).unwrap();
+        let open = || poppler::Document::from_file(&document::uri(&path), None).unwrap();
+        let pictures = || picture::read_back(&path, None, 0);
+        // Red with a see-through middle, and a grey band: colour and alpha.
+        let mut rgba = Vec::new();
+        for y in 0..20u32 {
+            for x in 0..30u32 {
+                let alpha = if (10..20).contains(&x) && (5..15).contains(&y) { 0 } else { 255 };
+                rgba.extend_from_slice(if y < 3 { &[90, 90, 90, 255] } else { &[230, 20, 20, 0] });
+                if y >= 3 {
+                    let n = rgba.len();
+                    rgba[n - 1] = alpha;
+                }
+            }
+        }
+        let pixels = Arc::new(Pixels { width: 30, height: 20, rgba });
+        let placed = Drawing::picture(0, [100.0, 150.0, 190.0, 210.0], pixels.clone());
+        let doc = open();
+        Annotation::Ink(placed.clone()).add(&doc);
+        annots::save(&doc, &path, None).unwrap();
+
+        let doc = open();
+        let read = on_page(&doc, 0, pictures);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].area(), placed.area(), "where it was put");
+        // Every pixel's alpha, and the colour of every one that shows: a
+        // fully see-through pixel has no colour once premultiplied.
+        let same = |got: &Pixels| {
+            (got.width, got.height) == (pixels.width, pixels.height)
+                && got.rgba.as_chunks::<4>().0.iter().zip(pixels.rgba.as_chunks::<4>().0).all(|(a, b)| a[3] == b[3] && (b[3] == 0 || a[..3] == b[..3]))
+        };
+        assert!(read[0].picture.as_deref().is_some_and(same), "every pixel and its alpha");
+        assert!(read[0].is_at((150.0, 200.0), 0.0) && !read[0].is_at((50.0, 200.0), 1.0));
+        // Made bigger and moved: a new stamp with the same picture.
+        let Some(Outline::Frame([x, y, w, h])) = read[0].outline() else { panic!("held by its box") };
+        let moved = read[0].reshaped(&Outline::Frame([x + 200.0, y + 100.0, w * 2.0, h * 2.0]));
+        assert!(Annotation::Ink(read[0].clone()).remove(&doc), "found to take away");
+        Annotation::Ink(moved.clone()).add(&doc);
+        annots::save(&doc, &path, None).unwrap();
+        let doc = open();
+        let read = on_page(&doc, 0, pictures);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].area(), [300.0, 250.0, 480.0, 370.0]);
+        assert!(read[0].picture.as_deref().is_some_and(same), "still the picture, not Poppler's Draft");
+        assert!(Annotation::Ink(read[0].clone()).remove(&doc));
+        annots::save(&doc, &path, None).unwrap();
+        assert!(on_page(&open(), 0, pictures).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -547,7 +683,7 @@ mod tests {
         let page = annots::page(&doc, 0).unwrap();
         let kinds: Vec<_> = annots::list(&page).iter().map(|f| f.kind).collect();
         assert_eq!(kinds, vec![poppler::ffi::POPPLER_ANNOT_SQUARE, poppler::ffi::POPPLER_ANNOT_CIRCLE]);
-        let read = on_page(&doc, 0);
+        let read = on_page(&doc, 0, Vec::new);
         assert_eq!(read.len(), 2);
         for (got, made) in read.iter().zip(&made) {
             assert_eq!((got.tool, got.fill, got.colour), (made.tool, made.fill, made.colour));
@@ -567,7 +703,7 @@ mod tests {
         Annotation::Ink(changed.clone()).add(&doc);
         annots::save(&doc, &path, None).unwrap();
         let doc = open();
-        let read = on_page(&doc, 0);
+        let read = on_page(&doc, 0, Vec::new);
         let moved = read.iter().find(|d| d.tool == Tool::Rectangle).unwrap();
         assert_eq!(moved.fill, None);
         assert!((moved.width - 2.0).abs() < 0.01);
@@ -576,7 +712,7 @@ mod tests {
             assert!(Annotation::Ink(drawing.clone()).remove(&doc), "{drawing:?} not found to remove");
         }
         annots::save(&doc, &path, None).unwrap();
-        assert!(on_page(&open(), 0).is_empty());
+        assert!(on_page(&open(), 0, Vec::new).is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -614,7 +750,7 @@ mod tests {
         let doc = open();
         let page = annots::page(&doc, 0).unwrap();
         assert!(annots::list(&page).iter().all(|f| f.kind == poppler::ffi::POPPLER_ANNOT_INK));
-        let read = on_page(&doc, 0);
+        let read = on_page(&doc, 0, Vec::new);
         assert_eq!(read.len(), 2);
         assert!(read[0].same_strokes(&made[0].strokes), "the star's eleven corners, round and closed");
         assert_eq!(read[1].tool, Tool::DoubleArrow);

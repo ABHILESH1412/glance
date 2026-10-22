@@ -381,6 +381,7 @@ mod tests {
             colour: Rgb(0x1c1c, 0x7171, 0xd8d8),
             width: 3.0,
             fill: None,
+            picture: None,
         });
 
         let doc = open();
