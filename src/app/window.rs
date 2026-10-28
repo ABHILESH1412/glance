@@ -182,6 +182,11 @@ mod imp {
         pub live_button: gtk::ToggleButton,
         pub live_status: gtk::Revealer,
         pub live: RefCell<crate::app::live_text::LiveState>,
+        /// Removing the background: the button, the pill saying it is under
+        /// way, and which picture it is for, until its answer comes.
+        pub cutout_button: gtk::Button,
+        pub cutout_status: gtk::Revealer,
+        pub cutting: RefCell<Option<std::path::PathBuf>>,
         /// The person agreed to close with unsaved work, so do not ask again.
         pub closing_confirmed: Cell<bool>,
         /// Close the window once the save under way has worked.
@@ -369,6 +374,9 @@ mod imp {
                 live_button: gtk::ToggleButton::new(),
                 live_status: gtk::Revealer::new(),
                 live: RefCell::new(Default::default()),
+                cutout_button: gtk::Button::new(),
+                cutout_status: gtk::Revealer::new(),
+                cutting: RefCell::new(None),
                 closing_confirmed: Cell::new(false),
                 close_after_save: Cell::new(false),
                 slideshow: Cell::new(false),
@@ -541,6 +549,7 @@ impl Window {
         stage.set_child(Some(&body));
         stage.add_overlay(&imp.slideshow_controls);
         stage.add_overlay(&imp.live_status);
+        stage.add_overlay(&imp.cutout_status);
         imp.toasts.set_child(Some(&stage));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");

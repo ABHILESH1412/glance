@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 
-use crate::live_text::install::Paths;
+use crate::live_text::install::{CutoutPaths, Paths};
 use crate::live_text::protocol::{self, Reply};
 
 /// A picture to read: its id, size and RGBA pixels.
@@ -112,4 +112,62 @@ fn write_jobs(mut stdin: ChildStdin, inbox: mpsc::Receiver<Job>) {
 
 fn reap(mut child: Child) {
     let _ = child.wait();
+}
+
+/// Find the subject of one picture: start the helper with the subject model,
+/// hand it the picture, read back one byte a pixel, 0 for background to 255
+/// for the subject, and let it go, memory and all. Blocking: run it on a
+/// thread of its own.
+pub fn cut_out(program: &Path, paths: &CutoutPaths, width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let stopped = |what: &str| format!("The background remover stopped: {what}");
+    let mut child = Command::new(program)
+        .arg("--runtime")
+        .arg(&paths.runtime)
+        .arg("--cutout")
+        .arg(&paths.model)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Could not start the background remover: {e}"))?;
+    let mut stdin = child.stdin.take().expect("piped");
+    let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
+    let sent = stdin
+        .write_all(protocol::cut_request(1, width, height).as_bytes())
+        .and_then(|()| stdin.write_all(rgba))
+        .and_then(|()| stdin.flush());
+    let mut header = String::new();
+    let answer = stdout.read_line(&mut header);
+    // Closing its input lets it go once it has answered.
+    drop(stdin);
+    let result = match (sent, answer) {
+        (_, Ok(n)) if n > 0 => match protocol::parse_reply(&header) {
+            Some(Reply::Mask(1, w, h)) if (w, h) == (width, height) => {
+                let mut mask = vec![0u8; width as usize * height as usize];
+                stdout.read_exact(&mut mask).map(|()| mask).map_err(|e| stopped(&e.to_string()))
+            }
+            Some(Reply::Fail(_, reason)) => Err(stopped(&reason)),
+            _ => Err(stopped("it gave an answer that makes no sense")),
+        },
+        (Err(e), _) => Err(stopped(&e.to_string())),
+        _ => Err(stopped("it ended without answering")),
+    };
+    let status = child.wait();
+    // Refused its options, so it is a helper from before it could do this:
+    // in a build, `cargo run` makes Glance afresh but not its helper.
+    if result.is_err() && status.as_ref().is_ok_and(|s| s.code() == Some(2)) {
+        return Err("The background remover's helper is from an older Glance. Build both again with \
+                    `cargo build --release`."
+            .to_string());
+    }
+    // Stopped from outside while it worked: by the system, or a low-memory
+    // guard such as earlyoom, for the memory it was using.
+    use std::os::unix::process::ExitStatusExt;
+    if result.is_err() && status.is_ok_and(|s| matches!(s.signal(), Some(9 | 15))) {
+        return Err("The background remover was stopped, most likely because the computer ran short of memory. \
+                    Close some programs and try again."
+            .to_string());
+    }
+    result
 }

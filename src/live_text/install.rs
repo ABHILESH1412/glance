@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Getting Live Text's parts onto the computer, the first time it is used:
-//! ONNX Runtime, which runs the models, and the two PP-OCRv6 models
-//! themselves. About 41 MB, downloaded once, into
-//! `~/.local/share/glance/ocr`, and kept.
+//! Getting the parts of Glance's on-device features onto the computer, the
+//! first time each is used: ONNX Runtime, which runs the models and is shared,
+//! and each feature's own models. Live Text is the two PP-OCRv6 models,
+//! about 41 MB with the engine; removing backgrounds is BiRefNet-lite, about
+//! 181 MB more. Downloaded once, into `~/.local/share/glance/ocr`, and kept.
 //!
 //! Every file is checked against a SHA-256 fixed here, in the source, before
 //! it is kept: a download that was cut short, corrupted, or swapped for
@@ -34,7 +35,7 @@ pub struct Part {
 }
 
 const RUNTIME_X86_64: Part = Part {
-    name: "Text engine (ONNX Runtime 1.30)",
+    name: "Engine (ONNX Runtime 1.30)",
     url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-x64-1.30.0.tgz",
     sha256: "a5ed5a3cac51fbb2e90da632ae43d19212faaa20e76484e62bcb7c23ddb3b3fd",
     size: 11_306_877,
@@ -43,7 +44,7 @@ const RUNTIME_X86_64: Part = Part {
 };
 
 const RUNTIME_AARCH64: Part = Part {
-    name: "Text engine (ONNX Runtime 1.30)",
+    name: "Engine (ONNX Runtime 1.30)",
     url: "https://github.com/microsoft/onnxruntime/releases/download/v1.30.0/onnxruntime-linux-aarch64-1.30.0.tgz",
     sha256: "e16a27a8ed330bbc698df7330b0cf56e722f354e3bcc92118682c74ef3c3e3da",
     size: 10_269_495,
@@ -69,6 +70,56 @@ pub const RECOGNISE: Part = Part {
     member: None,
 };
 
+/// BiRefNet-lite (MIT), exported to take any size, so it can be run at the
+/// size that fits in memory (see the helper's `cutout.rs`). The standard
+/// export works at 1024 only, which needs more than 3 GB; at half precision
+/// it needs more again, on a processor.
+pub const CUTOUT: Part = Part {
+    name: "Finding the subject (BiRefNet-lite)",
+    url: "https://huggingface.co/senty-au/BiRefNet_lite-ONNX-dynamic/resolve/173d635935b93839608b9b9039da8d1d212471e9/onnx/model.onnx",
+    sha256: "1e0da42f0fde010e32e938bad388457ecefe35806fde9d923421997861ae9391",
+    size: 180_839_545,
+    file: "BiRefNet_lite.onnx",
+    member: None,
+};
+
+/// A feature that runs on this computer, with models of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feature {
+    LiveText,
+    /// Removing backgrounds.
+    Cutout,
+}
+
+impl Feature {
+    pub const ALL: [Feature; 2] = [Feature::LiveText, Feature::Cutout];
+
+    /// Its own models, without the engine they share.
+    pub fn models(self) -> &'static [&'static Part] {
+        match self {
+            Feature::LiveText => &[&DETECT, &RECOGNISE],
+            Feature::Cutout => &[&CUTOUT],
+        }
+    }
+
+    /// Everything it needs, for this computer.
+    pub fn parts(self) -> Vec<&'static Part> {
+        runtime().into_iter().chain(self.models().iter().copied()).collect()
+    }
+
+    /// What it still needs downloaded.
+    pub fn missing(self) -> Vec<&'static Part> {
+        let folder = folder();
+        self.parts().into_iter().filter(|part| !is_there(&folder, part)).collect()
+    }
+
+    /// Whether any of its own models are kept.
+    pub fn any_kept(self) -> bool {
+        let folder = folder();
+        self.models().iter().any(|part| is_there(&folder, part))
+    }
+}
+
 /// The runtime for this computer, if ONNX Runtime is published for it.
 pub fn runtime() -> Option<&'static Part> {
     match std::env::consts::ARCH {
@@ -76,11 +127,6 @@ pub fn runtime() -> Option<&'static Part> {
         "aarch64" => Some(&RUNTIME_AARCH64),
         _ => None,
     }
-}
-
-/// Everything Live Text needs, for this computer.
-pub fn parts() -> Vec<&'static Part> {
-    runtime().into_iter().chain([&DETECT, &RECOGNISE]).collect()
 }
 
 /// The Live Text folder.
@@ -115,12 +161,6 @@ fn is_there(folder: &Path, part: &Part) -> bool {
     recorded(folder).contains(&record_line(part)) && folder.join(part.file).is_file()
 }
 
-/// What still has to be downloaded.
-pub fn missing() -> Vec<&'static Part> {
-    let folder = folder();
-    parts().into_iter().filter(|part| !is_there(&folder, part)).collect()
-}
-
 /// The files, if everything is there.
 pub fn installed() -> Option<Paths> {
     let folder = folder();
@@ -132,18 +172,64 @@ pub fn installed() -> Option<Paths> {
     })
 }
 
+/// The files the background remover is started with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CutoutPaths {
+    pub runtime: PathBuf,
+    pub model: PathBuf,
+}
+
+/// The background remover's files, if they are all there.
+pub fn cutout_installed() -> Option<CutoutPaths> {
+    let folder = folder();
+    let runtime = runtime()?;
+    [runtime, &CUTOUT]
+        .iter()
+        .all(|part| is_there(&folder, part))
+        .then(|| CutoutPaths { runtime: folder.join(runtime.file), model: folder.join(CUTOUT.file) })
+}
+
 /// How much room a part takes once kept, if it is there.
 pub fn kept_size(part: &Part) -> Option<u64> {
     let folder = folder();
     is_there(&folder, part).then(|| std::fs::metadata(folder.join(part.file)).map(|m| m.len()).ok()).flatten()
 }
 
-/// Take it all away again: everything in the Live Text folder.
-pub fn remove() -> std::io::Result<()> {
-    match std::fs::remove_dir_all(folder()) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
+/// Take a feature away again: its models, and the engine too unless another
+/// feature still has models that need it. Once nothing is left the folder
+/// goes, and anything else that was in it.
+pub fn remove_feature(feature: Feature) -> std::io::Result<()> {
+    remove_from(&folder(), feature)
+}
+
+fn remove_from(folder: &Path, feature: Feature) -> std::io::Result<()> {
+    let others_kept = Feature::ALL
+        .iter()
+        .filter(|&&other| other != feature)
+        .any(|other| other.models().iter().any(|part| is_there(folder, part)));
+    let mut going: Vec<&Part> = feature.models().to_vec();
+    if !others_kept {
+        going.extend([&RUNTIME_X86_64, &RUNTIME_AARCH64]);
     }
+    let lines: Vec<String> = recorded(folder)
+        .into_iter()
+        .filter(|line| !going.iter().any(|part| line.starts_with(&format!("{} ", part.file))))
+        .collect();
+    if lines.is_empty() {
+        return match std::fs::remove_dir_all(folder) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        };
+    }
+    // The record first, so it never mentions a file that has gone.
+    std::fs::write(folder.join(RECORD), lines.join("\n") + "\n")?;
+    for part in going {
+        match std::fs::remove_file(folder.join(part.file)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// How the download is getting on: bytes so far, and in all.
@@ -334,14 +420,35 @@ mod tests {
     }
 
     #[test]
+    fn removing_one_feature_keeps_the_engine_the_other_still_needs() {
+        let folder = std::env::temp_dir().join(format!("glance-features-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let runtime = runtime().unwrap();
+        for part in [runtime, &DETECT, &RECOGNISE, &CUTOUT] {
+            std::fs::write(folder.join(part.file), b"x").unwrap();
+        }
+        let record: Vec<String> = [runtime, &DETECT, &RECOGNISE, &CUTOUT].iter().map(|p| record_line(p)).collect();
+        std::fs::write(folder.join(RECORD), record.join("\n") + "\n").unwrap();
+
+        remove_from(&folder, Feature::LiveText).unwrap();
+        assert!(!is_there(&folder, &DETECT) && !folder.join(DETECT.file).exists());
+        assert!(is_there(&folder, runtime) && is_there(&folder, &CUTOUT), "the background remover still works");
+
+        remove_from(&folder, Feature::Cutout).unwrap();
+        assert!(!folder.exists(), "nothing left, so the folder goes");
+    }
+
+    #[test]
     fn every_part_is_pinned() {
-        for part in [&RUNTIME_X86_64, &RUNTIME_AARCH64, &DETECT, &RECOGNISE] {
+        for part in [&RUNTIME_X86_64, &RUNTIME_AARCH64, &DETECT, &RECOGNISE, &CUTOUT] {
             assert!(part.url.starts_with("https://"), "{}", part.name);
             assert_eq!(part.sha256.len(), 64);
             assert!(part.sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
             assert!(part.size > 1_000_000);
         }
-        let total: u64 = parts().iter().map(|part| part.size).sum();
+        let total: u64 = Feature::LiveText.parts().iter().map(|part| part.size).sum();
         assert!((40_000_000..45_000_000).contains(&total), "about 41 MB: {total}");
+        let total: u64 = Feature::Cutout.parts().iter().map(|part| part.size).sum();
+        assert!((185_000_000..200_000_000).contains(&total), "about 192 MB with the engine: {total}");
     }
 }

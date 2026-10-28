@@ -131,6 +131,20 @@ impl Window {
         self.add_action(&select_all);
         self.build_live_status();
 
+        // Taking the background off: in the editor, and from the picture's
+        // menu as Copy Subject.
+        for (name, run) in [("remove-background", Window::remove_background as fn(&Window)), ("copy-subject", Window::copy_subject)] {
+            let action = gio::SimpleAction::new(name, None);
+            action.set_enabled(false);
+            action.connect_activate(glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |_, _| run(&window)
+            ));
+            self.add_action(&action);
+        }
+        self.build_cutout_status();
+
         // The frames list and the picture keep each other in step.
         let frames = imp.frames.clone();
         let window = self.downgrade();
@@ -208,6 +222,7 @@ impl Window {
             copy.append(Some("Select _All Text"), Some("win.live-select-all"));
         }
         copy.append(Some(if animated { "_Copy This Frame" } else { "_Copy Image" }), Some("win.copy"));
+        copy.append(Some("Copy _Subject"), Some("win.copy-subject"));
         let look = gio::Menu::new();
         look.append(Some("Select _Text in Image"), Some("win.live-text"));
         look.append(Some("Image _Info"), Some("win.inspector"));
@@ -232,7 +247,7 @@ impl Window {
     pub(crate) fn picture_shown(&self, picture: Picture) {
         let imp = self.imp();
         imp.picture.replace(Some(picture));
-        for name in ["inspector", "live-text"] {
+        for name in ["inspector", "live-text", "remove-background", "copy-subject"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(true);
             }
@@ -282,7 +297,7 @@ impl Window {
         imp.inspector.clear();
         imp.frames.set_frames(&[]);
         self.live_stop();
-        for name in ["inspector", "live-text", "frame-previous", "frame-next", "frame-play"] {
+        for name in ["inspector", "live-text", "frame-previous", "frame-next", "frame-play", "remove-background", "copy-subject"] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 if name == "inspector" {
                     action.change_state(&false.to_variant());

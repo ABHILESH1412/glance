@@ -35,7 +35,8 @@ struct SignaturesPage {
 /// The Live Text page, refilled whenever what is downloaded changes.
 struct LiveTextPage {
     dialog: adw::PreferencesDialog,
-    parts: adw::PreferencesGroup,
+    /// Each feature's own downloads, with its button.
+    features: Vec<(install::Feature, adw::PreferencesGroup)>,
     place: adw::PreferencesGroup,
     /// What the last fill added, to take out before the next.
     added: RefCell<Vec<(adw::PreferencesGroup, gtk::Widget)>>,
@@ -91,20 +92,29 @@ impl Window {
         dialog.add(&signatures);
         let signatures = Rc::new(SignaturesPage { dialog: dialog.clone(), group, added: RefCell::default() });
         self.fill_signatures_page(&signatures);
-        let parts = adw::PreferencesGroup::builder()
+        let live_text = adw::PreferencesGroup::builder()
             .title("Live Text")
             .description(
                 "Selecting and copying the text in pictures. What it needs is downloaded the first time it is \
                  used, and the reading happens on this computer: pictures are never sent anywhere.",
             )
             .build();
-        let place = adw::PreferencesGroup::new();
+        let cutout = adw::PreferencesGroup::builder()
+            .title("Background Remover")
+            .description(
+                "Remove Background in the editor, and Copy Subject in a picture's menu. Downloaded the first time \
+                 it is used, and done on this computer too.",
+            )
+            .build();
+        let place = adw::PreferencesGroup::builder().title("On This Computer").build();
         let page =
-            adw::PreferencesPage::builder().name("live-text").title("Live Text").icon_name("glance-live-text-symbolic").build();
-        page.add(&parts);
+            adw::PreferencesPage::builder().name("live-text").title("Downloads").icon_name("folder-download-symbolic").build();
+        page.add(&live_text);
+        page.add(&cutout);
         page.add(&place);
         dialog.add(&page);
-        let page = Rc::new(LiveTextPage { dialog: dialog.clone(), parts, place, added: RefCell::default() });
+        let features = vec![(install::Feature::LiveText, live_text), (install::Feature::Cutout, cutout)];
+        let page = Rc::new(LiveTextPage { dialog: dialog.clone(), features, place, added: RefCell::default() });
         self.fill_live_text_page(&page);
         // The buttons hold the page weakly; the dialog holds it for as long
         // as it is open.
@@ -367,19 +377,15 @@ impl Window {
         page.dialog.add_toast(toast);
     }
 
-    /// What is downloaded, part by part, and the button that fits: Remove
-    /// when anything is there, Download when nothing is.
+    /// What is downloaded, feature by feature and part by part, and the
+    /// button that fits each: Remove when its models are there, Download when
+    /// they are not. The engine they share is shown once, below.
     fn fill_live_text_page(&self, page: &Rc<LiveTextPage>) {
         for (group, widget) in page.added.borrow_mut().drain(..) {
             group.remove(&widget);
         }
-
-        let mut total = 0u64;
-        let mut any = false;
-        for part in install::parts() {
+        let part_row = |part: &install::Part| {
             let kept = install::kept_size(part);
-            any |= kept.is_some();
-            total += kept.unwrap_or(0);
             let row = adw::ActionRow::builder()
                 .title(part.name)
                 .subtitle(match kept {
@@ -390,20 +396,83 @@ impl Window {
             let icon = gtk::Image::from_icon_name(if kept.is_some() { "object-select-symbolic" } else { "folder-download-symbolic" });
             icon.set_tooltip_text(Some(if kept.is_some() { "Downloaded" } else { "Not downloaded" }));
             row.add_suffix(&icon);
-            page.add(&page.parts, &row);
-        }
-        if install::runtime().is_none() {
-            let row = adw::ActionRow::builder()
-                .title("Not available on this kind of computer")
-                .subtitle("The text engine is only made for 64-bit Intel, AMD and ARM processors.")
-                .build();
-            page.add(&page.parts, &row);
+            row
+        };
+
+        let available = install::runtime().is_some();
+        for (feature, group) in &page.features {
+            let feature = *feature;
+            for part in feature.models() {
+                page.add(group, &part_row(part));
+            }
+            let title = match feature {
+                install::Feature::LiveText => "Live Text",
+                install::Feature::Cutout => "Background Remover",
+            };
+            let button = if feature.any_kept() {
+                let remove = gtk::Button::with_label(&format!("Remove {title}…"));
+                remove.add_css_class("destructive-action");
+                let page = Rc::downgrade(page);
+                remove.connect_clicked(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_| {
+                        if let Some(page) = page.upgrade() {
+                            window.ask_to_remove_live_text(&page, feature);
+                        }
+                    }
+                ));
+                remove
+            } else {
+                let download = gtk::Button::with_label(&format!("Download {title}…"));
+                download.add_css_class("suggested-action");
+                download.set_sensitive(available);
+                let page = Rc::downgrade(page);
+                download.connect_clicked(glib::clone!(
+                    #[weak(rename_to = window)]
+                    self,
+                    move |_| {
+                        let page = page.clone();
+                        let refill = move |window: &Window| {
+                            if let Some(page) = page.upgrade() {
+                                window.fill_live_text_page(&page);
+                            }
+                        };
+                        match feature {
+                            install::Feature::LiveText => window.with_live_text(move |window, _| refill(window)),
+                            install::Feature::Cutout => window.with_cutout(move |window, _| refill(window)),
+                        }
+                    }
+                ));
+                download
+            };
+            button.add_css_class("pill");
+            button.set_halign(gtk::Align::Center);
+            button.set_margin_top(12);
+            page.add(group, &button);
         }
 
-        let folder = install::folder();
+        match install::runtime() {
+            Some(runtime) => {
+                let row = part_row(runtime);
+                row.set_subtitle(&format!("{} · used by both", row.subtitle().unwrap_or_default()));
+                page.add(&page.place, &row);
+            }
+            None => {
+                let row = adw::ActionRow::builder()
+                    .title("Not available on this kind of computer")
+                    .subtitle("The engine is only made for 64-bit Intel, AMD and ARM processors.")
+                    .build();
+                page.add(&page.place, &row);
+            }
+        }
+        let parts: Vec<&install::Part> =
+            install::runtime().into_iter().chain(install::Feature::ALL.iter().flat_map(|f| f.models().iter().copied())).collect();
+        let total: u64 = parts.iter().filter_map(|part| install::kept_size(part)).sum();
+        let any = total > 0;
         let summary = adw::ActionRow::builder()
             .title(if any { format!("{} on disk", glib::format_size(total)) } else { "Nothing downloaded".to_string() })
-            .subtitle(folder.display().to_string())
+            .subtitle(install::folder().display().to_string())
             .subtitle_selectable(true)
             .build();
         if any {
@@ -425,53 +494,26 @@ impl Window {
             summary.add_suffix(&open);
         }
         page.add(&page.place, &summary);
-
-        let button = if any {
-            let remove = gtk::Button::with_mnemonic("_Remove Live Text…");
-            remove.add_css_class("destructive-action");
-            let page = Rc::downgrade(page);
-            remove.connect_clicked(glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |_| {
-                    if let Some(page) = page.upgrade() {
-                        window.ask_to_remove_live_text(&page);
-                    }
-                }
-            ));
-            remove
-        } else {
-            let download = gtk::Button::with_mnemonic("_Download Live Text…");
-            download.add_css_class("suggested-action");
-            download.set_sensitive(install::runtime().is_some());
-            let page = Rc::downgrade(page);
-            download.connect_clicked(glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |_| {
-                    let page = page.clone();
-                    window.with_live_text(move |window, _| {
-                        if let Some(page) = page.upgrade() {
-                            window.fill_live_text_page(&page);
-                        }
-                    });
-                }
-            ));
-            download
-        };
-        button.add_css_class("pill");
-        button.set_halign(gtk::Align::Center);
-        button.set_margin_top(12);
-        page.add(&page.place, &button);
     }
 
-    fn ask_to_remove_live_text(&self, page: &Rc<LiveTextPage>) {
-        let size: u64 = install::parts().into_iter().filter_map(install::kept_size).sum();
+    fn ask_to_remove_live_text(&self, page: &Rc<LiveTextPage>, feature: install::Feature) {
+        // The engine goes too when nothing else needs it.
+        let others = install::Feature::ALL.iter().any(|&other| other != feature && other.any_kept());
+        let size: u64 = feature
+            .models()
+            .iter()
+            .copied()
+            .chain(install::runtime().filter(|_| !others))
+            .filter_map(install::kept_size)
+            .sum();
+        let (title, name) = match feature {
+            install::Feature::LiveText => ("Remove Live Text?", "Live Text is"),
+            install::Feature::Cutout => ("Remove the Background Remover?", "the background remover is"),
+        };
         let ask = adw::AlertDialog::new(
-            Some("Remove Live Text?"),
+            Some(title),
             Some(&format!(
-                "The {} downloaded for it will be deleted. It can be downloaded again the next time Live Text is \
-                 used.",
+                "The {} downloaded for it will be deleted. It can be downloaded again the next time {name} used.",
                 glib::format_size(size)
             )),
         );
@@ -487,11 +529,16 @@ impl Window {
                 #[weak(rename_to = window)]
                 self,
                 move |_, _| {
-                    // Off, and its reader let go of, before its files go.
-                    window.live_stop();
-                    window.live_forget_helper();
-                    match install::remove() {
-                        Ok(()) => window.toast("Live Text removed."),
+                    if feature == install::Feature::LiveText {
+                        // Off, and its reader let go of, before its files go.
+                        window.live_stop();
+                        window.live_forget_helper();
+                    }
+                    match install::remove_feature(feature) {
+                        Ok(()) => window.toast(match feature {
+                            install::Feature::LiveText => "Live Text removed.",
+                            install::Feature::Cutout => "The background remover was removed.",
+                        }),
                         Err(e) => window.toast(&format!("Could not remove everything: {e}")),
                     }
                     if let Some(page) = weak.upgrade() {

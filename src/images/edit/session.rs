@@ -202,7 +202,7 @@ impl Window {
         self.refresh_tone();
     }
 
-    fn push_history(&self, previous: image::DynamicImage) {
+    pub(crate) fn push_history(&self, previous: image::DynamicImage) {
         let imp = self.imp();
         let mut history = imp.history.borrow_mut();
         history.push(previous);

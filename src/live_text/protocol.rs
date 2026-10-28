@@ -14,6 +14,11 @@
 //! (top left, top right, bottom right, bottom left), where each character
 //! starts and ends along the line as a fraction of its length, and last the
 //! text itself, which may have spaces in it but never a line break.
+//!
+//! For the background remover, `CUT <id> <width> <height>` and the pixels
+//! ask which of them are the subject. The answer is `MASK <id> <width>
+//! <height>` followed by `width * height` bytes, one a pixel, 0 for
+//! background to 255 for the subject; or `FAIL` as before.
 
 /// One line of text found on a picture.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,6 +39,17 @@ pub enum Reply {
     Line(Line),
     Done(u64),
     Fail(u64, String),
+    /// A mask's id and size; its bytes follow the line.
+    Mask(u64, u32, u32),
+}
+
+/// What a request asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// The text in the picture.
+    Read,
+    /// Which of its pixels are the subject.
+    Cut,
 }
 
 /// The line that asks for a picture to be read. The pixels follow it.
@@ -41,16 +57,28 @@ pub fn request(id: u64, width: u32, height: u32) -> String {
     format!("READ {id} {width} {height}\n")
 }
 
-/// The id, width and height from a request line.
-pub fn parse_request(line: &str) -> Option<(u64, u32, u32)> {
+/// The line that asks for a picture's subject. The pixels follow it.
+pub fn cut_request(id: u64, width: u32, height: u32) -> String {
+    format!("CUT {id} {width} {height}\n")
+}
+
+/// What is asked, and the id, width and height, from a request line.
+pub fn parse_request(line: &str) -> Option<(Ask, u64, u32, u32)> {
     let mut parts = line.split_whitespace();
-    if parts.next()? != "READ" {
-        return None;
-    }
+    let ask = match parts.next()? {
+        "READ" => Ask::Read,
+        "CUT" => Ask::Cut,
+        _ => return None,
+    };
     let id = parts.next()?.parse().ok()?;
     let width = parts.next()?.parse().ok()?;
     let height = parts.next()?.parse().ok()?;
-    (width > 0 && height > 0 && parts.next().is_none()).then_some((id, width, height))
+    (width > 0 && height > 0 && parts.next().is_none()).then_some((ask, id, width, height))
+}
+
+/// The line that starts a mask; its bytes follow.
+pub fn mask(id: u64, width: u32, height: u32) -> String {
+    format!("MASK {id} {width} {height}\n")
 }
 
 impl Line {
@@ -86,6 +114,13 @@ pub fn parse_reply(line: &str) -> Option<Reply> {
     let (kind, rest) = line.split_once(' ')?;
     match kind {
         "DONE" => Some(Reply::Done(rest.trim().parse().ok()?)),
+        "MASK" => {
+            let mut parts = rest.split_whitespace();
+            let id = parts.next()?.parse().ok()?;
+            let width = parts.next()?.parse().ok()?;
+            let height = parts.next()?.parse().ok()?;
+            Some(Reply::Mask(id, width, height))
+        }
         "FAIL" => {
             let (id, reason) = rest.split_once(' ').unwrap_or((rest, ""));
             Some(Reply::Fail(id.parse().ok()?, reason.to_string()))
@@ -121,9 +156,12 @@ mod tests {
 
     #[test]
     fn requests_and_answers_survive_the_trip() {
-        assert_eq!(parse_request(request(7, 640, 480).trim()), Some((7, 640, 480)));
+        assert_eq!(parse_request(request(7, 640, 480).trim()), Some((Ask::Read, 7, 640, 480)));
+        assert_eq!(parse_request(cut_request(8, 64, 48).trim()), Some((Ask::Cut, 8, 64, 48)));
         assert_eq!(parse_request("READ 7 0 480"), None);
         assert_eq!(parse_request("READ 7 640"), None);
+        assert_eq!(parse_request("PAINT 7 640 480"), None);
+        assert_eq!(parse_reply(&mask(8, 64, 48)), Some(Reply::Mask(8, 64, 48)));
 
         let line = Line {
             text: "Total due:  $1,284.50".into(),

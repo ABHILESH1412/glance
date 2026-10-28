@@ -231,8 +231,9 @@ sudo pacman -R glance-image-viewer                        # Arch package
 rm ~/Applications/Glance-x86_64.AppImage                  # AppImage
 ```
 
-Your settings stay in `~/.config/glance` and your signatures and Live Text's download in
-`~/.local/share/glance` (for the Flatpak, both under `~/.var/app/io.github.abhilesh1412.Glance`).
+Your settings stay in `~/.config/glance`, and your signatures and what Live Text and the
+background remover downloaded in `~/.local/share/glance` (for the Flatpak, both under
+`~/.var/app/io.github.abhilesh1412.Glance`).
 Delete those folders as well to remove every trace.
 
 ### Building from source
@@ -401,6 +402,19 @@ asking, checked against fixed checksums, and kept in `~/.local/share/glance/ocr`
 In a PDF, right-click a picture on a page for **Copy Image**, **Select Text in Image** or
 **Copy Text from Image**: only that picture is read, which is what a scanned page is.
 
+**Remove Background** — in the editor, one press keeps a picture's subject and makes the rest
+see-through; it is one more edit, undone like any other. Right-click a picture for **Copy
+Subject**, which copies just the subject, trimmed to it, to paste anywhere. It uses
+BiRefNet-lite (MIT), run on your computer by the same small helper as Live Text, so nothing is
+sent anywhere. The model looks at the picture at 640 pixels square; its answer is then traced
+along the picture's own edges, so hair and outlines come from the picture rather than from a
+blurred guess. On a laptop it takes about 8 seconds, 5 of them getting the model ready, and about
+1 GB of memory while it works, all of it given back once it is done. (At the model's usual 1024
+pixels it would need more than 3 GB, which is why it is not run that way.) The model, 181 MB, is
+downloaded the first time, after asking, checked against a fixed checksum, and shares Live Text's
+engine. Saving keeps the transparency in PNG, WebP, HEIC, TIFF and
+PSD; a JPEG has none, so Glance says to Export instead.
+
 **PDFs** — every page in one scrolling column, one page at a time, or two side by side
 like an open book, fitted to the window. Only the pages near the screen are drawn and
 held in memory, so a long document costs about what a short one does. Zooming redraws
@@ -562,7 +576,7 @@ and shrinks to fit whichever is showing.
 light, dark or the desktop's style; how long a slideshow lingers; a PDF's page layout,
 night mode and highlight colour, and the paper pictures go on when combined; the
 signatures kept, to remove (with undo) or add to; whether updates install themselves; and
-what Live Text has downloaded.
+what Live Text and the background remover have downloaded, each removable on its own.
 Each is the same switch the menus use, so the two always agree.
 
 **Editing** — one panel, one section at a time:
@@ -689,6 +703,7 @@ in October 2026 — features move, so check upstream if one matters to you.
 <tr><td>SVG</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td></tr>
 <tr><td>ICC colour management</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td></tr>
 <tr><td>Live Text — copy the text out of a picture</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>Remove a picture's background, on the computer</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Filmstrip of the whole folder</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>EXIF / metadata panel</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>Slideshow</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td></tr>

@@ -17,7 +17,7 @@ use gtk::{gio, glib};
 use crate::app::window::Window;
 use crate::images::live_layer::{LiveLayer, TextLine};
 use crate::live_text::client::{self, Helper};
-use crate::live_text::install::{self, Part, Paths};
+use crate::live_text::install::{self, Feature, Part, Paths};
 use crate::live_text::protocol::{self, Reply};
 
 /// How long the helper is kept after its last read, ready for the next
@@ -90,8 +90,35 @@ pub struct LiveState {
     read: HashMap<Key, Vec<TextLine>>,
 }
 
-/// What to do once Live Text's parts are in place.
-type Then = Rc<RefCell<Option<Box<dyn FnOnce(&Window, Paths)>>>>;
+/// What to do once a feature's parts are in place.
+type Then = Rc<RefCell<Option<Box<dyn FnOnce(&Window)>>>>;
+
+/// How each feature's download is spoken of.
+struct Words {
+    /// Its name in a title: "Live Text".
+    title: &'static str,
+    /// Its name in a sentence.
+    name: &'static str,
+    /// What the download is, for the question; `{}` is its size.
+    what: &'static str,
+}
+
+fn words(feature: Feature) -> Words {
+    match feature {
+        Feature::LiveText => Words {
+            title: "Live Text",
+            name: "Live Text",
+            what: "Reading the text in pictures needs a one-time download of {}: the engine, and what it \
+                   needs to read English and about 45 other languages written in the Latin alphabet.",
+        },
+        Feature::Cutout => Words {
+            title: "Background Remover",
+            name: "The background remover",
+            what: "Taking the background off a picture needs a one-time download of {}: the engine, and \
+                   BiRefNet-lite, which tells a picture's subject from its background.",
+        },
+    }
+}
 
 impl Window {
     /// Run `then` with Live Text's files, downloading them first, after
@@ -105,27 +132,45 @@ impl Window {
             then(self, paths);
             return;
         }
-        let then: Then = Rc::new(RefCell::new(Some(Box::new(then))));
-        self.ask_to_download(then);
+        let then: Then = Rc::new(RefCell::new(Some(Box::new(move |window: &Window| match install::installed() {
+            Some(paths) => then(window, paths),
+            None => window.toast("The files arrived, but could not be found afterwards."),
+        }))));
+        self.ask_to_download(Feature::LiveText, then);
     }
 
-    fn ask_to_download(&self, then: Then) {
-        let missing = install::missing();
-        let size: u64 = missing.iter().map(|part| part.size).sum();
+    /// Run `then` with the background remover's files, downloading them
+    /// first, after asking, if they are not here yet.
+    pub(crate) fn with_cutout(&self, then: impl FnOnce(&Window, install::CutoutPaths) + 'static) {
+        if install::runtime().is_none() {
+            self.toast("Removing backgrounds is not available on this kind of computer.");
+            return;
+        }
+        if let Some(paths) = install::cutout_installed() {
+            then(self, paths);
+            return;
+        }
+        let then: Then = Rc::new(RefCell::new(Some(Box::new(move |window: &Window| match install::cutout_installed() {
+            Some(paths) => then(window, paths),
+            None => window.toast("The files arrived, but could not be found afterwards."),
+        }))));
+        self.ask_to_download(Feature::Cutout, then);
+    }
+
+    fn ask_to_download(&self, feature: Feature, then: Then) {
+        let words = words(feature);
+        let size: u64 = feature.missing().iter().map(|part| part.size).sum();
         let dialog = adw::AlertDialog::new(
-            Some("Download Live Text?"),
+            Some(&format!("Download {}?", words.title)),
             Some(&format!(
-                "Reading the text in pictures needs a one-time download of {}: the text engine, and \
-                 what it needs to read English and about 45 other languages written in the Latin \
-                 alphabet. It is kept in your home folder for next time.\n\nYour pictures never leave \
-                 your computer.",
-                glib::format_size(size)
+                "{} It is kept in your home folder for next time.\n\nYour pictures never leave your computer.",
+                words.what.replace("{}", &glib::format_size(size))
             )),
         );
         dialog.add_response("cancel", "_Cancel");
         dialog.add_response("download", "_Download");
         dialog.set_response_appearance("download", adw::ResponseAppearance::Suggested);
-        // Live Text was asked for, so going ahead is the default; Escape and
+        // It was asked for, so going ahead is the default; Escape and
         // clicking away still leave it.
         dialog.set_default_response(Some("download"));
         dialog.set_close_response("cancel");
@@ -134,13 +179,14 @@ impl Window {
             glib::clone!(
                 #[weak(rename_to = window)]
                 self,
-                move |_, _| window.download_live_text(install::missing(), then.clone())
+                move |_, _| window.download_parts(feature, feature.missing(), then.clone())
             ),
         );
         dialog.present(Some(self));
     }
 
-    fn download_live_text(&self, parts: Vec<&'static Part>, then: Then) {
+    fn download_parts(&self, feature: Feature, parts: Vec<&'static Part>, then: Then) {
+        let words = words(feature);
         let total: u64 = parts.iter().map(|part| part.size).sum();
         let what = gtk::Label::new(parts.first().map(|part| part.name));
         what.add_css_class("dim-label");
@@ -164,7 +210,11 @@ impl Window {
         header.set_show_end_title_buttons(false);
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&column));
-        let dialog = adw::Dialog::builder().title("Downloading Live Text").content_width(420).child(&toolbar).build();
+        let dialog = adw::Dialog::builder()
+            .title(format!("Downloading {}", words.title))
+            .content_width(420)
+            .child(&toolbar)
+            .build();
 
         // Cancelling, by the button or by closing the dialog, stops the
         // download between any two reads.
@@ -198,7 +248,8 @@ impl Window {
         });
 
         // Which part is coming in, by how far along the whole download is.
-        let names: Vec<(u64, &'static str)> = install::missing()
+        let names: Vec<(u64, &'static str)> = feature
+            .missing()
             .iter()
             .scan(0, |sum, part| {
                 *sum += part.size;
@@ -228,24 +279,21 @@ impl Window {
                 let cancelled = cancellable.is_cancelled();
                 dialog.force_close();
                 match outcome {
-                    Ok(()) => match install::installed() {
-                        Some(paths) => {
-                            if let Some(then) = then.borrow_mut().take() {
-                                then(&window, paths);
-                            }
+                    Ok(()) => {
+                        if let Some(then) = then.borrow_mut().take() {
+                            then(&window);
                         }
-                        None => window.download_failed("The files arrived, but could not be found afterwards.".into(), then),
-                    },
-                    Err(_) if cancelled => window.toast("Live Text was not downloaded."),
-                    Err(message) => window.download_failed(message, then),
+                    }
+                    Err(_) if cancelled => window.toast(&format!("{} was not downloaded.", words.name)),
+                    Err(message) => window.download_failed(feature, message, then),
                 }
             }
         ));
     }
 
-    fn download_failed(&self, message: String, then: Then) {
+    fn download_failed(&self, feature: Feature, message: String, then: Then) {
         let dialog = adw::AlertDialog::new(
-            Some("Could Not Download Live Text"),
+            Some(&format!("Could Not Download {}", words(feature).title)),
             Some(&format!("{message}\n\nCheck the internet connection and try again. Nothing was kept from this attempt.")),
         );
         dialog.add_response("close", "_Close");
@@ -258,7 +306,7 @@ impl Window {
             glib::clone!(
                 #[weak(rename_to = window)]
                 self,
-                move |_, _| window.download_live_text(install::missing(), then.clone())
+                move |_, _| window.download_parts(feature, feature.missing(), then.clone())
             ),
         );
         dialog.present(Some(self));
@@ -534,6 +582,8 @@ impl Window {
                     self.live_failed(&format!("Could not read the text: {reason}"));
                 }
             }
+            // Only ever asked of the background remover's own helper.
+            Reply::Mask(..) => {}
         }
     }
 

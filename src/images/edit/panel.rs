@@ -407,6 +407,18 @@ impl Window {
         options.append(&actions);
         tools.append(options);
 
+        // -- removing the background: one press, undone like any edit --
+        let cutout = &imp.cutout_button;
+        cutout.set_child(Some(
+            &adw::ButtonContent::builder()
+                .icon_name("glance-remove-background-symbolic")
+                .label("Remove Background")
+                .build(),
+        ));
+        cutout.set_tooltip_text(Some("Keep the subject and make the rest see-through, on this computer"));
+        cutout.set_action_name(Some("win.remove-background"));
+        tools.append(cutout);
+
         // -- resize --
         let sizing = &imp.resize_toggle;
         sizing.set_tooltip_text(Some("Change the size, in pixels, percent or on paper, and the resolution"));

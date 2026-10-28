@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Remove Background: a figure kept, in front of the checkerboard that stands for see-through. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" opacity="0.35" d="M 1 1 h 3 v 3 h -3 z M 7 1 h 3 v 3 h -3 z M 13 1 h 2 v 3 h -2 z M 4 4 h 3 v 3 h -3 z M 10 4 h 3 v 3 h -3 z M 1 7 h 3 v 3 h -3 z M 13 7 h 2 v 3 h -2 z M 1 13 h 3 v 2 h -3 z M 13 13 h 2 v 2 h -2 z"/>
+  <path fill="#222222" d="M 8 4.5 a 2.5 2.5 0 1 1 0 5 a 2.5 2.5 0 1 1 0 -5 z M 3.5 15 c 0 -3 2 -4.5 4.5 -4.5 s 4.5 1.5 4.5 4.5 z"/>
+</svg>

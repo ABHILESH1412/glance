@@ -11,6 +11,7 @@
 pub mod closing;
 pub mod colour;
 pub mod combine;
+pub mod cutout;
 pub mod doc_info;
 pub mod filmstrip;
 pub mod frames;

@@ -24,5 +24,7 @@
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-levels-symbolic.svg</file>
     <file alias="glance-live-text-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-live-text-symbolic.svg</file>
+    <file alias="glance-remove-background-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-remove-background-symbolic.svg</file>
   </gresource>
 </gresources>
