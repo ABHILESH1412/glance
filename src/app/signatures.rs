@@ -2,18 +2,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Signatures, as the reader sees them: the pad a signature is written on,
-//! the Signature button in the Draw panels that puts a kept one down, and
-//! the small pictures of them both of those and the preferences show.
+//! bringing one in from a picture, the Signature button in the Draw panels
+//! that puts a kept one down, and the small pictures of them both of those
+//! and the preferences show.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use adw::prelude::*;
-use gtk::{gdk, glib};
+use gtk::{gdk, gio, glib};
+use image::RgbaImage;
 
 use crate::app::window::Window;
-use crate::images::edit::signature::{self, Signature};
+use crate::images::edit::signature::{self, Ink, Signature};
 
 /// The pad's size, and how thick its pen is, in its pixels.
 const PAD: (i32, i32) = (520, 200);
@@ -32,6 +34,7 @@ const INKS: &[(&str, (f32, f32, f32))] = &[
 pub fn thumbnail(signature: &Signature, width: i32, height: i32) -> gtk::DrawingArea {
     let area = gtk::DrawingArea::builder().content_width(width).content_height(height).build();
     let signature = signature.clone();
+    let picture = signature.picture.as_ref().and_then(|picture| surface_of(&picture.pixels));
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (f64::from(w), f64::from(h));
         rounded(cr, w, h, 6.0);
@@ -42,12 +45,41 @@ pub fn thumbnail(signature: &Signature, width: i32, height: i32) -> gtk::Drawing
         let scale = (room_w / signature.width.max(1.0)).min(room_h / signature.height.max(1.0));
         let (sw, sh) = (signature.width * scale, signature.height * scale);
         let frame = [(w - sw) / 2.0, (h - sh) / 2.0, sw, sh];
+        if let Some(surface) = &picture {
+            let _ = cr.save();
+            cr.translate(frame[0], frame[1]);
+            cr.scale(scale, scale);
+            let _ = cr.set_source_surface(surface, 0.0, 0.0);
+            cr.source().set_filter(gtk::cairo::Filter::Good);
+            let _ = cr.paint();
+            let _ = cr.restore();
+            return;
+        }
         let colour = signature.colour;
         cr.set_source_rgba(f64::from(colour.red()), f64::from(colour.green()), f64::from(colour.blue()), 1.0);
         cr.set_line_width((signature.pen * scale).max(1.0));
         trace(cr, &signature.fitted(frame));
     });
     area
+}
+
+/// A picture as Cairo draws it: premultiplied, in the machine's own order.
+fn surface_of(pixels: &RgbaImage) -> Option<gtk::cairo::ImageSurface> {
+    let (width, height) = (i32::try_from(pixels.width()).ok()?, i32::try_from(pixels.height()).ok()?);
+    let mut surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, width, height).ok()?;
+    let stride = surface.stride() as usize;
+    {
+        let mut data = surface.data().ok()?;
+        for (y, row) in pixels.rows().enumerate() {
+            for (x, p) in row.enumerate() {
+                let a = u32::from(p[3]);
+                let pre = |c: u8| (u32::from(c) * a + 127) / 255;
+                let argb = (a << 24) | (pre(p[0]) << 16) | (pre(p[1]) << 8) | pre(p[2]);
+                data[y * stride + x * 4..y * stride + x * 4 + 4].copy_from_slice(&argb.to_ne_bytes());
+            }
+        }
+    }
+    Some(surface)
 }
 
 fn rounded(cr: &gtk::cairo::Context, w: f64, h: f64, r: f64) {
@@ -289,6 +321,200 @@ pub fn write_new(parent: &impl IsA<gtk::Widget>, done: impl Fn(Signature) + 'sta
     dialog.present(Some(parent));
 }
 
+/// A picture of a signature is not read at more than this across: the
+/// signature is kept smaller still, and a 50-megapixel photograph of a page
+/// would only make the paper slower to find.
+const IMPORT_SIDE: u32 = 2400;
+
+/// Bring a signature in from a picture of it: a scan, a photograph of it on
+/// paper, or a PNG made elsewhere. The paper is made see-through, and the
+/// result shown to be kept, in the pen's own ink or another. `done` is given
+/// it once it has been kept.
+pub fn import_picture(window: &Window, done: impl Fn(Signature) + 'static) {
+    let filter = gtk::FileFilter::new();
+    filter.set_name(Some("Pictures"));
+    filter.add_mime_type("image/*");
+    for suffix in crate::app::playlist::EXTENSIONS {
+        filter.add_suffix(suffix);
+    }
+    let filters = gio::ListStore::new::<gtk::FileFilter>();
+    filters.append(&filter);
+    let chooser = gtk::FileDialog::builder()
+        .title("Import a Signature")
+        .accept_label("_Import")
+        .modal(true)
+        .filters(&filters)
+        .default_filter(&filter)
+        .build();
+    let done: Rc<dyn Fn(Signature)> = Rc::new(done);
+    chooser.open(
+        Some(window),
+        gio::Cancellable::NONE,
+        glib::clone!(
+            #[weak]
+            window,
+            move |result| {
+                let path = match result {
+                    Ok(file) => match file.path() {
+                        Some(path) => path,
+                        None => return window.toast("That location is not a local file."),
+                    },
+                    Err(error) => {
+                        if !error.matches(gtk::DialogError::Dismissed) {
+                            window.toast(&format!("Could not open the picture: {error}"));
+                        }
+                        return;
+                    }
+                };
+                let (sender, receiver) = async_channel::bounded(1);
+                std::thread::spawn(move || {
+                    let found = read_scan(&path).and_then(|scan| {
+                        Signature::from_picture(&scan, Ink::AsItIs).ok_or_else(|| "No signature was found in that picture.".to_string())
+                    });
+                    let _ = sender.send_blocking(found);
+                });
+                let done = done.clone();
+                glib::spawn_future_local(async move {
+                    match receiver.recv().await {
+                        Ok(Ok(found)) => offer_import(&window, found, done),
+                        Ok(Err(message)) => window.toast(&message),
+                        Err(_) => window.toast("Reading the picture stopped unexpectedly."),
+                    }
+                });
+            }
+        ),
+    );
+}
+
+/// A picture file as straight RGBA, no bigger than `IMPORT_SIDE` across.
+fn read_scan(path: &std::path::Path) -> Result<RgbaImage, String> {
+    let decoded = crate::images::loader::decode(path)?;
+    let mut rgba = RgbaImage::from_raw(decoded.width, decoded.height, decoded.rgba).ok_or("The picture could not be read.")?;
+    if decoded.premultiplied {
+        for pixel in rgba.pixels_mut() {
+            let a = u32::from(pixel[3]);
+            if a > 0 && a < 255 {
+                for c in &mut pixel.0[..3] {
+                    *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+                }
+            }
+        }
+    }
+    let side = rgba.width().max(rgba.height());
+    if side > IMPORT_SIDE {
+        let scale = f64::from(IMPORT_SIDE) / f64::from(side);
+        let to = |n: u32| ((f64::from(n) * scale).round() as u32).max(1);
+        rgba = image::imageops::resize(&rgba, to(rgba.width()), to(rgba.height()), image::imageops::FilterType::Triangle);
+    }
+    Ok(rgba)
+}
+
+/// The signature found in a picture, shown on paper to be kept, with the
+/// pen's own ink or one of the pad's.
+fn offer_import(window: &Window, found: Signature, done: Rc<dyn Fn(Signature)>) {
+    let Some(original) = found.picture.as_ref().map(|picture| picture.pixels.clone()) else { return };
+    let recoloured = move |ink: Ink| -> Signature {
+        let mut pixels = original.clone();
+        if let Ink::Colour(rgb) = ink {
+            for pixel in pixels.pixels_mut() {
+                pixel.0[..3].copy_from_slice(&rgb);
+            }
+        }
+        Signature::from_picture(&pixels, Ink::AsItIs).unwrap_or_else(|| found.clone())
+    };
+    let chosen = Rc::new(RefCell::new(recoloured(Ink::AsItIs)));
+
+    let preview = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    preview.set_size_request(PAD.0, PAD.1);
+    let show = {
+        let preview = preview.clone();
+        move |signature: &Signature| {
+            while let Some(child) = preview.first_child() {
+                preview.remove(&child);
+            }
+            let face = thumbnail(signature, PAD.0, PAD.1);
+            face.set_hexpand(true);
+            face.set_vexpand(true);
+            preview.append(&face);
+        }
+    };
+    show(&chosen.borrow());
+
+    let caption = gtk::Label::builder()
+        .label("The paper is made see-through, so only the ink is put down.")
+        .wrap(true)
+        .css_classes(["dim-label"])
+        .build();
+    let inks = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    inks.set_halign(gtk::Align::Center);
+    let as_it_is = gtk::ToggleButton::with_label("As It Is");
+    as_it_is.set_active(true);
+    inks.append(&as_it_is);
+    let recoloured = Rc::new(recoloured);
+    let mut buttons = vec![(as_it_is.clone(), Ink::AsItIs)];
+    for &(name, (r, g, b)) in INKS {
+        let button = gtk::ToggleButton::with_label(name);
+        button.set_group(Some(&as_it_is));
+        inks.append(&button);
+        let rgb = [r, g, b].map(|c| (c * 255.0).round() as u8);
+        buttons.push((button, Ink::Colour(rgb)));
+    }
+    for (button, ink) in buttons {
+        let (chosen, recoloured, show) = (chosen.clone(), recoloured.clone(), show.clone());
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                chosen.replace(recoloured(ink));
+                show(&chosen.borrow());
+            }
+        });
+    }
+
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    column.set_margin_top(12);
+    column.set_margin_bottom(18);
+    column.set_margin_start(18);
+    column.set_margin_end(18);
+    column.append(&preview);
+    column.append(&caption);
+    let ink_label = gtk::Label::builder().label("Ink").css_classes(["heading"]).build();
+    column.append(&ink_label);
+    column.append(&inks);
+
+    let cancel = gtk::Button::with_mnemonic("_Cancel");
+    let keep = gtk::Button::with_mnemonic("_Keep");
+    keep.add_css_class("suggested-action");
+    let header = adw::HeaderBar::builder().show_end_title_buttons(false).show_start_title_buttons(false).build();
+    header.pack_start(&cancel);
+    header.pack_end(&keep);
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&header);
+    toolbar.set_content(Some(&column));
+    let dialog = adw::Dialog::builder().title("Import Signature").child(&toolbar).follows_content_size(true).build();
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    keep.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| match signature::save(&chosen.borrow()) {
+            Ok(kept) => {
+                dialog.close();
+                done(kept);
+            }
+            Err(error) => {
+                let alert = adw::AlertDialog::new(Some("Could Not Keep the Signature"), Some(&error));
+                alert.add_response("close", "_Close");
+                alert.present(Some(&dialog));
+            }
+        }
+    ));
+    dialog.present(Some(window));
+}
+
 /// The Signature button of a Draw panel: kept signatures to put down, one
 /// click each, and the way to write a new one or tidy them up.
 pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::MenuButton {
@@ -351,7 +577,7 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
             }
             list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
             let new = gtk::Button::builder().label("_New Signature…").use_underline(true).css_classes(["flat"]).build();
-            let place = place.clone();
+            let place_new = place.clone();
             new.connect_clicked(glib::clone!(
                 #[weak]
                 window,
@@ -359,11 +585,25 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
                 popover,
                 move |_| {
                     popover.popdown();
-                    let place = place.clone();
+                    let place = place_new.clone();
                     write_new(&window, move |kept| place(Arc::new(kept)));
                 }
             ));
             list.append(&new);
+            let import = gtk::Button::builder().label("_Import from Picture…").use_underline(true).css_classes(["flat"]).build();
+            let place = place.clone();
+            import.connect_clicked(glib::clone!(
+                #[weak]
+                window,
+                #[weak]
+                popover,
+                move |_| {
+                    popover.popdown();
+                    let place = place.clone();
+                    import_picture(&window, move |kept| place(Arc::new(kept)));
+                }
+            ));
+            list.append(&import);
             let manage = gtk::Button::builder().label("_Manage Signatures…").use_underline(true).css_classes(["flat"]).build();
             manage.connect_clicked(glib::clone!(
                 #[weak]

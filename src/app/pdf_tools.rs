@@ -148,7 +148,8 @@ impl PdfTools {
                 window.imp().pdf_view.place_signature(&signature);
             })
         };
-        sign.set_sensitive(pdf::can_draw());
+        // Written signatures need ink; ones from a picture, only pictures.
+        sign.set_sensitive(pdf::can_draw() || pdf::can_place_pictures());
         strokes.append(&sign);
         // A picture from a file, put down whole and picked up to move.
         let picture = gtk::Button::builder()

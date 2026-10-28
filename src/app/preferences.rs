@@ -84,8 +84,8 @@ impl Window {
         let group = adw::PreferencesGroup::builder()
             .title("Signatures")
             .description(
-                "Written once, then put on pictures and PDFs with the Signature button in the Draw panel. \
-                 They are kept on this computer only.",
+                "Written once, or brought in from a picture, then put on pictures and PDFs with the Signature \
+                 button in the Draw panel. They are kept on this computer only.",
             )
             .build();
         signatures.add(&group);
@@ -296,7 +296,7 @@ impl Window {
         if kept.is_empty() {
             let none = adw::ActionRow::builder()
                 .title("No signatures yet")
-                .subtitle("Write one once, and it is here to put down on any picture or PDF.")
+                .subtitle("Write one once, or bring one in from a picture, and it is here to put down on any picture or PDF.")
                 .build();
             added.push(none.upcast::<gtk::Widget>());
         }
@@ -329,8 +329,6 @@ impl Window {
         let new = gtk::Button::builder()
             .label("_New Signature…")
             .use_underline(true)
-            .halign(gtk::Align::Center)
-            .margin_top(12)
             .css_classes(["pill", "suggested-action"])
             .build();
         let weak = Rc::downgrade(page);
@@ -347,7 +345,36 @@ impl Window {
                 });
             }
         ));
-        added.push(new.upcast());
+        // Or one already on paper, or made elsewhere, from a picture of it.
+        let import = gtk::Button::builder()
+            .label("_Import from Picture…")
+            .use_underline(true)
+            .css_classes(["pill"])
+            .build();
+        let weak = Rc::downgrade(page);
+        import.connect_clicked(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| {
+                let Some(page) = weak.upgrade() else { return };
+                let weak = Rc::downgrade(&page);
+                crate::app::signatures::import_picture(&window, glib::clone!(
+                    #[weak]
+                    window,
+                    move |_| {
+                        if let Some(page) = weak.upgrade() {
+                            window.fill_signatures_page(&page);
+                        }
+                    }
+                ));
+            }
+        ));
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        buttons.set_halign(gtk::Align::Center);
+        buttons.set_margin_top(12);
+        buttons.append(&new);
+        buttons.append(&import);
+        added.push(buttons.upcast());
         for widget in &added {
             page.group.add(widget);
         }

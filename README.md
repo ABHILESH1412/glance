@@ -471,7 +471,8 @@ it, and a read-only file is left untouched.
   highlighter, line, arrows, rectangles, rounded rectangles, ellipses, polygons, stars,
   speech bubbles, ticks and crosses, in any colour and thickness, rectangles and ellipses
   filled or not; **Signature**, to put a kept signature on the page as ink, sharp at any
-  size, or write a new one on the signature pad; **Add Picture…**, to put a picture
+  size, write a new one on the signature pad, or **Import from Picture…** — a scan, a photo
+  of it on paper, or a PNG — which keeps just the ink, in its own colour or black or blue; **Add Picture…**, to put a picture
   from a file on the page — or drop picture files on an open PDF, and they land where
   they were dropped; and
   **Select**, to pick up any drawing or picture on the page (made earlier, or by another program) and
@@ -588,7 +589,7 @@ Each is the same switch the menus use, so the two always agree.
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock. Sizes in pixels, percent, inches or centimetres, and the resolution in pixels per inch — resampled to keep the printed size, or not, to keep every pixel and change only the print size. The resolution is read from the file and saved with it |
 | **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
 | **Levels** | The histogram, with handles for the black point, midtones and white point, per channel or all together, and **Auto Levels**, which also takes out a colour cast |
-| **Draw** | Pen, highlighter, line, arrow, double arrow, rectangle, rounded rectangle, ellipse, polygon (3 to 24 sides), star (3 to 24 points), speech bubble, tick and cross — with the buttons drawing their own shapes — in any colour and thickness, the shapes with an inside filled or not. **Signature** puts down a signature written once on a signature pad and kept for next time. **Select** picks a drawing up again: drag it to move it, drag a handle to resize it (Shift keeps the proportions), change its colour or thickness, or press Delete. Every change can be undone |
+| **Draw** | Pen, highlighter, line, arrow, double arrow, rectangle, rounded rectangle, ellipse, polygon (3 to 24 sides), star (3 to 24 points), speech bubble, tick and cross — with the buttons drawing their own shapes — in any colour and thickness, the shapes with an inside filled or not. **Signature** puts down a signature written once on a signature pad, or imported from a picture of one with its paper made see-through, and kept for next time. **Select** picks a drawing up again: drag it to move it, drag a handle to resize it (Shift keeps the proportions), change its colour or thickness, or press Delete. Every change can be undone |
 | **Text** | Font, size, colour, background, bold, italic, underline, dragged anywhere |
 | **Export** | PNG, JPEG, HEIC, WebP, TIFF, JPEG 2000, PSD, OpenEXR, TGA, BMP, GIF, ICO or ICNS, with a quality dial for JPEG, HEIC and JPEG 2000 — or a file size to aim for |
 

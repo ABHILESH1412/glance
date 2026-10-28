@@ -2872,8 +2872,12 @@ impl Inner {
     }
 
     fn place_signature(&self, signature: &Arc<Signature>) -> bool {
-        if !ink::available() {
-            self.report("Putting a signature on a PDF needs Poppler 25.06 or newer.".to_string());
+        // A picture of a signature goes down as a picture; one written with
+        // the pen, as ink.
+        let available = if signature.picture.is_some() { super::newer::get().stamp.is_some() } else { ink::available() };
+        if !available {
+            let needs = if signature.picture.is_some() { "22.07" } else { "25.06" };
+            self.report(format!("Putting a signature on a PDF needs Poppler {needs} or newer."));
             return false;
         }
         // Where the middle of the view falls, if on a page; otherwise the
@@ -2898,6 +2902,21 @@ impl Inner {
         }
         let x = (spot.x - w / 2.0).clamp(0.0, (pw - w).max(0.0));
         let y = (spot.y - h / 2.0).clamp(0.0, (ph - h).max(0.0));
+        if let Some(signed) = &signature.picture {
+            let (width, height) = signed.pixels.dimensions();
+            let pixels = picture::Pixels { width, height, rgba: signed.pixels.as_raw().clone() };
+            let drawing = Drawing::picture(spot.page, [x, y, x + w, y + h], Arc::new(pixels));
+            return match self.commit(Change { removed: Vec::new(), added: vec![Annotation::Ink(drawing.clone())] }) {
+                Ok(()) => {
+                    self.pick(Some(drawing));
+                    true
+                }
+                Err(error) => {
+                    self.report(error);
+                    false
+                }
+            };
+        }
         let mark = draw::Mark {
             tool: draw::Tool::Signature,
             points: vec![(x, y), (x + w, y + h)],

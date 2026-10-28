@@ -519,6 +519,15 @@ impl Mark {
             return snapshot.to_node();
         }
         let (x, y, _, _) = self.bounds()?;
+        // A signature brought in from a picture is that picture, filling its
+        // box: the same on screen and once saved.
+        if let (Tool::Signature, Some(picture)) = (self.tool, self.signature.as_ref().and_then(|s| s.picture.as_ref())) {
+            let (rx, ry, rw, rh) = self.rect()?;
+            let snapshot = gtk::Snapshot::new();
+            let area = graphene::Rect::new((rx - x) as f32, (ry - y) as f32, rw.max(1.0) as f32, rh.max(1.0) as f32);
+            snapshot.append_scaled_texture(&picture.texture(), gsk::ScalingFilter::Trilinear, &area);
+            return snapshot.to_node();
+        }
         let path = self.path()?;
         let snapshot = gtk::Snapshot::new();
         snapshot.save();

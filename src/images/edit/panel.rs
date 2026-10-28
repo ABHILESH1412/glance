@@ -1310,7 +1310,10 @@ impl Window {
     /// them starts from what it has.
     pub(crate) fn show_picked(&self, picked: Option<draw::Mark>) {
         let imp = self.imp();
-        if let Some(mark) = picked {
+        // A signature from a picture has no ink to show: the controls keep
+        // what they had.
+        let picture = picked.as_ref().is_some_and(|mark| mark.signature.as_ref().is_some_and(|s| s.picture.is_some()));
+        if let Some(mark) = picked.filter(|_| !picture) {
             imp.syncing_panel.set(true);
             imp.draw_width.set_value(mark.width);
             imp.draw_colour.set_rgba(&mark.colour);
