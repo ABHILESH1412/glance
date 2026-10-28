@@ -1,3 +1,10 @@
+glance-image-viewer (2.1.0-1) unstable; urgency=medium
+
+  * [feat] Now the user can Add the images as signature in the pdf section
+  * [feat] added the remove background feature
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Wed, 28 Oct 2026 22:33:55 +0530
+
 glance-image-viewer (2.0.4-1) unstable; urgency=medium
 
   * [fix] Text boxes keep their font and boldness with Poppler 26.10

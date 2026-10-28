@@ -119,6 +119,14 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="2.1.0" date="2026-10-28">
+      <description>
+        <ul>
+          <li>[feat] Now the user can Add the images as signature in the pdf section</li>
+          <li>[feat] added the remove background feature</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.0.4" date="2026-10-22">
       <description>
         <ul>
