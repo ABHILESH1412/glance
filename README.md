@@ -14,18 +14,19 @@ It opens a file, shows it properly, and gets out of the way.
 
 ## What it is
 
-An  image viewer first: photographs, screenshots, vector art, camera raw, Photoshop and
-HDR files all open in the same window, and browsing a folder is a matter of pressing an
+An image viewer first: photographs, screenshots, vector art, camera raw, JPEG XL, Photoshop
+and HDR files all open in the same window, and browsing a folder is a matter of pressing an
 arrow key. PDFs open in the same window too, and can be searched, highlighted, annotated,
-drawn and written on, signed, redacted, protected with a password, made smaller, and
-combined with other PDFs and pictures — with every change saved into the file where any
-PDF reader will see it. Live Text finds the words in a picture so they can be copied,
-on your own computer.
+drawn and written on, signed, given pictures, redacted, protected with a password, made
+smaller, and combined with other PDFs and pictures — with every change saved into the file
+where any PDF reader will see it. Live Text finds the words in a picture so they can be
+copied, and Remove Background lifts a picture's subject off its background, both on your
+own computer.
 
 When you do need to change something, the editor is one button away — crop, resize,
-rotate, adjust the light and colour, draw shapes, sign, add text, black out what should
-not be seen, convert it to another format, or squeeze it down to a file size someone
-asked for. Everything Glance remembers is in one Preferences window.
+rotate, adjust the light and colour, remove the background, draw shapes, sign, add text,
+black out what should not be seen, convert it to another format, or squeeze it down to a
+file size someone asked for. Everything Glance remembers is in one Preferences window.
 
 Its yardstick is Apple's Preview: [FEATURES.md](FEATURES.md) lists everything Preview
 does and where Glance stands on each, and [How it compares](#how-it-compares) puts the
@@ -371,9 +372,9 @@ step-by-step for getting onto Flathub and into each distribution's archive.
 **Viewing** — fit to window, 100%, free zoom to 32×. Zoom anchors on the pointer, so the
 pixel under the cursor stays under it. Two fingers on a touchpad pan and the wheel zooms —
 the hardware says which is which, so there is no modifier to remember. Pinch works too.
-Animated GIF and WebP play, and keep playing while you zoom or rotate; `F9` lists every
-frame down the side with how long it shows, to pause on one or step through them; Copy
-copies the frame on screen. Right-click the picture, or a frame, to copy it.
+Animated GIF, WebP and JPEG XL play, and keep playing while you zoom or rotate; `F9` lists
+every frame down the side with how long it shows, to pause on one or step through them;
+Copy copies the frame on screen. Right-click the picture, or a frame, to copy it.
 
 **Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
 and the folder is watched so files added elsewhere show up. `F5` plays the folder as a
@@ -586,6 +587,7 @@ Each is the same switch the menus use, so the two always agree.
 |---|---|
 | **Rotate & Flip** | Quarter turns, or any angle typed into the box. The rotate buttons at the top of the menu, or `[` and `]`, turn the picture just to look at it, without changing the file |
 | **Crop** | Drag a rectangle, pull any of its eight handles, or pick an aspect preset |
+| **Remove Background** | One press keeps the subject and makes the rest see-through, worked out on your computer by BiRefNet-lite; one more edit, undone like any other. The model is downloaded the first time, after asking; more under **Remove Background** above |
 | **Resize** | Handles on the picture or numbers in the panel, kept in step, with an optional aspect lock. Sizes in pixels, percent, inches or centimetres, and the resolution in pixels per inch — resampled to keep the printed size, or not, to keep every pixel and change only the print size. The resolution is read from the file and saved with it |
 | **Adjust** | Light: exposure, brightness, contrast, highlights, shadows. Colour: saturation, temperature, tint, sepia. Detail: sharpness, or softness below zero. Whatever is a colour matrix shows instantly on the GPU; the rest is worked out on a screen-sized copy while the slider moves and on the whole picture once it rests. Saving bakes exactly what was shown |
 | **Levels** | The histogram, with handles for the black point, midtones and white point, per channel or all together, and **Auto Levels**, which also takes out a colour cast |
@@ -660,6 +662,7 @@ in October 2026 — features move, so check upstream if one matters to you.
 <tr><td>Brightness / contrast / saturation</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>Draw, shapes and text on the image</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>Move, resize and recolour a shape after drawing it</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>Remove the background, on the computer</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Signatures, written once and kept</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Redact — black out for good</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Convert format on save, with a quality dial</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
@@ -680,6 +683,8 @@ in October 2026 — features move, so check upstream if one matters to you.
 <tr><td>Read, search and copy text</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Highlight, underline, notes and drawings, saved in the file</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Sign a PDF</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>A signature from a picture of one on paper</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>Put pictures on a page</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Fill in form fields</td><td align="center">❌</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Combine PDFs and pictures; add, remove, reorder and turn pages</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Insert a blank page</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
@@ -704,7 +709,7 @@ in October 2026 — features move, so check upstream if one matters to you.
 <tr><td>SVG</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td></tr>
 <tr><td>ICC colour management</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td></tr>
 <tr><td>Live Text — copy the text out of a picture</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
-<tr><td>Remove a picture's background, on the computer</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
+<tr><td>Copy a picture's subject without its background</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td><td align="center">❌</td></tr>
 <tr><td>Filmstrip of the whole folder</td><td align="center">✅</td><td align="center">❌</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>EXIF / metadata panel</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td></tr>
 <tr><td>Slideshow</td><td align="center">✅</td><td align="center">✅</td><td align="center">❌</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td><td align="center">✅</td></tr>
@@ -721,14 +726,14 @@ only to identify them. Apple and Preview are trademarks of Apple Inc.; Glance is
 affiliated with Apple.
 
 **The short version.** On Linux, Glance is the only viewer here that also reads, marks up,
-signs, combines and redacts PDFs, reads the text in pictures, or hits a file size on
-request — the things people otherwise keep a Mac around for. Against Preview itself, it
-still lacks filling in PDF forms, 3D models and batch work, and has a few things Preview
-does not: SVG, rotating to any angle, compressing to an exact size, night mode for PDFs,
-and browsing the whole folder. It is not a photo library: if you want tags, catalogs,
-batch jobs or a camera import wizard, gThumb is still the answer, and nomacs if you need
-Windows too. Loupe is the closest in spirit — same toolkit, same language — but stops at
-crop and rotate.
+signs, combines and redacts PDFs, reads the text in pictures, takes a picture's background
+off, or hits a file size on request — the things people otherwise keep a Mac around for.
+Against Preview itself, it still lacks filling in PDF forms, 3D models and batch work, and
+has a few things Preview does not: SVG, rotating to any angle, compressing to an exact
+size, night mode for PDFs, and browsing the whole folder. It is not a photo library: if
+you want tags, catalogs, batch jobs or a camera import wizard, gThumb is still the answer,
+and nomacs if you need Windows too. Loupe is the closest in spirit — same toolkit, same
+language — but stops at crop and rotate.
 
 ## Development
 

@@ -11,11 +11,11 @@ Tick a box when a feature ships.
 
 | Area | Glance has | Partial |
 |---|---|---|
-| Images | 54 / 64 | 4 |
-| PDF | 20 / 28 | 1 |
+| Images | 56 / 65 | 4 |
+| PDF | 21 / 29 | 2 |
 | 3D | 0 / 22 | 0 |
 | Capture and general | 4 / 8 | 0 |
-| **Total** | **78 / 122** | **5** |
+| **Total** | **81 / 124** | **6** |
 
 ---
 
@@ -25,14 +25,14 @@ Tick a box when a feature ships.
 - [x] Zoom in, zoom out, actual size, fit to window
 - [x] Fullscreen
 - [x] Rotate the view
-- [x] Play animated GIFs
+- [x] Play animated GIFs — and animated WebP and JPEG XL
 - [x] Copy the image to the clipboard
 - [x] Step through an animated GIF frame by frame in a sidebar — every frame with its delay; play, pause, step
 - [ ] Thumbnail sidebar — *partial:* Glance has a filmstrip along the bottom
 - [ ] Contact sheet (grid of all open images)
 - [x] Slideshow — full screen, every 2 to 30 seconds, pause with Space
 - [x] Inspector with file details
-- [x] EXIF / camera metadata (camera, lens, shutter, ISO, date) — JPEG, PNG, WebP, TIFF, HEIF and camera raw
+- [x] EXIF / camera metadata (camera, lens, shutter, ISO, date) — JPEG, PNG, WebP, TIFF, HEIF, JPEG XL and camera raw
 - [ ] Show where a photo was taken on a map (GPS) — *partial:* the coordinates and altitude are in the inspector, but there is no map
 - [x] Live Text — select and copy text inside a photo (OCR) — English and about 45 other Latin-alphabet languages; Hindi to come. In a PDF, any picture on a page can be read, or copied, from its right-click menu
 - [ ] Loupe — magnify one region under the pointer
@@ -51,7 +51,7 @@ Tick a box when a feature ships.
 - [x] Sepia
 - [x] Sharpness — and softness, below zero
 - [x] Levels with a histogram, and Auto Levels — per channel or all together
-- [ ] Remove background / lift the subject out of a photo
+- [x] Remove background / lift the subject out of a photo — Remove Background in the editor, one more edit to undo; Copy Subject in the right-click menu copies just the subject, trimmed to it. BiRefNet-lite, run on this computer; the 181 MB model is downloaded the first time, after asking
 - [x] Convert to another file type
 - [x] Quality slider when exporting JPEG
 - [x] Undo and redo
@@ -73,7 +73,7 @@ annotations, so every PDF reader shows them.
 - [x] Select, move and resize a shape after drawing it — the Select tool picks a drawing up to move by its body, resize by its handles (Shift keeps the proportions), recolour, thicken or delete; on a PDF that includes drawings made earlier or by another program. Text can be dragged but not resized
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
-- [x] Signatures — written once on a signature pad, kept, and put on any picture or PDF page from the Signature button in the Draw panel; picked up to move and size like any drawing
+- [x] Signatures — written once on a signature pad, or imported from a scan or photo of one with the paper taken out, kept, and put on any picture or PDF page from the Signature button in the Draw panel; picked up to move and size like any drawing
 - [x] Redact / black out a region — marked first, then applied to a copy or the original
 
 ## 4. Colour
@@ -86,7 +86,8 @@ annotations, so every PDF reader shows them.
 
 ### Open
 
-- [x] JPEG, PNG, GIF, TIFF, BMP, ICO, HEIC/HEIF
+- [x] JPEG, PNG, GIF, TIFF, BMP, ICO, HEIC/HEIF, WebP, AVIF
+- [x] JPEG XL — still and animated, with its EXIF and colour profile
 - [x] Camera raw (DNG, CR2, NEF, ARW and more)
 - [x] JPEG 2000 — `.jp2` files and bare `.j2k` codestreams
 - [x] PSD (Photoshop) — the picture as last saved, all layers together; large PSB documents too
@@ -130,8 +131,8 @@ annotations, so every PDF reader shows them.
 
 - [ ] Fill in interactive form fields
 - [x] Add text boxes to forms that aren't interactive — the PDF text tool
-- [x] Draw a signature with the mouse or touchpad and place it on a page — saved into the PDF as ink, so every reader shows it, and kept sharp at any size
-- [ ] Capture a signature from paper with the webcam
+- [x] Draw a signature with the mouse or touchpad and place it on a page — saved into the PDF as ink, so every reader shows it, and kept sharp at any size; an imported one goes in as a picture
+- [ ] Capture a signature from paper with the webcam — *partial:* Import from Picture… takes a scan or photo of one, keeps just the ink, in its own colour or black or blue, and places it as a picture; not from the webcam itself
 - [x] Save signatures for reuse — kept on this computer, listed in Preferences to remove (with undo) or add to
 
 ## 9. PDF — pages
@@ -139,6 +140,7 @@ annotations, so every PDF reader shows them.
 - [x] Combine several PDFs into one — and pictures, in any order, with only the pages wanted
 - [x] Add, delete and reorder pages — in Combine into PDF, saved as a new file
 - [x] Insert a blank page, or pages from another file — in Combine into PDF: pages from other files and pictures, and Blank Page (Ctrl+B) puts an empty page after the one picked, the size of it as it stands
+- [x] Add a picture to a page — Add Picture…, or drop picture files on the page; saved as a stamp that carries the picture, so every reader shows it, and it can be moved, resized or removed later
 - [x] Rotate pages — in Combine into PDF, page by page, saved as a new file; the reader's turning is for the view only
 - [ ] Crop pages
 - [ ] Apply effects to a whole document (black and white, sepia, lighter/darker)
@@ -202,7 +204,7 @@ onward) covers.
 - [x] Save in place and export a copy
 - [x] Print — pictures and PDFs
 - [ ] Share to other apps
-- [x] Settings window — Preferences (Ctrl+,): appearance, the slideshow, PDF layout, night mode, highlight colour and paper for pictures, signatures, and Live Text
+- [x] Settings window — Preferences (Ctrl+,): appearance, the slideshow, PDF layout, night mode, highlight colour and paper for pictures, signatures, updates, and what Live Text and the background remover have downloaded
 
 ---
 
@@ -233,7 +235,7 @@ Things Glance does that Preview doesn't:
 Roughly in order of value for effort:
 
 1. **PDF forms** (section 8) — filling in interactive form fields, and capturing a
-   signature from paper with the webcam.
+   signature from paper with the webcam (a picture of one can already be imported).
 2. **The rest of PDF pages** (section 9) — cropping, and effects over a whole document,
    both at home in Combine into PDF.
 3. **PDF contact sheet and slideshow** (section 6) — the last of PDF viewing.
