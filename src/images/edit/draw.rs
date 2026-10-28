@@ -949,6 +949,23 @@ mod icon {
             icon
         }
 
+        /// Show another tool's mark, as a button that stands for whichever
+        /// tool is in hand.
+        pub fn set_tool(&self, tool: Tool) {
+            self.imp().tool.set(Some(tool));
+            self.queue_draw();
+        }
+
+        /// The Select tool's pointer alone, for a button with no room for
+        /// its name.
+        pub fn select_icon() -> Self {
+            let icon: Self = glib::Object::new();
+            icon.imp().pointer.set(true);
+            icon.set_size_request(16, 16);
+            icon.set_valign(gtk::Align::Center);
+            icon
+        }
+
         /// The Select tool's button face: a pointer, and its name.
         pub fn select_face() -> gtk::Box {
             let icon: Self = glib::Object::new();

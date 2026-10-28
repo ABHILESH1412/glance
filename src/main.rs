@@ -71,13 +71,54 @@ fn install_theme_action(app: &adw::Application) {
     app.add_action(&action);
 }
 
-/// Highlights the window while a file is hovering over it.
+/// The few looks Adwaita has no class for.
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
         "
-        .drop-active { box-shadow: inset 0 0 0 4px @accent_bg_color; }
-        .filmstrip-slot { padding: 2px; }
+        /* What a drop will do, over the window while files hover over it. */
+        .drop-hint {
+            border: 2px dashed alpha(@accent_color, 0.8);
+            border-radius: 18px;
+            background: alpha(@window_bg_color, 0.88);
+            color: @accent_color;
+        }
+        /* The controls floating over a picture: dark and see-through on any
+           picture, light or dark, in either style. */
+        .viewer-pill {
+            border-radius: 999px;
+            padding: 3px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+        }
+        .viewer-pill.filmstrip { border-radius: 14px; padding: 4px 4px 4px 4px; }
+        .viewer-pill .numeric { font-size: 0.9em; }
+        .zoom-pill menubutton > button { min-width: 3.6em; padding-left: 4px; padding-right: 4px; }
+        button.viewer-arrow { min-width: 40px; min-height: 40px; }
+        /* Marking up a PDF: the toolbar over the page, and the card of the
+           tool in hand's options above it. */
+        .viewer-pill.markup-bar { padding: 4px; background: rgba(28, 28, 32, 0.9); }
+        .markup-bar button:checked { background: alpha(white, 0.24); }
+        /* Menus opened from them are ordinary menus, not see-through. */
+        .viewer-pill popover > contents, .viewer-pill popover > arrow {
+            background: @popover_bg_color;
+            color: @popover_fg_color;
+        }
+        .markup-bar .tool-choice > button { min-width: 14px; padding-left: 1px; padding-right: 1px; }
+        .markup-options {
+            margin: 8px;
+            padding: 12px;
+            border-radius: 14px;
+            background: @window_bg_color;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.28), 0 0 0 1px alpha(currentColor, 0.09);
+        }
+        .filmstrip-slot { padding: 0; border-radius: 8px; }
+        .filmstrip-slot picture { border-radius: 8px; opacity: 0.72; transition: opacity 150ms; }
+        .filmstrip-slot:hover picture, .filmstrip-slot.filmstrip-current picture { opacity: 1; }
+        /* There is something new: said in the accent colour, without
+           shouting over the picture's own buttons. */
+        button.update-available { color: @accent_color; background: alpha(@accent_bg_color, 0.14); }
+        button.update-available:hover { background: alpha(@accent_bg_color, 0.24); }
         /* Combine into PDF: where dragged pages or dropped files will land. */
         flowboxchild.combine-page { padding: 6px; border-radius: 10px; }
         flowboxchild.combine-page.picked { background: alpha(@accent_bg_color, 0.28); }
@@ -92,11 +133,7 @@ fn load_css() {
         scale.tone value { min-width: 2.6em; }
         /* Live Text says it is reading, floating over the top of the picture. */
         .live-status { padding: 6px 14px; border-radius: 999px; }
-        .filmstrip-current {
-            outline: 2px solid @accent_bg_color;
-            outline-offset: -2px;
-            background: alpha(@accent_bg_color, 0.18);
-        }
+        .filmstrip-current { outline: 2px solid @accent_bg_color; outline-offset: 1px; }
         /* The three style toggles show what they do rather than spelling it. */
         button.text-bold label { font-weight: bold; }
         button.text-italic label { font-style: italic; }

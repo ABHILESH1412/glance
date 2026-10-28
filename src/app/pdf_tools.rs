@@ -1,13 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The Edit panel beside a PDF: the image editor's pens, shapes and text,
-//! for a page, and marking areas for redaction.
+//! Marking up a PDF: the image editor's pens, shapes and text, for a page,
+//! signatures and pictures, and marking areas for redaction.
 //!
-//! Laid out like the image editor's own sections, with the same tool icons
-//! and colour wells, so moving between a picture and a document there is
-//! nothing new to learn. Everything made here is saved into the PDF at once,
-//! and Ctrl+Z takes it back.
+//! A toolbar floats over the bottom of the page, with the tool in hand's
+//! options on a card just above it, so the page keeps the whole width of the
+//! window. The tools draw their own icons and the colour wells are the image
+//! editor's, so moving between a picture and a document there is nothing new
+//! to learn. Everything made here is saved into the PDF at once, and Ctrl+Z
+//! takes it back.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -18,16 +20,18 @@ use gtk::{gdk, glib, pango};
 
 use crate::app::window::Window;
 use crate::images::edit::draw;
-use crate::images::edit::panel::{colour_button, section_toggle};
+use crate::images::edit::panel::colour_button;
 use crate::pdf;
 
 pub struct PdfTools {
-    pub root: gtk::ScrolledWindow,
+    /// The toolbar and the card of options above it, floating over the
+    /// bottom of the page.
+    pub root: gtk::Box,
+    /// The tools along the toolbar, one in hand at a time.
+    select: gtk::ToggleButton,
     draw: gtk::ToggleButton,
     text: gtk::ToggleButton,
     redact: gtk::ToggleButton,
-    /// The Select tool, for picking up what is on the page.
-    select: gtk::ToggleButton,
 }
 
 /// The text controls, kept together so the chosen box can be shown in them.
@@ -94,52 +98,57 @@ impl TextControls {
 
 impl PdfTools {
     pub fn new(window: &Window) -> Self {
-        let column = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        column.set_margin_top(12);
-        column.set_margin_bottom(12);
-        // A little narrower than the rest, so two tools fit side by side.
-        column.set_margin_start(10);
-        column.set_margin_end(10);
+        // -- the toolbar's tools: one in hand at a time --
+        let select = tool_toggle(draw::ToolIcon::select_icon().upcast_ref(), "Select a drawing or picture, to move, resize or remove it");
+        let current = draw::ToolIcon::new(draw::Tool::Pen);
+        let draw_toggle = tool_toggle(current.upcast_ref(), "Draw on the page");
+        let text_toggle = tool_toggle(gtk::Image::from_icon_name("font-x-generic-symbolic").upcast_ref(), "Write on the page");
+        let redact_toggle =
+            tool_toggle(gtk::Image::from_icon_name("view-conceal-symbolic").upcast_ref(), "Black out parts of the document for good");
+        for other in [&draw_toggle, &text_toggle, &redact_toggle] {
+            other.set_group(Some(&select));
+        }
 
-        let draw_toggle = section_toggle("applications-graphics-symbolic", "Draw");
-        draw_toggle.set_tooltip_text(Some("Draw on the page"));
-        let text_toggle = section_toggle("insert-text-symbolic", "Text");
-        text_toggle.set_tooltip_text(Some("Write on the page"));
-        let redact_toggle = section_toggle("view-conceal-symbolic", "Redact");
-        redact_toggle.set_tooltip_text(Some("Black out parts of the document for good"));
-
-        // -- drawing --
-        let strokes = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        strokes.set_visible(false);
+        // -- drawing: which pen or shape, in a menu beside the Draw button --
         let tool_grid = gtk::FlowBox::new();
         tool_grid.set_selection_mode(gtk::SelectionMode::None);
         tool_grid.set_min_children_per_line(2);
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
-        // Select first: for picking up what has already been drawn.
-        let select = gtk::ToggleButton::new();
-        select.set_child(Some(&draw::ToolIcon::select_face()));
-        select.set_tooltip_text(Some("Select a drawing, to move, resize or remove it"));
-        tool_grid.append(&select);
         let mut tools: Vec<(draw::Tool, gtk::ToggleButton)> = Vec::new();
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
             let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            face.set_halign(gtk::Align::Center);
             face.append(&draw::ToolIcon::new(*tool));
             face.append(&gtk::Label::new(Some(tool.label())));
             button.set_child(Some(&face));
             button.set_tooltip_text(Some(tool.description()));
-            button.set_group(Some(&select));
+            button.add_css_class("flat");
+            if let Some((_, first)) = tools.first() {
+                button.set_group(Some(first));
+            }
             tool_grid.append(&button);
             tools.push((*tool, button));
         }
         if let Some((_, pen)) = tools.first() {
             pen.set_active(true);
         }
-        strokes.append(&tool_grid);
-        // A kept signature, put down whole as ink and picked up to move.
+        let tool_popover = gtk::Popover::builder().child(&tool_grid).build();
+        let choose = gtk::MenuButton::builder()
+            .popover(&tool_popover)
+            .icon_name("pan-up-symbolic")
+            .direction(gtk::ArrowType::Up)
+            .tooltip_text("Choose a pen or shape")
+            .build();
+        choose.add_css_class("flat");
+        choose.add_css_class("tool-choice");
+        let drawing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        drawing.append(&draw_toggle);
+        drawing.append(&choose);
+        drawing.set_sensitive(pdf::can_draw());
+
+        // A kept signature, put down whole and picked up to move.
         let sign = {
             let (weak, select) = (window.downgrade(), select.clone());
             crate::app::signatures::button(window, move |signature| {
@@ -148,18 +157,35 @@ impl PdfTools {
                 window.imp().pdf_view.place_signature(&signature);
             })
         };
+        sign.set_icon_name("glance-signature-symbolic");
+        sign.set_always_show_arrow(false);
+        sign.add_css_class("flat");
         // Written signatures need ink; ones from a picture, only pictures.
         sign.set_sensitive(pdf::can_draw() || pdf::can_place_pictures());
-        strokes.append(&sign);
         // A picture from a file, put down whole and picked up to move.
-        let picture = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("insert-image-symbolic").label("Add Picture…").build())
-            .tooltip_text("Put a picture on the page, to move and size")
-            .action_name("win.add-picture")
-            .build();
+        let picture = icon_button("insert-image-symbolic", "Add a picture to the page, to move and size", "win.add-picture");
         picture.set_sensitive(pdf::can_place_pictures());
-        strokes.append(&picture);
 
+        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        for class in ["osd", "viewer-pill", "markup-bar"] {
+            toolbar.add_css_class(class);
+        }
+        toolbar.set_halign(gtk::Align::Center);
+        toolbar.append(&select);
+        toolbar.append(&drawing);
+        toolbar.append(&text_toggle);
+        toolbar.append(&redact_toggle);
+        toolbar.append(&divider());
+        toolbar.append(&sign);
+        toolbar.append(&picture);
+        toolbar.append(&divider());
+        toolbar.append(&icon_button("edit-undo-symbolic", "Undo (Ctrl+Z)", "win.undo-mark"));
+        toolbar.append(&icon_button("edit-redo-symbolic", "Redo (Ctrl+Shift+Z)", "win.redo-mark"));
+        toolbar.append(&divider());
+        toolbar.append(&icon_button("window-close-symbolic", "Done (Ctrl+E)", "win.draw-panel"));
+
+        // -- drawing's options --
+        let strokes = gtk::Box::new(gtk::Orientation::Vertical, 6);
         let width = gtk::SpinButton::with_range(0.5, 50.0, 0.5);
         width.set_digits(1);
         width.set_value(3.0);
@@ -168,49 +194,40 @@ impl PdfTools {
         let ink = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0));
         ink.set_tooltip_text(Some("Colour of the ink"));
         ink.set_title("Ink Colour");
-        let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        for (caption, widget) in [("Width", width.upcast_ref::<gtk::Widget>()), ("Colour", ink.upcast_ref())] {
-            let label = gtk::Label::new(Some(caption));
-            label.add_css_class("dim-label");
-            stroke_row.append(&label);
-            stroke_row.append(widget);
-        }
-        strokes.append(&stroke_row);
         // Inside a rectangle or ellipse. See-through, as it starts, is none.
         let fill = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0));
         fill.set_tooltip_text(Some("Inside colour for rectangles and ellipses — set its opacity to zero for none"));
         fill.set_title("Fill Colour");
+        let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (caption, widget) in [("Width", width.upcast_ref::<gtk::Widget>()), ("Colour", ink.upcast_ref())] {
+            stroke_row.append(&caption_label(caption));
+            stroke_row.append(widget);
+        }
         let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let fill_caption = gtk::Label::new(Some("Fill"));
-        fill_caption.add_css_class("dim-label");
-        let fill_note = gtk::Label::new(Some("Rectangles and ellipses"));
-        fill_note.add_css_class("dim-label");
-        fill_note.add_css_class("caption");
-        fill_row.append(&fill_caption);
+        fill_row.append(&caption_label("Fill"));
         fill_row.append(&fill);
-        fill_row.append(&fill_note);
         fill_row.set_sensitive(pdf::can_draw());
-        strokes.append(&fill_row);
         // A polygon's sides and a star's points.
         let corners = crate::images::edit::panel::Corners::new();
-        strokes.append(&corners.row);
-        strokes.append(&history_buttons());
+        let ink_row = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+        ink_row.append(&stroke_row);
+        ink_row.append(&fill_row);
+        ink_row.append(&corners.row);
+        strokes.append(&ink_row);
         let draw_hint = hint(if pdf::can_draw() {
             "Pick a tool, then drag on the page."
         } else {
             "Drawing on a PDF needs Poppler 25.06 or newer."
         });
-        tool_grid.set_sensitive(pdf::can_draw());
         stroke_row.set_sensitive(pdf::can_draw());
         strokes.append(&draw_hint);
         // Set while the controls are being filled from a picked drawing.
         let showing_picked = Rc::new(Cell::new(false));
 
-        // -- text --
+        // -- text's options --
         let words = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        words.set_visible(false);
         let controls = TextControls {
-            entry: gtk::Entry::builder().placeholder_text("Type something").build(),
+            entry: gtk::Entry::builder().placeholder_text("Type something").hexpand(true).build(),
             font: gtk::FontDialogButton::new(Some(gtk::FontDialog::new())),
             size: gtk::SpinButton::with_range(4.0, 200.0, 1.0),
             bold: gtk::ToggleButton::with_label("B"),
@@ -229,54 +246,53 @@ impl PdfTools {
         controls.size.set_value(18.0);
         controls.size.set_width_chars(4);
         controls.size.set_tooltip_text(Some("Font size, in points"));
-        words.append(&controls.entry);
-        words.append(&controls.font);
-        let style_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let size_label = gtk::Label::new(Some("Size"));
-        size_label.add_css_class("dim-label");
-        style_row.append(&size_label);
-        style_row.append(&controls.size);
-        for (button, css, tip) in [(&controls.bold, "text-bold", "Bold"), (&controls.italic, "text-italic", "Italic")] {
-            button.add_css_class(css);
-            button.set_tooltip_text(Some(tip));
-            style_row.append(button);
-        }
-        words.append(&style_row);
-        let colour_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        for (caption, button, tip) in [
-            ("Text", &controls.colour, "Colour of the letters"),
-            ("Behind", &controls.background, "Box behind the letters — set its opacity to zero for none"),
-        ] {
-            let label = gtk::Label::new(Some(caption));
-            label.add_css_class("dim-label");
-            button.set_tooltip_text(Some(tip));
-            colour_row.append(&label);
-            colour_row.append(button);
-        }
-        words.append(&colour_row);
-        // Without Poppler's font calls only the words themselves can be set.
-        for widget in [controls.font.upcast_ref::<gtk::Widget>(), style_row.upcast_ref(), controls.colour.upcast_ref()] {
-            widget.set_sensitive(pdf::can_style_text());
-        }
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        actions.set_homogeneous(true);
         let add = gtk::Button::with_label("Add");
         add.add_css_class("suggested-action");
         add.set_tooltip_text(Some("Put a text box near the top of this page"));
         controls.remove.set_tooltip_text(Some("Delete the chosen text box"));
         controls.remove.set_sensitive(false);
-        actions.append(&add);
-        actions.append(&controls.remove);
-        words.append(&actions);
+        let typing_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        typing_row.append(&controls.entry);
+        typing_row.append(&add);
+        typing_row.append(&controls.remove);
+        words.append(&typing_row);
+        let style_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        style_row.append(&controls.font);
+        style_row.append(&caption_label("Size"));
+        style_row.append(&controls.size);
+        let emphasis = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        emphasis.add_css_class("linked");
+        for (button, css, tip) in [(&controls.bold, "text-bold", "Bold"), (&controls.italic, "text-italic", "Italic")] {
+            button.add_css_class(css);
+            button.set_tooltip_text(Some(tip));
+            emphasis.append(button);
+        }
+        style_row.append(&emphasis);
+        let colour_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (caption, button, tip) in [
+            ("Text", &controls.colour, "Colour of the letters"),
+            ("Behind", &controls.background, "Box behind the letters — set its opacity to zero for none"),
+        ] {
+            button.set_tooltip_text(Some(tip));
+            colour_row.append(&caption_label(caption));
+            colour_row.append(button);
+        }
+        let look_row = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+        look_row.append(&style_row);
+        look_row.append(&colour_row);
+        words.append(&look_row);
+        // Without Poppler's font calls only the words themselves can be set.
+        for widget in [controls.font.upcast_ref::<gtk::Widget>(), style_row.upcast_ref(), controls.colour.upcast_ref()] {
+            widget.set_sensitive(pdf::can_style_text());
+        }
         controls.show(None);
         if !pdf::can_style_text() {
             controls.hint.set_text("Fonts, sizes and colours for text need Poppler 24.12 or newer.");
         }
         words.append(&controls.hint);
 
-        // -- redaction --
+        // -- redaction's options --
         let marking = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        marking.set_visible(false);
         // Two ways to mark: a box over anything, or text as it is selected.
         let by_area = gtk::ToggleButton::with_label("Area");
         by_area.set_tooltip_text(Some("Drag a box over anything: text, pictures, drawings"));
@@ -286,14 +302,8 @@ impl PdfTools {
         by_area.set_active(true);
         let ways = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         ways.add_css_class("linked");
-        ways.set_homogeneous(true);
         ways.append(&by_area);
         ways.append(&by_text);
-        marking.append(&ways);
-        let redact_hint = hint("Drag over what should go.");
-        marking.append(&redact_hint);
-        let redact_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        redact_actions.set_homogeneous(true);
         let unmark = gtk::Button::with_label("Unmark All");
         unmark.set_action_name(Some("win.unredact-all"));
         unmark.set_tooltip_text(Some("Take every mark away"));
@@ -301,41 +311,46 @@ impl PdfTools {
         apply.add_css_class("suggested-action");
         apply.set_action_name(Some("win.apply-redactions"));
         apply.set_tooltip_text(Some("Black out what is marked, in a copy or the original"));
-        redact_actions.append(&unmark);
-        redact_actions.append(&apply);
-        marking.append(&redact_actions);
+        let redact_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        ways.set_hexpand(true);
+        ways.set_halign(gtk::Align::Start);
+        redact_row.append(&ways);
+        redact_row.append(&unmark);
+        redact_row.append(&apply);
+        marking.append(&redact_row);
+        let redact_hint = hint("Drag over what should go.");
+        marking.append(&redact_hint);
         marking.append(&hint("Marked areas stay see-through, so you can check them. Nothing is blacked out until you apply them."));
 
-        // Its name and a way out, now that nothing in the header opens it.
-        let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let title = gtk::Label::builder().label("Edit").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
-        let close = gtk::Button::builder()
-            .icon_name("window-close-symbolic")
-            .tooltip_text("Close (Ctrl+E)")
-            .action_name("win.draw-panel")
-            .css_classes(["flat", "circular"])
+        // -- the card above the toolbar: the options of the tool in hand --
+        let options = gtk::Stack::new();
+        options.set_hhomogeneous(false);
+        options.set_vhomogeneous(false);
+        options.set_interpolate_size(true);
+        options.set_transition_type(gtk::StackTransitionType::Crossfade);
+        options.add_named(&strokes, Some("draw"));
+        options.add_named(&words, Some("text"));
+        options.add_named(&marking, Some("redact"));
+        options.add_css_class("markup-options");
+        // Wide enough for the text's options; the hints wrap to it.
+        options.set_width_request(420);
+        let card = gtk::Revealer::builder()
+            .child(&options)
+            .transition_type(gtk::RevealerTransitionType::SlideUp)
+            .transition_duration(150)
+            .reveal_child(false)
+            .halign(gtk::Align::Center)
             .build();
-        top.append(&title);
-        top.append(&close);
-        column.append(&top);
-        column.append(&draw_toggle);
-        column.append(&strokes);
-        column.append(&text_toggle);
-        column.append(&words);
-        column.append(&redact_toggle);
-        column.append(&marking);
-        // One width whichever section is open, or the page would be refitted,
-        // and jump, every time the other one is opened.
-        let root = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .width_request(300)
-            // The title row stretches to push the close button right; said
-            // here, so that stretch stays inside the panel instead of taking
-            // half the window.
-            .hexpand(false)
-            .child(&column)
-            .visible(false)
-            .build();
+
+        let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        root.set_halign(gtk::Align::Center);
+        root.set_valign(gtk::Align::End);
+        root.set_margin_bottom(12);
+        root.set_margin_start(12);
+        root.set_margin_end(12);
+        root.append(&card);
+        root.append(&toolbar);
+        root.set_visible(false);
 
         // -- wiring --
         let tools = Rc::new(tools);
@@ -373,20 +388,29 @@ impl PdfTools {
                 }
             })
         };
-        let sections = [(draw_toggle.clone(), strokes.clone()), (text_toggle.clone(), words.clone()), (redact_toggle.clone(), marking.clone())];
-        for (toggle, options) in &sections {
-            let others: Vec<gtk::ToggleButton> =
-                sections.iter().map(|(t, _)| t.clone()).filter(|t| t != toggle).collect();
-            let (options, push_tool) = (options.clone(), push_tool.clone());
+        // The card shows what the tool in hand can be told; Select picks a
+        // drawing up to change its ink, so it has the drawing's options.
+        let toggles = [(select.clone(), "draw"), (draw_toggle.clone(), "draw"), (text_toggle.clone(), "text"), (redact_toggle.clone(), "redact")];
+        for (toggle, page) in &toggles {
+            let all: Vec<gtk::ToggleButton> = toggles.iter().map(|(t, _)| t.clone()).collect();
+            let (options, card, push_tool, page) = (options.clone(), card.clone(), push_tool.clone(), *page);
             toggle.connect_toggled(move |toggle| {
-                // One section open at a time, as in the image editor.
                 if toggle.is_active() {
-                    for other in others.iter().filter(|o| o.is_active()) {
-                        other.set_active(false);
-                    }
+                    options.set_visible_child_name(page);
                 }
-                options.set_visible(toggle.is_active());
+                card.set_reveal_child(all.iter().any(|t| t.is_active()));
                 push_tool();
+            });
+        }
+        // Picking a pen or shape puts it in hand, on the Draw button's face.
+        for (tool, button) in tools.iter() {
+            let (tool, draw_toggle, current, popover) = (*tool, draw_toggle.clone(), current.clone(), tool_popover.clone());
+            button.connect_toggled(move |button| {
+                if button.is_active() {
+                    current.set_tool(tool);
+                    draw_toggle.set_active(true);
+                    popover.popdown();
+                }
             });
         }
         let pick_hint = {
@@ -528,27 +552,32 @@ impl PdfTools {
         let shown = controls.clone();
         window.imp().pdf_view.connect_chosen(move |chosen| shown.show(chosen));
 
-        PdfTools { root, draw: draw_toggle, text: text_toggle, redact: redact_toggle, select }
+        PdfTools { root, select, draw: draw_toggle, text: text_toggle, redact: redact_toggle }
     }
 
-    /// Drawing with the Select tool in hand, for moving and sizing what was
-    /// just put on the page.
+    /// The Select tool in hand, for moving and sizing what was just put on
+    /// the page.
     pub fn hold_select(&self) {
-        self.draw.set_active(true);
         self.select.set_active(true);
     }
 
-    /// Show the panel, or put it away; put away, a press on the page selects
-    /// text again.
+    /// Show the toolbar, or put it away; put away, a press on the page
+    /// selects text again.
     pub fn set_open(&self, open: bool) {
         self.root.set_visible(open);
+        let tools = [&self.select, &self.draw, &self.text, &self.redact];
         if !open {
-            self.draw.set_active(false);
-            self.text.set_active(false);
-            self.redact.set_active(false);
-        } else if !self.draw.is_active() && !self.text.is_active() && !self.redact.is_active() {
-            // Opened to draw, most likely: start with the pen in hand.
-            self.draw.set_active(true);
+            for tool in tools {
+                tool.set_active(false);
+            }
+        } else if !tools.iter().any(|tool| tool.is_active()) {
+            // Opened to draw, most likely: start with the pen in hand, or
+            // with Select where drawing is not to be had.
+            if self.draw.is_sensitive() && pdf::can_draw() {
+                self.draw.set_active(true);
+            } else {
+                self.select.set_active(true);
+            }
         }
     }
 }
@@ -558,21 +587,37 @@ fn hint(text: &str) -> gtk::Label {
     label.add_css_class("dim-label");
     label.set_xalign(0.0);
     label.set_wrap(true);
+    // The card is as wide as its controls; the words fit to that.
+    label.set_max_width_chars(60);
     label
 }
 
-/// Undo and Redo, which here take back drawings and text as they do marks.
-fn history_buttons() -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.set_homogeneous(true);
-    for (label, action, tip) in [
-        ("Undo", "win.undo-mark", "Take back the last change to the page (Ctrl+Z)"),
-        ("Redo", "win.redo-mark", "Put it back (Ctrl+Shift+Z)"),
-    ] {
-        let button = gtk::Button::with_label(label);
-        button.set_action_name(Some(action));
-        button.set_tooltip_text(Some(tip));
-        row.append(&button);
-    }
-    row
+fn caption_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.add_css_class("dim-label");
+    label
+}
+
+/// A tool on the toolbar: held until another is taken up.
+fn tool_toggle(face: &gtk::Widget, tip: &str) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::builder().child(face).tooltip_text(tip).build();
+    button.add_css_class("flat");
+    button
+}
+
+/// A button on the toolbar that does something once.
+fn icon_button(icon: &str, tip: &str, action: &str) -> gtk::Button {
+    let button = gtk::Button::builder().icon_name(icon).tooltip_text(tip).action_name(action).build();
+    button.add_css_class("flat");
+    button
+}
+
+/// A thin line between the toolbar's groups.
+fn divider() -> gtk::Separator {
+    let line = gtk::Separator::new(gtk::Orientation::Vertical);
+    line.set_margin_top(6);
+    line.set_margin_bottom(6);
+    line.set_margin_start(4);
+    line.set_margin_end(4);
+    line
 }

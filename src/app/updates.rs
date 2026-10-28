@@ -337,7 +337,7 @@ enum Step {
 /// The header's update button, for one window: hidden until there is news.
 pub fn header_button(window: &Window) -> gtk::Button {
     let content = adw::ButtonContent::builder().icon_name("software-update-available-symbolic").build();
-    let button = gtk::Button::builder().child(&content).visible(false).css_classes(["suggested-action"]).build();
+    let button = gtk::Button::builder().child(&content).visible(false).css_classes(["update-available"]).build();
     let updates = shared();
 
     let show = {

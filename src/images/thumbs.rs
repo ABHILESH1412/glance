@@ -15,15 +15,17 @@
 use std::path::Path;
 
 use image::metadata::Orientation;
-use image::{DynamicImage, GenericImage, Rgba, RgbaImage};
+use image::{DynamicImage, RgbaImage};
 use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
 use crate::images::format::{self, Format};
 use crate::images::loader::{self, LoadedImage};
 
-/// Every thumbnail comes back at exactly `width` x `height`, letterboxed on a
-/// transparent background.
+/// Every thumbnail comes back at exactly `width` x `height`, filling it: the
+/// picture is shrunk until it just covers the slot, and what spills over is
+/// cut off evenly, so a rounded slot is rounded picture rather than empty
+/// corners.
 ///
 /// Uniform size is the point: `GtkPicture` takes its natural width from the
 /// image, so thumbnails of different shapes would claim different amounts of
@@ -33,39 +35,29 @@ pub fn generate(path: &Path, width: u32, height: u32) -> Result<LoadedImage, Str
 }
 
 fn generate_inner(path: &Path, width: u32, height: u32) -> Result<LoadedImage, String> {
+    // Twice the slot's longer side, so that even a wide panorama still
+    // covers its height without being stretched.
+    let edge = width.max(height) * 2;
     let shrunk = if matches!(format::detect(path), Format::Raw) {
         match raw_embedded(path) {
-            Some(embedded) => shrink_dynamic(embedded, width.max(height)),
+            Some(embedded) => shrink_dynamic(embedded, edge),
             // No embedded image at all: pay for a develop. Rare, and cached.
-            None => shrink(loader::decode(path)?, width.max(height)),
+            None => shrink(loader::decode(path)?, edge),
         }
     } else {
-        shrink(loader::decode(path)?, width.max(height))
+        shrink(loader::decode(path)?, edge)
     };
-    Ok(letterbox(shrunk, width, height))
+    Ok(filled(shrunk, width, height))
 }
 
-/// Centre the shrunk image on a fixed transparent canvas.
-fn letterbox(image: LoadedImage, width: u32, height: u32) -> LoadedImage {
-    let scale = (f64::from(width) / f64::from(image.width.max(1)))
-        .min(f64::from(height) / f64::from(image.height.max(1)))
-        .min(1.0);
-    let target_w = ((f64::from(image.width) * scale).round() as u32).clamp(1, width);
-    let target_h = ((f64::from(image.height) * scale).round() as u32).clamp(1, height);
-
+/// The shrunk image scaled to cover `width` x `height`, its middle kept.
+fn filled(image: LoadedImage, width: u32, height: u32) -> LoadedImage {
     let Some(source) = RgbaImage::from_raw(image.width, image.height, image.rgba) else {
         return blank(width, height, image.premultiplied);
     };
-    let scaled = DynamicImage::ImageRgba8(source)
-        .thumbnail(target_w, target_h)
+    let canvas = DynamicImage::ImageRgba8(source)
+        .resize_to_fill(width, height, image::imageops::FilterType::Triangle)
         .into_rgba8();
-
-    let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-    let x = (width - scaled.width()) / 2;
-    let y = (height - scaled.height()) / 2;
-    if canvas.copy_from(&scaled, x, y).is_err() {
-        return blank(width, height, image.premultiplied);
-    }
 
     LoadedImage {
         width,

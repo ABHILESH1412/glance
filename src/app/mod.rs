@@ -11,6 +11,7 @@
 pub mod closing;
 pub mod colour;
 pub mod combine;
+pub mod controls;
 pub mod cutout;
 pub mod doc_info;
 pub mod filmstrip;
@@ -25,6 +26,7 @@ pub mod preferences;
 pub mod prefs;
 pub mod print;
 pub mod protect;
+pub mod recent;
 pub mod redact;
 pub mod shortcuts;
 pub mod shrink;

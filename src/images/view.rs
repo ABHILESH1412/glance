@@ -4,14 +4,26 @@
 //! The body of the window: a stack that swaps between the empty state, a
 //! spinner while decoding runs, and the image itself.
 
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
 use adw::prelude::*;
 
 use crate::images::canvas::{self, ImageCanvas};
 use crate::images::loader::LoadedImage;
 
+/// How many of the files opened last the empty window offers again.
+const RECENT: usize = 4;
+
 pub struct ImageView {
     stack: gtk::Stack,
     canvas: ImageCanvas,
+    /// The files opened last, under the buttons while nothing is open.
+    recent: gtk::Box,
+    recent_list: gtk::ListBox,
+    recent_clear: gtk::Button,
+    recent_paths: Rc<RefCell<Vec<PathBuf>>>,
 }
 
 impl ImageView {
@@ -46,11 +58,31 @@ impl ImageView {
         choices.set_homogeneous(true);
         choices.append(&open_button);
         choices.append(&combine_button);
+
+        // Opened last, to pick up where you were.
+        let heading = gtk::Label::builder().label("Recent").xalign(0.0).hexpand(true).css_classes(["heading"]).build();
+        let recent_clear = gtk::Button::builder().label("Clear").tooltip_text("Forget the files opened lately").build();
+        recent_clear.add_css_class("flat");
+        let header = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        header.append(&heading);
+        header.append(&recent_clear);
+        let recent_list = gtk::ListBox::new();
+        recent_list.add_css_class("boxed-list");
+        recent_list.set_selection_mode(gtk::SelectionMode::None);
+        let recent = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        recent.append(&header);
+        recent.append(&recent_list);
+        recent.set_visible(false);
+        let clamp = adw::Clamp::builder().maximum_size(420).child(&recent).build();
+
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 36);
+        body.append(&choices);
+        body.append(&clamp);
         let empty = adw::StatusPage::builder()
-            .icon_name("image-x-generic-symbolic")
-            .title("Nothing Open")
-            .description("Drop an image or a PDF here, or open one to start viewing. Or put pages from several together as one PDF.")
-            .child(&choices)
+            .icon_name(crate::APP_ID)
+            .title("Open a Picture or PDF")
+            .description("Drag one in, or choose one. Several at once can be put together as one PDF.")
+            .child(&body)
             .build();
 
         // GTK's spinner rather than libadwaita's, which would otherwise be the
@@ -74,7 +106,45 @@ impl ImageView {
         stack.add_named(&canvas, Some("image"));
         stack.set_visible_child_name("empty");
 
-        Self { stack, canvas }
+        Self { stack, canvas, recent, recent_list, recent_clear, recent_paths: Rc::default() }
+    }
+
+    /// The files opened last, newest first; none puts the list away.
+    pub fn set_recent(&self, paths: Vec<PathBuf>) {
+        while let Some(row) = self.recent_list.row_at_index(0) {
+            self.recent_list.remove(&row);
+        }
+        let home = glib_home();
+        for path in paths.iter().take(RECENT) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let folder = path.parent().map(|folder| tidy_folder(folder, home.as_deref())).unwrap_or_default();
+            let icon = if crate::app::playlist::is_image(path) { "image-x-generic-symbolic" } else { "x-office-document-symbolic" };
+            let row = adw::ActionRow::builder()
+                .title(glib::markup_escape_text(&name).as_str())
+                .subtitle(glib::markup_escape_text(&folder).as_str())
+                .activatable(true)
+                .build();
+            row.add_prefix(&gtk::Image::from_icon_name(icon));
+            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            self.recent_list.append(&row);
+        }
+        self.recent.set_visible(!paths.is_empty());
+        self.recent_paths.replace(paths.into_iter().take(RECENT).collect());
+    }
+
+    /// Called with a recent file when its row is clicked, or with `None` when
+    /// the list is to be forgotten.
+    pub fn connect_recent(&self, f: impl Fn(Option<PathBuf>) + 'static) {
+        let f = Rc::new(f);
+        let paths = self.recent_paths.clone();
+        let open = f.clone();
+        self.recent_list.connect_row_activated(move |_, row| {
+            let path = usize::try_from(row.index()).ok().and_then(|i| paths.borrow().get(i).cloned());
+            if path.is_some() {
+                open(path);
+            }
+        });
+        self.recent_clear.connect_clicked(move |_| f(None));
     }
 
     pub fn widget(&self) -> &gtk::Stack {
@@ -127,5 +197,34 @@ impl ImageView {
             self.canvas.set_texture(Some(texture));
         }
         self.stack.set_visible_child_name("image");
+    }
+}
+
+use gtk::glib;
+
+fn glib_home() -> Option<PathBuf> {
+    Some(glib::home_dir()).filter(|home| !home.as_os_str().is_empty())
+}
+
+/// A folder as people say it: `~/Pictures/Holiday` rather than the whole path.
+fn tidy_folder(folder: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| folder.strip_prefix(home).ok()) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{}", rest.display()),
+        None => folder.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folders_under_home_are_said_from_it() {
+        let home = Path::new("/home/someone");
+        assert_eq!(tidy_folder(Path::new("/home/someone/Pictures/Trip"), Some(home)), "~/Pictures/Trip");
+        assert_eq!(tidy_folder(Path::new("/home/someone"), Some(home)), "~");
+        assert_eq!(tidy_folder(Path::new("/media/disk"), Some(home)), "/media/disk");
+        assert_eq!(tidy_folder(Path::new("/home/someoneelse"), Some(home)), "/home/someoneelse");
     }
 }

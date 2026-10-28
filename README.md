@@ -376,9 +376,12 @@ Animated GIF, WebP and JPEG XL play, and keep playing while you zoom or rotate; 
 every frame down the side with how long it shows, to pause on one or step through them;
 Copy copies the frame on screen. Right-click the picture, or a frame, to copy it.
 
-**Browsing** — a filmstrip of the folder along the bottom, arrow keys to step through it,
-and the folder is watched so files added elsewhere show up. `F5` plays the folder as a
-slideshow, full screen, every 2 to 30 seconds; Space pauses it.
+**Browsing** — a filmstrip of the folder floats over the bottom of the picture, with an
+arrow either side and the zoom in the corner; they come up when the pointer moves and fade
+once it rests, so the picture has the window to itself. The arrow keys step through the
+folder too, and it is watched so files added elsewhere show up. `F5` plays the folder as
+a slideshow, full screen, every 2 to 30 seconds; Space pauses it. With nothing open, the
+window offers the last few files Glance opened, to pick up where you were.
 
 **Image Info** — `Ctrl+I` opens a panel beside the picture with the file's details (kind,
 size, dates, dimensions, print resolution, frames) and what the camera wrote into it:
@@ -422,7 +425,7 @@ held in memory, so a long document costs about what a short one does. Zooming re
 the pages sharp once it stops moving. The arrow keys, Page Up and Page Down glide rather
 than jump, and ← → turn the page; holding the middle mouse button takes hold of the page
 to move it, which is handy zoomed in. The header stays quiet — pages, open, the page
-box, search and the menu — and the menu opens on a row of zoom, rotate and fullscreen
+box, search, Mark Up and the menu — and the menu opens on a row of zoom, rotate and fullscreen
 buttons, which leave it open so you can press them again, and a row of highlight
 colours.
 
@@ -468,20 +471,25 @@ it, and a read-only file is left untouched.
   sticky-note icon that opens when clicked; a speech bubble writes its words on the
   page, with a tail pointing at the spot. Click either to edit or delete it, and drag it
   to move it
-- **Edit** (Ctrl+E), a panel of three sections: **Draw**, with the image editor's pen,
-  highlighter, line, arrows, rectangles, rounded rectangles, ellipses, polygons, stars,
-  speech bubbles, ticks and crosses, in any colour and thickness, rectangles and ellipses
-  filled or not; **Signature**, to put a kept signature on the page as ink, sharp at any
-  size, write a new one on the signature pad, or **Import from Picture…** — a scan, a photo
-  of it on paper, or a PNG — which keeps just the ink, in its own colour or black or blue; **Add Picture…**, to put a picture
-  from a file on the page — or drop picture files on an open PDF, and they land where
-  they were dropped; and
-  **Select**, to pick up any drawing or picture on the page (made earlier, or by another program) and
-  move it, resize it by its handles (a picture keeps its proportions, unless Shift is
-  held), recolour or thicken it, or delete it; **Text**,
-  for text boxes in any font, size, colour and background, bold or italic — click one to
-  change it, drag it to move it; and **Redact** (see below). Opening another PDF puts the
-  panel away
+- **Mark Up** (Ctrl+E, or the pencil in the header) brings up a toolbar floating over
+  the bottom of the page, so the page keeps the whole window; the tool in hand's options
+  sit on a small card just above it. Its tools:
+  - **Select**, to pick up any drawing or picture on the page (made earlier, or by
+    another program) and move it, resize it by its handles (a picture keeps its
+    proportions, unless Shift is held), recolour or thicken it, or delete it
+  - **Draw**, with the image editor's pen, highlighter, line, arrows, rectangles, rounded
+    rectangles, ellipses, polygons, stars, speech bubbles, ticks and crosses, chosen from
+    the arrow beside it, in any colour and thickness, rectangles and ellipses filled or not
+  - **Text**, for text boxes in any font, size, colour and background, bold or italic —
+    click one to change it, drag it to move it
+  - **Redact** (see below)
+  - **Signature**, to put a kept signature on the page as ink, sharp at any size, write a
+    new one on the signature pad, or **Import from Picture…** — a scan, a photo of it on
+    paper, or a PNG — which keeps just the ink, in its own colour or black or blue
+  - **Add Picture**, to put a picture from a file on the page — or drop picture files on
+    an open PDF, and they land where they were dropped
+  - **Undo** and **Redo**, and **Done** to put the toolbar away. Opening another PDF puts
+    it away too
 
 *Protecting and shrinking*
 
@@ -532,11 +540,12 @@ what is under the box for good, in pictures and PDFs alike.
 
 It happens in two steps, so nothing goes by accident:
 
-1. **Mark** what should go, in the **Redact** section of the Edit panel: drag a box over
-   anything (**Area**), or select text and have it marked as you let go (**Text**). Or
-   select text anywhere and press Ctrl+Shift+R, or right-click → Redact. Marked areas show
-   dark but see-through, edged in red, so you can check what each one covers. Undo, or
-   right-click → Remove Redaction Mark, takes one back. Nothing has changed yet.
+1. **Mark** what should go, with **Redact** in a PDF's Mark Up toolbar or the image Edit
+   panel: drag a box over anything (**Area**), or select text and have it marked as you
+   let go (**Text**). Or select text anywhere and press Ctrl+Shift+R, or right-click →
+   Redact. Marked areas show dark but see-through, edged in red, so you can check what
+   each one covers. Undo, or right-click → Remove Redaction Mark, takes one back. Nothing
+   has changed yet.
 2. **Apply**: a bar says how many areas are marked, and its Apply button asks what to do.
    **Save Redacted Copy…** (the default) leaves the original as it was; **Redact
    Original** changes the file itself. Saving an edited picture with marked areas asks the
@@ -784,7 +793,7 @@ search box. The most used:
 | `←` `→` `Space` | Previous / next image |
 | `+` `-` `0` `1` | Zoom in, out, fit, 100% |
 | `[` `]` | Rotate left / right |
-| `Ctrl+E` | Edit panel: draw, write and redact |
+| `Ctrl+E` | Edit a picture, or mark up a PDF: draw, write and redact |
 | `Ctrl+T` `Ctrl+R` | Rotate and flip / Resize |
 | `Ctrl+Z` `Ctrl+Shift+Z` | Undo / redo an edit, or a change to a PDF |
 | `Ctrl+S` `Ctrl+Shift+S` | Save in place / Export… |

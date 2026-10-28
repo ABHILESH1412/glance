@@ -180,6 +180,8 @@ mod imp {
         /// has read.
         pub live_on: Cell<bool>,
         pub live_button: gtk::ToggleButton,
+        /// Marking up a PDF: the toolbar over its page.
+        pub markup_button: gtk::ToggleButton,
         pub live_status: gtk::Revealer,
         pub live: RefCell<crate::app::live_text::LiveState>,
         /// Removing the background: the button, the pill saying it is under
@@ -246,6 +248,8 @@ mod imp {
         pub flip_h_button: gtk::ToggleButton,
         pub flip_v_button: gtk::ToggleButton,
         pub strip: FilmStrip,
+        /// The filmstrip, arrows and zoom over the picture.
+        pub controls: crate::app::controls::ViewerControls,
         /// Thumbnails already being generated, so a slot that reappears does
         /// not queue the same decode twice.
         pub pending_thumbs: RefCell<HashSet<PathBuf>>,
@@ -372,6 +376,7 @@ mod imp {
                 frames_wanted: Cell::new(false),
                 live_on: Cell::new(false),
                 live_button: gtk::ToggleButton::new(),
+                markup_button: gtk::ToggleButton::new(),
                 live_status: gtk::Revealer::new(),
                 live: RefCell::new(Default::default()),
                 cutout_button: gtk::Button::new(),
@@ -416,6 +421,7 @@ mod imp {
                 flip_h_button: gtk::ToggleButton::new(),
                 flip_v_button: gtk::ToggleButton::new(),
                 strip: FilmStrip::new(),
+                controls: Default::default(),
                 pending_thumbs: RefCell::new(HashSet::new()),
                 transform_toggle: gtk::ToggleButton::new(),
                 rotation_bar: gtk::Box::new(gtk::Orientation::Vertical, 6),
@@ -448,6 +454,7 @@ mod imp {
             self.obj().install_actions();
             self.obj().install_viewing_actions();
             self.obj().install_close_guard();
+            self.obj().install_recent();
         }
     }
 
@@ -501,7 +508,7 @@ impl Window {
         let split = &imp.split;
         split.set_hexpand(true);
         split.set_sidebar(Some(imp.pdf_view.sidebar()));
-        split.set_content(Some(content));
+        split.set_content(Some(&self.build_viewer_controls(content)));
         // Wide enough for a heading in the table of contents to be read.
         split.set_min_sidebar_width(200.0);
         split.set_max_sidebar_width(260.0);
@@ -541,7 +548,8 @@ impl Window {
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
         let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
-        body.append(&pdf_tools.root);
+        // The PDF's markup toolbar floats over its page.
+        imp.controls.overlay.add_overlay(&pdf_tools.root);
         let _ = imp.pdf_tools.set(pdf_tools);
         body.append(&imp.inspector.root);
         // The slideshow's controls float over the picture.
@@ -550,6 +558,7 @@ impl Window {
         stage.add_overlay(&imp.slideshow_controls);
         stage.add_overlay(&imp.live_status);
         stage.add_overlay(&imp.cutout_status);
+        stage.add_overlay(self.build_drop_hint());
         imp.toasts.set_child(Some(&stage));
 
         let open_button = gtk::Button::from_icon_name("document-open-symbolic");
@@ -618,8 +627,10 @@ impl Window {
         edit_button.set_sensitive(false);
         edit_button.set_visible(false);
 
+        // The name stays in the middle of the window, whatever is either side.
         let header = adw::HeaderBar::builder()
             .title_widget(&imp.title)
+            .centering_policy(adw::CenteringPolicy::Strict)
             .build();
         header.pack_start(&imp.sidebar_button);
         header.pack_start(&open_button);
@@ -632,12 +643,18 @@ impl Window {
         info_button.set_tooltip_text(Some("Image Info (Ctrl+I)"));
         info_button.set_action_name(Some("win.inspector"));
         header.pack_end(info_button);
+        let markup_button = &imp.markup_button;
+        markup_button.set_icon_name("document-edit-symbolic");
+        markup_button.set_tooltip_text(Some("Mark Up (Ctrl+E)"));
+        markup_button.set_action_name(Some("win.draw-panel"));
+        markup_button.set_visible(false);
         let live_button = &imp.live_button;
         live_button.set_icon_name("glance-live-text-symbolic");
         live_button.set_tooltip_text(Some("Select Text in Image (Ctrl+Shift+T)"));
         live_button.set_action_name(Some("win.live-text"));
         header.pack_end(edit_button);
         header.pack_end(live_button);
+        header.pack_end(&imp.markup_button);
         header.pack_end(&imp.search_button);
 
         let header_stack = &imp.header_stack;
@@ -657,7 +674,6 @@ impl Window {
         ));
         toolbar.add_top_bar(banner);
         toolbar.set_content(Some(&imp.toasts));
-        toolbar.add_bottom_bar(&imp.strip);
         imp.faces.add_named(toolbar, Some("view"));
         imp.faces.add_named(imp.combine.widget(), Some("combine"));
         imp.faces.set_transition_type(gtk::StackTransitionType::Crossfade);
@@ -702,11 +718,8 @@ impl Window {
                 if !window.is_fullscreen() {
                     return;
                 }
-                let height = window.height() as f64;
                 let imp = window.imp();
                 imp.toolbar.set_reveal_top_bars(y < EDGE_REVEAL);
-                imp.toolbar
-                    .set_reveal_bottom_bars(y > height - EDGE_REVEAL * 2.0);
             }
         ));
         self.add_controller(motion);
@@ -786,7 +799,8 @@ impl Window {
         // A slideshow is the picture alone, even where full screen is refused.
         let bare = full || imp.slideshow.get();
         imp.toolbar.set_reveal_top_bars(!bare);
-        imp.toolbar.set_reveal_bottom_bars(!bare);
+        // A slideshow has controls of its own instead.
+        self.wake_viewer_controls();
     }
 
     /// Accepts a file dropped anywhere on the window.
@@ -820,7 +834,14 @@ impl Window {
             #[upgrade_or]
             gdk::DragAction::empty(),
             move |_, _, _| {
-                window.add_css_class("drop-active");
+                let imp = window.imp();
+                if !imp.combining.get() {
+                    window.show_drop_hint(Some(if imp.showing_pdf.get() {
+                        "Drop pictures to put them on the page,\nor another file to open it"
+                    } else {
+                        "Drop to open"
+                    }));
+                }
                 gdk::DragAction::COPY
             }
         ));
@@ -828,7 +849,7 @@ impl Window {
         target.connect_leave(glib::clone!(
             #[weak(rename_to = window)]
             self,
-            move |_| window.remove_css_class("drop-active")
+            move |_| window.show_drop_hint(None)
         ));
 
         target.connect_drop(glib::clone!(
@@ -837,7 +858,7 @@ impl Window {
             #[upgrade_or]
             false,
             move |_, value, x, y| {
-                window.remove_css_class("drop-active");
+                window.show_drop_hint(None);
                 let files = match value.get::<gdk::FileList>() {
                     Ok(list) => list.files(),
                     Err(_) => value.get::<gio::File>().ok().into_iter().collect(),
@@ -864,18 +885,13 @@ impl Window {
         self.add_controller(target);
     }
 
-    /// The header bar carries the live zoom level alongside the format and size.
+    /// The zoom in the corner follows the picture, and comes up to say so.
     fn show_zoom(&self, percent: f64) {
-        let imp = self.imp();
-        if imp.showing_pdf.get() {
+        if self.imp().showing_pdf.get() {
             return; // The PDF view reports its own zoom, with the page.
         }
-        let shown = imp.shown.borrow();
-        let Some(shown) = shown.as_ref() else {
-            return;
-        };
-        imp.title
-            .set_subtitle(&format!("{} · {percent:.0}%", shown.subtitle));
+        self.show_zoom_level(percent);
+        self.wake_viewer_controls();
     }
 
     fn install_actions(&self) {
@@ -1775,9 +1791,13 @@ impl Window {
                 }
 
                 match result {
-                    Ok(Loaded::Pdf(opened)) => window.show_pdf(opened, name),
+                    Ok(Loaded::Pdf(opened)) => {
+                        crate::app::recent::remember(&path);
+                        window.show_pdf(opened, name);
+                    }
                     Ok(Loaded::Locked { tried }) => window.show_locked(&name, tried),
                     Ok(Loaded::Image(image)) => {
+                        crate::app::recent::remember(&path);
                         window.leave_pdf();
                         // A vector's size is its natural size, not whatever
                         // resolution it happened to be rasterised at first.
@@ -2188,6 +2208,7 @@ impl Window {
         imp.sidebar_button.set_visible(pdf);
         imp.page_box.set_visible(pdf);
         imp.search_button.set_visible(pdf);
+        imp.markup_button.set_visible(pdf);
         if !pdf {
             self.set_draw_panel(false);
         }

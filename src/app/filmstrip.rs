@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Abhilesh Singh
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The strip of neighbouring images along the bottom.
+//! The strip of neighbouring images, floating over the bottom of the picture.
 //!
-//! How many thumbnails fit is decided from the width actually handed to the
-//! widget rather than from the window size, so it keeps working whatever else
-//! shares the bar. The current image sits in the middle, and the strip never
+//! It asks for as much width as its thumbnails need and no more, so it sits as
+//! a small pill in the middle; how many thumbnails fit is then decided from the
+//! width actually handed to it, so a narrow window gets fewer. The current image sits in the middle, and the strip never
 //! shows the same file twice: a folder of three images gets three slots, not a
 //! repeating carousel.
 
@@ -17,17 +17,18 @@ use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gdk, glib};
 
-/// Big enough to recognise a photo, small enough that several fit.
-const THUMB_W: i32 = 76;
-const THUMB_H: i32 = 58;
+/// Big enough to recognise a photo, small enough to keep out of its way.
+const THUMB_W: i32 = 56;
+const THUMB_H: i32 = 42;
 const SPACING: i32 = 4;
 /// Past this the thumbnails stop helping and start costing decodes.
 const MAX_SLOTS: usize = 11;
 
-/// Thumbnails are generated at exactly the slot size, letterboxed, so every
-/// slot claims identical width no matter the shape of the picture.
-pub const SLOT_W: u32 = THUMB_W as u32;
-pub const SLOT_H: u32 = THUMB_H as u32;
+/// Thumbnails are generated filling the slot, so every slot claims identical
+/// width no matter the shape of the picture; at twice its size, so they stay
+/// sharp on a high-resolution screen.
+pub const SLOT_W: u32 = THUMB_W as u32 * 2;
+pub const SLOT_H: u32 = THUMB_H as u32 * 2;
 
 mod imp {
     use super::*;
@@ -39,9 +40,7 @@ mod imp {
         /// layout manager instead -- and the slot count has to come from the
         /// width actually granted.
         pub root: gtk::Box,
-        /// The arrows and thumbnails, sitting under the counter.
-        pub bar: gtk::Box,
-        /// Fills the space between the arrows, and is what gets measured.
+        /// Holds the thumbnails, and is what gets measured.
         ///
         /// A scroller rather than a plain box: a box's minimum width is the sum
         /// of its slots, which would make the strip dictate the window's
@@ -96,7 +95,14 @@ mod imp {
 
     impl WidgetImpl for FilmStrip {
         fn measure(&self, orientation: gtk::Orientation, for_size: i32) -> (i32, i32, i32, i32) {
-            self.root.measure(orientation, for_size)
+            let (minimum, natural, baseline_min, baseline_nat) = self.root.measure(orientation, for_size);
+            if orientation != gtk::Orientation::Horizontal {
+                return (minimum, natural, baseline_min, baseline_nat);
+            }
+            // Room for every thumbnail the folder could fill, beside the
+            // counter: what is wanted, not what is there yet.
+            let wanted = self.files.borrow().len().min(MAX_SLOTS) as i32;
+            (minimum, natural.max(minimum + wanted * (THUMB_W + SPACING)), -1, -1)
         }
 
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
@@ -143,29 +149,14 @@ impl FilmStrip {
 
     fn build(&self) {
         let imp = self.imp();
-        // Stacked: the count reads as a caption under the picture, with the
-        // thumbnails beneath it.
+        // The thumbnails, then where this one is among them, in one pill.
         let root = &imp.root;
-        root.set_orientation(gtk::Orientation::Vertical);
-        root.set_spacing(2);
-        root.add_css_class("toolbar");
-        root.set_margin_start(12);
-        root.set_margin_end(12);
-        root.set_margin_top(4);
-        root.set_margin_bottom(4);
+        root.set_orientation(gtk::Orientation::Horizontal);
+        root.set_spacing(6);
+        root.add_css_class("osd");
+        root.add_css_class("viewer-pill");
+        root.add_css_class("filmstrip");
         self.set_visible(false);
-
-        let previous = gtk::Button::from_icon_name("go-previous-symbolic");
-        previous.set_tooltip_text(Some("Previous Image"));
-        previous.set_action_name(Some("win.previous-image"));
-        previous.add_css_class("flat");
-        previous.set_valign(gtk::Align::Center);
-
-        let next = gtk::Button::from_icon_name("go-next-symbolic");
-        next.set_tooltip_text(Some("Next Image"));
-        next.set_action_name(Some("win.next-image"));
-        next.add_css_class("flat");
-        next.set_valign(gtk::Align::Center);
 
         imp.slots_box.set_orientation(gtk::Orientation::Horizontal);
         imp.slots_box.set_spacing(SPACING);
@@ -175,8 +166,6 @@ impl FilmStrip {
         imp.slots_box.set_halign(gtk::Align::Center);
 
         imp.inner.set_hexpand(true);
-        // Without this the slots sit at the top of the scroller while the
-        // arrows are centred in the bar, leaving them visibly out of line.
         imp.inner.set_valign(gtk::Align::Center);
         imp.slots_box.set_valign(gtk::Align::Center);
         imp.inner.set_policy(gtk::PolicyType::External, gtk::PolicyType::Never);
@@ -186,19 +175,11 @@ impl FilmStrip {
 
         imp.counter.add_css_class("numeric");
         imp.counter.add_css_class("dim-label");
-        imp.counter.set_halign(gtk::Align::Center);
-        // Fixed width, so the caption does not jitter as the digits change.
+        // Fixed width, so the pill does not jitter as the digits change.
         imp.counter.set_width_chars(7);
 
-        let bar = &imp.bar;
-        bar.set_orientation(gtk::Orientation::Horizontal);
-        bar.set_spacing(6);
-        bar.append(&previous);
-        bar.append(&imp.inner);
-        bar.append(&next);
-
+        root.append(&imp.inner);
         root.append(&imp.counter);
-        root.append(bar);
     }
 
     /// Point the strip at a folder listing and a position within it.
@@ -271,6 +252,8 @@ impl FilmStrip {
     fn rebuild(&self) {
         let imp = self.imp();
         let files = imp.files.borrow().clone();
+        // How wide it would like to be follows the folder.
+        self.queue_resize();
 
         // One image, or none, or the window wants it out of the way.
         if files.len() < 2 || !imp.allowed.get() {
@@ -322,7 +305,7 @@ impl FilmStrip {
 
         imp.showing.replace(showing);
         imp.counter
-            .set_text(&format!("{}/{}", index + 1, files.len()));
+            .set_text(&format!("{} / {}", index + 1, files.len()));
     }
 
     /// Grow the pool of slot widgets to `count`, hiding any spares.
@@ -330,8 +313,9 @@ impl FilmStrip {
         let imp = self.imp();
         while imp.buttons.borrow().len() < count {
             let picture = gtk::Picture::builder()
-                .content_fit(gtk::ContentFit::Contain)
+                .content_fit(gtk::ContentFit::Cover)
                 .can_shrink(true)
+                .overflow(gtk::Overflow::Hidden)
                 .build();
             let button = gtk::Button::builder()
                 .child(&picture)
