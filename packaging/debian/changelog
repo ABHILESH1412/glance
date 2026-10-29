@@ -1,3 +1,12 @@
+glance-image-viewer (3.0.2-1) unstable; urgency=medium
+
+  * [fix] The Arch package failed to link with makepkg's LTO on; it is built without LTO now
+  * [feat] Releases are built and published by GitHub Actions; this computer only tags and pushes
+  * [fix] The filmstrip ran under the zoom on narrower windows: it now keeps clear of it by the zoom's real width
+  * [fix] Icons were cut off on scaled screens: each is now drawn on the 16 px grid it declares
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 29 Oct 2026 11:01:15 +0530
+
 glance-image-viewer (3.0.1-1) unstable; urgency=medium
 
   * [feat] Releases are built and published by GitHub Actions; this computer only tags and pushes

@@ -120,6 +120,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="3.0.2" date="2026-10-29">
+      <description>
+        <ul>
+          <li>[fix] The Arch package failed to link with makepkg's LTO on; it is built without LTO now</li>
+          <li>[feat] Releases are built and published by GitHub Actions; this computer only tags and pushes</li>
+          <li>[fix] The filmstrip ran under the zoom on narrower windows: it now keeps clear of it by the zoom's real width</li>
+          <li>[fix] Icons were cut off on scaled screens: each is now drawn on the 16 px grid it declares</li>
+        </ul>
+      </description>
+    </release>
     <release version="3.0.1" date="2026-10-29">
       <description>
         <ul>
