@@ -5,7 +5,7 @@
 # too, so the two genuinely cannot share a system — hence the conflicts line.
 pkgname=glance-image-viewer
 _appid=io.github.abhilesh1412.Glance
-pkgver=3.0.2
+pkgver=3.0.3
 pkgrel=1
 pkgdesc="A fast, native image viewer for Linux"
 arch=('x86_64' 'aarch64')
@@ -20,7 +20,7 @@ conflicts=('glance')
 # GCC's own LTO format, which Rust's linker cannot read, and the link fails on
 # every opj_ function. Cargo's release build already optimises the Rust side.
 options=('!lto')
-# GitHub strips the leading v: the tarball for tag v3.0.2 unpacks to glance-3.0.2/,
+# GitHub strips the leading v: the tarball for tag v3.0.3 unpacks to glance-3.0.3/,
 # which is what build() and package() cd into.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # SKIP is only good enough for testing against a local tarball. Before pushing to

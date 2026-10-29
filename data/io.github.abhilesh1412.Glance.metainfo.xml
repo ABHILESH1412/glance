@@ -120,6 +120,13 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="3.0.3" date="2026-10-29">
+      <description>
+        <ul>
+          <li>[feat] Rectangles and ellipses on a PDF can go without an outline, and the markup card fits its tool's options</li>
+        </ul>
+      </description>
+    </release>
     <release version="3.0.2" date="2026-10-29">
       <description>
         <ul>

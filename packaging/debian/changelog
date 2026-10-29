@@ -1,3 +1,9 @@
+glance-image-viewer (3.0.3-1) unstable; urgency=medium
+
+  * [feat] Rectangles and ellipses on a PDF can go without an outline, and the markup card fits its tool's options
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 29 Oct 2026 16:05:00 +0530
+
 glance-image-viewer (3.0.2-1) unstable; urgency=medium
 
   * [fix] The Arch package failed to link with makepkg's LTO on; it is built without LTO now
