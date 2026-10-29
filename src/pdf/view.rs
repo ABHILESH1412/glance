@@ -176,7 +176,8 @@ pub struct PdfView {
 }
 
 /// The pen: its colour, its thickness in points, and what rectangles and
-/// ellipses are filled with, see-through for nothing.
+/// ellipses are filled with, see-through for nothing. A see-through colour
+/// is no outline, for a filled rectangle or ellipse.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ink {
     pub colour: gdk::RGBA,
@@ -187,6 +188,29 @@ pub struct Ink {
 impl Ink {
     fn fill(&self) -> Option<Rgb> {
         (self.fill.alpha() > 0.0).then(|| Rgb::from_rgba(&self.fill))
+    }
+
+    /// Whether `tool` draws with no outline: only a rectangle or ellipse can
+    /// go without one in a PDF, and only one that is filled, or nothing
+    /// would be left to see.
+    fn no_outline(&self, tool: draw::Tool) -> bool {
+        self.colour.alpha() == 0.0 && ink::can_fill(tool) && self.fill().is_some()
+    }
+
+    /// The line's colour as `tool` draws it. A PDF's ink is never
+    /// see-through, so anything but an outline left off is drawn solid, as
+    /// it will be saved.
+    fn line_colour(&self, tool: draw::Tool) -> gdk::RGBA {
+        let mut colour = self.colour;
+        if !self.no_outline(tool) {
+            colour.set_alpha(1.0);
+        }
+        colour
+    }
+
+    /// The line's thickness as `tool` draws it: none for no outline.
+    fn line_width(&self, tool: draw::Tool) -> f64 {
+        if self.no_outline(tool) { 0.0 } else { self.width }
     }
 }
 
@@ -2464,9 +2488,13 @@ impl Inner {
             self.flush_reink();
         }
         let look = drawing.as_ref().map(|d| {
-            let colour = d.colour.to_rgba();
+            let mut colour = d.colour.to_rgba();
             let mut none = colour;
             none.set_alpha(0.0);
+            // No line at all reads as a see-through line, as it was chosen.
+            if d.width == 0.0 {
+                colour.set_alpha(0.0);
+            }
             Ink { colour, width: d.width, fill: d.fill.map_or(none, Rgb::to_rgba) }
         });
         self.picked.replace(drawing);
@@ -2627,7 +2655,7 @@ impl Inner {
 
     fn apply_reink(&self, ink: Ink) {
         let Some(old) = self.picked.borrow().clone() else { return };
-        let new = old.restyled(Rgb::from_rgba(&ink.colour), ink.width, ink.fill());
+        let new = old.restyled(Rgb::from_rgba(&ink.colour), ink.line_width(old.tool), ink.fill());
         if new == old {
             return;
         }
@@ -2984,7 +3012,10 @@ impl Inner {
         }
         let ink = self.ink.get();
         let fill = if ink::can_fill(tool) { ink.fill().map(Rgb::to_rgba) } else { None };
-        let mark = draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.colour, width: ink.width, fill, sequence: 0, signature: None };
+        // The line keeps its thickness while being drawn, so the shape is the
+        // same size either way; with no outline it is simply not seen.
+        let mark =
+            draw::Mark { tool, points: vec![(spot.x, spot.y)], colour: ink.line_colour(tool), width: ink.width, fill, sequence: 0, signature: None };
         // A new drawing replaces any sketch still waiting for its page.
         if let Some(page) = self.sketched.take() {
             if let Some(widget) = self.widgets.borrow().get(page) {

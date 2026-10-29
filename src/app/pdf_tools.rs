@@ -211,7 +211,18 @@ impl PdfTools {
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         stroke_row.append(&caption_label("Width"));
         stroke_row.append(&width);
+        // The line's colour, the toolbar's dot over again: kept beside Fill,
+        // where a rectangle's or ellipse's outline is chosen, and like Fill,
+        // see-through for none.
+        let line = colour_button(ink.rgba());
+        line.set_title("Line Colour");
+        line.set_tooltip_text(Some(
+            "Colour of the line — for a filled rectangle or ellipse, set its opacity to zero for no outline",
+        ));
+        ink.bind_property("rgba", &line, "rgba").bidirectional().build();
         let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        fill_row.append(&caption_label("Line"));
+        fill_row.append(&line);
         fill_row.append(&caption_label("Fill"));
         fill_row.append(&fill);
         fill_row.set_sensitive(pdf::can_draw());
@@ -340,8 +351,8 @@ impl PdfTools {
         options.add_named(&words, Some("text"));
         options.add_named(&marking, Some("redact"));
         options.add_css_class("markup-options");
-        // Wide enough for the text's options; the hints wrap to it.
-        options.set_width_request(420);
+        // As wide as the tool in hand's options and no wider, so none of
+        // them ends in an empty stretch; the longer hints wrap.
         let card = gtk::Revealer::builder()
             .child(&options)
             .transition_type(gtk::RevealerTransitionType::SlideUp)
@@ -517,7 +528,11 @@ impl PdfTools {
                 let picture = weak.upgrade().is_some_and(|window| window.imp().pdf_view.picked_is_picture());
                 if let Some(picked) = picked.filter(|_| !picture) {
                     showing_picked.set(true);
-                    width.set_value(picked.width);
+                    // A shape with no outline keeps the thickness it would
+                    // have, should one be given it.
+                    if picked.width > 0.0 {
+                        width.set_value(picked.width);
+                    }
                     ink.set_rgba(&picked.colour);
                     fill.set_rgba(&picked.fill);
                     showing_picked.set(false);

@@ -57,7 +57,9 @@ impl Drawing {
             tool: if mark.tool == Tool::Signature { Tool::Pen } else { mark.tool },
             strokes,
             colour: Rgb::from_rgba(&mark.colour),
-            width: mark.width,
+            // A see-through line on a filled rectangle or ellipse is no
+            // outline: a border of no width, which Poppler leaves undrawn.
+            width: if mark.colour.alpha() == 0.0 && can_fill(mark.tool) && mark.inside().is_some() { 0.0 } else { mark.width },
             fill: mark.inside().filter(|_| can_fill(mark.tool)).map(|fill| Rgb::from_rgba(&fill)),
             picture: None,
         })
@@ -175,6 +177,8 @@ impl Drawing {
             None => self.strokes.clone(),
         };
         let fill = if can_fill(self.tool) { fill } else { None };
+        // No outline only on a shape still filled; otherwise a line it is.
+        let width = if width == 0.0 && fill.is_none() { self.width.max(1.0) } else { width };
         Drawing { strokes, colour, width, fill, ..self.clone() }
     }
 
@@ -281,7 +285,8 @@ pub fn on_page(
 /// A square or circle annotation, as the rectangle or ellipse it draws.
 fn shape_of(found: &annots::Found, tool: Tool, page: usize) -> Option<Drawing> {
     use glib::translate::ToGlibPtr;
-    let width = width_of(&found.annot);
+    // A shape may have no outline: a border of no width.
+    let width = border_of(&found.annot).unwrap_or(1.0);
     let half = width / 2.0;
     let [x1, y1, x2, y2] = found.area;
     let corners = vec![(x1 + half, y1 + half), (x2 - half, y2 - half)];
@@ -342,12 +347,18 @@ fn strokes_of(annot: &poppler::Annot, height: f64) -> Option<Vec<Vec<(f64, f64)>
 /// How thick an annotation's line is, in points: 1 if it does not say, as
 /// the PDF has it.
 fn width_of(annot: &poppler::Annot) -> f64 {
+    border_of(annot).filter(|width| *width > 0.0).unwrap_or(1.0)
+}
+
+/// The annotation's border width as the file has it, nothing included, or
+/// None if it does not say.
+fn border_of(annot: &poppler::Annot) -> Option<f64> {
     use glib::translate::ToGlibPtr;
-    let Some(border) = newer::get().border.as_ref() else { return 1.0 };
+    let border = newer::get().border.as_ref()?;
     let mut width = 1.0;
     // SAFETY: Poppler's own call, writing one number.
     let known = unsafe { (border.get)(annot.to_glib_none().0, &mut width) };
-    if known != 0 && width > 0.0 { width } else { 1.0 }
+    (known != 0 && width >= 0.0).then_some(width)
 }
 
 /// The drawing's annotation on its page, found by its strokes when its box
@@ -713,6 +724,76 @@ mod tests {
         }
         annots::save(&doc, &path, None).unwrap();
         assert!(on_page(&open(), 0, Vec::new).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A filled rectangle with a see-through line is saved with no outline,
+    /// comes back without one, and an empty one keeps its line whatever.
+    #[test]
+    fn a_filled_shape_can_go_without_an_outline() {
+        use super::super::annots::{self, Annotation};
+        use super::super::document;
+        if !available() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("glance-outline-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.pdf");
+        std::fs::write(&path, blank_page()).unwrap();
+        let open = || poppler::Document::from_file(&document::uri(&path), None).unwrap();
+
+        let none = gtk::gdk::RGBA::new(0.0, 0.0, 1.0, 0.0);
+        let filled = Mark {
+            tool: Tool::Rectangle,
+            points: vec![(100.0, 100.0), (300.0, 200.0)],
+            colour: none,
+            width: 4.0,
+            fill: Some(gtk::gdk::RGBA::new(1.0, 0.8, 0.0, 1.0)),
+            sequence: 0,
+            signature: None,
+        };
+        let drawing = Drawing::from_mark(0, &filled).unwrap();
+        assert_eq!(drawing.width, 0.0);
+        // Nothing to see without a fill, so an empty one keeps its line.
+        let empty = Mark { fill: None, ..filled.clone() };
+        assert_eq!(Drawing::from_mark(0, &empty).unwrap().width, 4.0);
+        assert_eq!(drawing.restyled(drawing.colour, 0.0, None).width, 1.0);
+
+        let doc = open();
+        Annotation::Ink(drawing.clone()).add(&doc);
+        annots::save(&doc, &path, None).unwrap();
+        let doc = open();
+        let read = on_page(&doc, 0, Vec::new);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].width, 0.0);
+        assert_eq!(read[0].fill, drawing.fill);
+        // Still picked up by its middle.
+        assert!(read[0].is_at((200.0, 150.0), 1.0));
+
+        // And drawn so: yellow inside, right up to the edge, and no blue
+        // line round it.
+        let page = annots::page(&doc, 0).unwrap();
+        let mut surface = gtk::cairo::ImageSurface::create(gtk::cairo::Format::Rgb24, 595, 842).unwrap();
+        {
+            let cr = gtk::cairo::Context::new(&surface).unwrap();
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.paint().unwrap();
+            page.render(&cr);
+        }
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        // Rgb24 is blue, green, red in memory on a little-endian machine.
+        let pixel = |x: usize, y: usize| {
+            let at = y * stride + x * 4;
+            (data[at + 2], data[at + 1], data[at])
+        };
+        for (x, y) in [(200, 150), (101, 150), (299, 150), (200, 101), (200, 199)] {
+            let (r, g, b) = pixel(x, y);
+            assert!(r > 200 && g > 150 && b < 80, "({x}, {y}) is {:?}, not the fill", (r, g, b));
+        }
+        for (x, y) in [(99, 150), (300, 150), (200, 99), (200, 200)] {
+            assert_eq!(pixel(x, y), (255, 255, 255), "({x}, {y}) has a line");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
