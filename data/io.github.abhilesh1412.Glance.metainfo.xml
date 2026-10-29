@@ -120,6 +120,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="3.0.0" date="2026-10-29">
+      <description>
+        <ul>
+          <li>[feat] One icon set and two-line tooltips everywhere, the PDF page in the title, a split PDF toolbar, and a labelled editor rail</li>
+          <li>[feat] Signature is its own tool on the editor's rail</li>
+          <li>[feat] Redesigned the image editor: its own header, a tool rail with new icons and two-line tooltips, settings in cards, and Undo takes back slider changes first</li>
+          <li>[feat] New look: floating filmstrip, arrows and zoom for pictures, recent files on the empty window, and a floating markup toolbar for PDFs</li>
+          <li>updated readme.md and the feature list</li>
+        </ul>
+      </description>
+    </release>
     <release version="2.1.0" date="2026-10-28">
       <description>
         <ul>

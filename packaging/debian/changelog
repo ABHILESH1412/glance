@@ -1,3 +1,13 @@
+glance-image-viewer (3.0.0-1) unstable; urgency=medium
+
+  * [feat] One icon set and two-line tooltips everywhere, the PDF page in the title, a split PDF toolbar, and a labelled editor rail
+  * [feat] Signature is its own tool on the editor's rail
+  * [feat] Redesigned the image editor: its own header, a tool rail with new icons and two-line tooltips, settings in cards, and Undo takes back slider changes first
+  * [feat] New look: floating filmstrip, arrows and zoom for pictures, recent files on the empty window, and a floating markup toolbar for PDFs
+  * updated readme.md and the feature list
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 29 Oct 2026 09:44:07 +0530
+
 glance-image-viewer (2.1.0-1) unstable; urgency=medium
 
   * [feat] Now the user can Add the images as signature in the pdf section
