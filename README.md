@@ -779,12 +779,15 @@ make release-major     # 2.0.0 → 3.0.0
 ```
 
 [`scripts/release.sh`](scripts/release.sh) writes the new version everywhere it appears,
-runs `make check`, commits and tags `Release vX.Y.Z`, builds the AppImage, the Flatpak and
-the Arch package one after another, and only then pushes and publishes the GitHub release
-with them and their `SHA256SUMS`. Release notes are made from the commit messages since
-the last release, and shown before anything happens; `--dry-run` shows them and stops. It
-needs Docker running and the GitHub CLI signed in (`gh auth login`). `make packages` builds
-the three packages without releasing them.
+checks the desktop entry and AppStream data, commits and tags `Release vX.Y.Z`, and pushes
+both, which takes seconds. [GitHub Actions](.github/workflows/release.yml) then builds the
+Arch package (running the tests on the way), the Flatpak and the AppImage at once, and
+publishes the GitHub release with them and their `SHA256SUMS` only when all three have
+built. Release notes are made from the commit messages since the last release, and shown
+before anything happens; `--dry-run` shows them and stops. `ARGS=--local` builds and
+publishes from your own computer instead, as before, which needs Docker running and the
+GitHub CLI signed in (`gh auth login`). `make packages` builds the three packages without
+releasing them.
 [`testdata/`](testdata/README.md) holds fixtures chosen to catch specific mistakes — an
 EXIF-rotated JPEG, a transparent SVG that exposes premultiplied-alpha errors, a corrupt
 file, and four CC0 camera raws covering different decode paths.

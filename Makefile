@@ -73,8 +73,9 @@ endif
 clean:
 	$(CARGO) clean
 
-# Releasing, once your work is committed: version bumped, tested, tagged,
-# built, pushed and published on GitHub. See scripts/release.sh.
+# Releasing, once your work is committed: version bumped, tagged and pushed;
+# GitHub Actions then builds, tests and publishes. ARGS=--local does it all
+# here instead. See scripts/release.sh.
 release:
 	scripts/release.sh patch $(ARGS)
 

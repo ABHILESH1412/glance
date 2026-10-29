@@ -13,14 +13,20 @@
 # .../releases/latest/download/<name> links, and Glance's own updater, always
 # find the newest. The version is inside each package.
 #
-#   scripts/build-packages.sh <output folder>
+#   scripts/build-packages.sh <output folder> [arch] [flatpak] [appimage]
+#
+# Naming packages builds just those: GitHub Actions builds each on a machine
+# of its own. SHA256SUMS is only written when all three are built here.
 #
 # JOBS=n sets how many compile jobs run at once (default 4).
 
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-OUT=${1:?usage: scripts/build-packages.sh <output folder>}
+OUT=${1:?usage: scripts/build-packages.sh <output folder> [arch] [flatpak] [appimage]}
+shift
+wanted=" ${*:-arch flatpak appimage} "
+want() { [[ "$wanted" == *" $1 "* ]]; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 WORK="$ROOT/target/packaging"
@@ -33,6 +39,7 @@ mkdir -p "$WORK"
 cd "$ROOT"
 
 # --- Arch -------------------------------------------------------------------
+if want arch; then
 say "Arch package (glance-image-viewer $VERSION)"
 rm -rf "$WORK/arch" && mkdir -p "$WORK/arch"
 # Exactly the commit, nothing uncommitted.
@@ -41,8 +48,10 @@ sed "s|^source=.*|source=(\"glance-image-viewer-$VERSION.tar.gz\")|" packaging/a
 (cd "$WORK/arch" && CARGO_BUILD_JOBS=$JOBS PKGDEST="$WORK/arch/out" BUILDDIR="$WORK/arch/work" \
     makepkg -f --noconfirm > makepkg.log 2>&1) || { tail -30 "$WORK/arch/makepkg.log"; exit 1; }
 cp "$WORK/arch/out/glance-image-viewer-$VERSION"-*-x86_64.pkg.tar.zst "$OUT/glance-image-viewer-x86_64.pkg.tar.zst"
+fi
 
 # --- Flatpak ----------------------------------------------------------------
+if want flatpak; then
 say "Flatpak"
 if command -v flatpak-builder > /dev/null; then
     builder=(flatpak-builder)
@@ -57,8 +66,10 @@ fi
     build-dir build-aux/$APPID.yaml > "$WORK/flatpak.log" 2>&1 || { tail -30 "$WORK/flatpak.log"; exit 1; }
 flatpak build-bundle .flatpak-builder/repo "$OUT/Glance-x86_64.flatpak" $APPID \
     --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+fi
 
 # --- AppImage ---------------------------------------------------------------
+if want appimage; then
 say "AppImage"
 TOOLS="$WORK/appimage-tools"
 mkdir -p "$TOOLS"
@@ -79,9 +90,12 @@ docker run --rm --network host -v /etc/resolv.conf:/etc/resolv.conf:ro \
     -v "$ROOT/packaging/appimage/build-in-container.sh:/build.sh:ro" \
     ubuntu:24.04 bash /build.sh > "$WORK/appimage.log" 2>&1 || { tail -30 "$WORK/appimage.log"; exit 1; }
 cp "$WORK/appimage/out/Glance-x86_64.AppImage" "$OUT/"
+fi
 
 # --- Checksums --------------------------------------------------------------
 cd "$OUT"
-sha256sum glance-image-viewer-x86_64.pkg.tar.zst Glance-x86_64.flatpak Glance-x86_64.AppImage > SHA256SUMS
+if want arch && want flatpak && want appimage; then
+    sha256sum glance-image-viewer-x86_64.pkg.tar.zst Glance-x86_64.flatpak Glance-x86_64.AppImage > SHA256SUMS
+fi
 say "Built Glance $VERSION in $OUT"
 ls -la "$OUT"

@@ -9,6 +9,7 @@
 #   scripts/release.sh major      2.0.0 -> 3.0.0   (also: make release-major)
 #   scripts/release.sh --dry-run  say what would happen, change nothing
 #   ... --yes                     do not ask before going ahead
+#   ... --local                   build and publish from this computer instead
 #
 # In order:
 #   1. checks: on main, everything committed, nothing on GitHub missing here,
@@ -16,18 +17,23 @@
 #   2. works out the new version, and release notes from the commit messages
 #      since the last release, and asks before going on;
 #   3. writes the new version into Cargo.toml, Cargo.lock, the Arch, Fedora
-#      and Debian recipes and the AppStream release list; runs the tests;
-#   4. commits that as "Release vX.Y.Z" and tags it — on this computer only;
-#   5. builds the three packages (scripts/build-packages.sh);
-#   6. only then pushes the branch and the tag, and publishes the GitHub
-#      release with the packages and SHA256SUMS attached.
+#      and Debian recipes and the AppStream release list, and checks the
+#      desktop file and the AppStream data;
+#   4. commits that as "Release vX.Y.Z" and tags it, the notes in the tag;
+#   5. pushes the branch and the tag. GitHub Actions then builds the three
+#      packages, runs the tests and publishes the release with the packages
+#      and SHA256SUMS attached (.github/workflows/release.yml). That takes a
+#      while, on GitHub's computers rather than this one.
 #
-# If anything fails before step 6, nothing has left this computer, and the
-# script says how to take the release commit and tag back.
+# With --local, steps 3 to 5 are the old way instead: the tests run here, the
+# commit and tag stay here while the three packages are built here
+# (scripts/build-packages.sh), and only then is anything pushed and the
+# release published from here. If a build fails, nothing has left this
+# computer, and the script says how to take the release commit and tag back.
 #
-# Needs: git, cargo, makepkg, flatpak with flatpak-builder (or org.flatpak.Builder),
-# docker (running), and the GitHub CLI, signed in: `sudo pacman -S github-cli`,
-# then `gh auth login` once.
+# Needs: git. With --local also cargo, makepkg, flatpak with flatpak-builder
+# (or org.flatpak.Builder), docker (running), and the GitHub CLI, signed in:
+# `sudo pacman -S github-cli`, then `gh auth login` once.
 
 set -euo pipefail
 
@@ -38,12 +44,14 @@ APPID=io.github.abhilesh1412.Glance
 part=patch
 dry_run=false
 assume_yes=false
+local_build=false
 for argument in "$@"; do
     case "$argument" in
         patch | minor | major) part=$argument ;;
         --dry-run) dry_run=true ;;
         --yes | -y) assume_yes=true ;;
-        -h | --help) sed -n '5,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --local) local_build=true ;;
+        -h | --help) sed -n '5,37p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unknown option: $argument (try --help)" >&2; exit 2 ;;
     esac
 done
@@ -53,13 +61,16 @@ fail() { printf '\n\033[1;31mStopped:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- 1. Checks ---------------------------------------------------------------
 say "Checking"
-for tool in git cargo makepkg flatpak docker gh sha256sum; do
+command -v git > /dev/null || fail "git is not installed."
+if $local_build; then
+for tool in cargo makepkg flatpak docker gh sha256sum; do
     command -v "$tool" > /dev/null || fail "$tool is not installed."
 done
 command -v flatpak-builder > /dev/null || flatpak info org.flatpak.Builder > /dev/null 2>&1 \
     || fail "flatpak-builder is not installed (flatpak install --user flathub org.flatpak.Builder)."
+fi
 # A dry run builds and publishes nothing, so these two can wait.
-if ! $dry_run; then
+if $local_build && ! $dry_run; then
     docker info > /dev/null 2>&1 || fail "Docker is not running (sudo systemctl start docker)."
     gh auth status > /dev/null 2>&1 || fail "The GitHub CLI is not signed in (gh auth login)."
 fi
@@ -176,15 +187,41 @@ if [ -n "$last" ] && ! git diff --quiet "$last" -- Cargo.lock \
     "$fcg/venv/bin/python" "$fcg/flatpak-cargo-generator.py" Cargo.lock -o build-aux/cargo-sources.json
 fi
 
-say "Testing"
-make check || { git checkout -- .; fail "The tests failed, so nothing was released. The version change was undone."; }
+if $local_build; then
+    say "Testing"
+    make check || { git checkout -- .; fail "The tests failed, so nothing was released. The version change was undone."; }
+else
+    # The tests run on GitHub, with the Arch package; these two are quick,
+    # and a broken desktop file or AppStream entry is cheaper caught here.
+    say "Checking the desktop file and AppStream data"
+    for tool in desktop-file-validate appstreamcli; do
+        command -v "$tool" > /dev/null || echo "($tool is not installed; skipped)"
+    done
+    { ! command -v desktop-file-validate > /dev/null || desktop-file-validate data/$APPID.desktop; } \
+        && { ! command -v appstreamcli > /dev/null || appstreamcli validate --no-net data/$APPID.metainfo.xml; } \
+        || { git checkout -- .; fail "The desktop file or AppStream data is not valid, so nothing was released. The version change was undone."; }
+fi
 
 # --- 4. Commit and tag, here only ---------------------------------------------
 say "Committing and tagging $tag (not pushed yet)"
 git commit --quiet -am "Release $tag"
+# The notes go in the tag: GitHub Actions writes the release from them.
 git tag -a "$tag" -m "Glance $next" -m "$(printf -- '- %s\n' "${changes[@]}")"
 
-# --- 5. Build ---------------------------------------------------------------
+# --- 5. Push, and let GitHub build and publish ----------------------------------
+if ! $local_build; then
+    say "Pushing to GitHub"
+    git push origin main
+    git push origin "$tag"
+    repo=$(git remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##')
+    say "GitHub is building Glance $next"
+    echo "The three packages build at once, then the release is published by itself."
+    echo "Follow it at: https://github.com/$repo/actions"
+    echo "If a build fails nothing is published; the page says why."
+    exit 0
+fi
+
+# --- With --local: build here, then publish -------------------------------------
 out="$ROOT/target/packaging/release/$tag"
 rm -rf "$out"
 if ! scripts/build-packages.sh "$out"; then
@@ -192,7 +229,7 @@ if ! scripts/build-packages.sh "$out"; then
     fail "A package did not build."
 fi
 
-# --- 6. Publish ---------------------------------------------------------------
+# --- Publish ------------------------------------------------------------------
 say "Pushing to GitHub"
 git push origin main
 git push origin "$tag"

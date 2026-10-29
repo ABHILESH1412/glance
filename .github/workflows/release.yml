@@ -1,0 +1,124 @@
+# SPDX-FileCopyrightText: 2026 Abhilesh Singh
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Builds the three release packages and publishes the GitHub release, when
+# scripts/release.sh pushes a version tag. The three build at once, each on a
+# machine of its own; the release is only made once all three have built, so
+# a failure publishes nothing. The packages keep the names they always had,
+# which the README's download links and Glance's own updater rely on.
+#
+# A build that fails can be run again from the Actions tab ("Re-run failed
+# jobs") once whatever broke it is fixed upstream; a fault in Glance itself
+# needs a new release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: read
+
+jobs:
+  arch:
+    name: Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install what it builds with
+        run: |
+          pacman -Syu --noconfirm --needed git cargo glib2 \
+            gtk4 libadwaita libheif poppler-glib qpdf libsoup3 hicolor-icon-theme
+      - uses: actions/checkout@v4
+      # makepkg will not run as root, and the checkout belongs to root.
+      - name: Build
+        run: |
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          su builder -c "git config --global --add safe.directory '$GITHUB_WORKSPACE' \
+            && cd '$GITHUB_WORKSPACE' && scripts/build-packages.sh out arch"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: out/glance-image-viewer-x86_64.pkg.tar.zst
+          if-no-files-found: error
+
+  flatpak:
+    name: Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: build-aux/io.github.abhilesh1412.Glance.yaml
+          bundle: Glance-x86_64.flatpak
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: Glance-x86_64.flatpak
+          if-no-files-found: error
+
+  appimage:
+    name: AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Built inside ubuntu:24.04 by the same script as on a computer, so it
+      # runs on 24.04 and everything newer.
+      - name: Build
+        run: scripts/build-packages.sh out appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: out/Glance-x86_64.AppImage
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [arch, flatpak, appimage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # Checking out a tag can leave it bare; the release notes are written in
+      # the tag's message, so fetch the tag itself.
+      - name: Fetch the tag
+        run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$version" != "$cargo_version" ]; then
+            echo "The tag says $version but Cargo.toml says $cargo_version." >&2
+            exit 1
+          fi
+          {
+            echo "## What's new"
+            echo
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME" | grep '^- '
+            echo
+            echo "## Install"
+            echo
+            echo "See the [install guide](https://github.com/ABHILESH1412/glance#installing) for your distribution."
+            echo "Glance updates itself once installed; turn that off in Preferences → General → Updates."
+          } > notes.md
+          cat notes.md
+          cd out
+          sha256sum glance-image-viewer-x86_64.pkg.tar.zst Glance-x86_64.flatpak Glance-x86_64.AppImage > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --title "Glance $version" --notes-file ../notes.md \
+            --latest --verify-tag \
+            glance-image-viewer-x86_64.pkg.tar.zst Glance-x86_64.flatpak Glance-x86_64.AppImage SHA256SUMS
