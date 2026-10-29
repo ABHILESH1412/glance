@@ -25,15 +25,9 @@ fn main() {
 
     // Rebuild when the manifest or any icon it names changes. Without these,
     // editing an icon would leave the old one baked into the binary.
+    // A directory is watched as a whole, so a new icon needs no line here.
     println!("cargo:rerun-if-changed={MANIFEST}");
-    for icon in [
-        "data/icons/hicolor/scalable/apps/io.github.abhilesh1412.Glance.svg",
-        "data/icons/hicolor/symbolic/apps/io.github.abhilesh1412.Glance-symbolic.svg",
-        "data/icons/hicolor/symbolic/actions/glance-levels-symbolic.svg",
-        "data/icons/hicolor/symbolic/actions/glance-live-text-symbolic.svg",
-    ] {
-        println!("cargo:rerun-if-changed={icon}");
-    }
+    println!("cargo:rerun-if-changed=data/icons");
 
     let output = Command::new("glib-compile-resources")
         .arg("--sourcedir")

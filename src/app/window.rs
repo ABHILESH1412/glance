@@ -24,7 +24,7 @@ use crate::app::prefs;
 use crate::images::loader;
 use crate::app::playlist::{self, Playlist};
 use crate::images::thumbs;
-use crate::images::edit::panel::{colour_button, dimension_spin, section_toggle, tone_scale};
+use crate::images::edit::panel::{colour_button, dimension_spin, rail_toggle, tone_scale};
 use crate::pdf::{self, PdfView};
 
 /// How close to an edge the pointer must get before the hidden bars slide back
@@ -100,7 +100,12 @@ mod imp {
         pub reopen_at: Cell<Option<usize>>,
         pub toolbar: adw::ToolbarView,
         pub edit_button: gtk::ToggleButton,
+        /// The editor's settings, beside the picture, and its tools on a rail
+        /// on the other side.
         pub edit_panel: gtk::Box,
+        pub edit_rail: gtk::ScrolledWindow,
+        /// The editor's own header names the file and how far it has come.
+        pub edit_title: adw::WindowTitle,
         pub crop_toggle: gtk::ToggleButton,
         pub crop_options: gtk::Box,
         pub freehand_toggle: gtk::ToggleButton,
@@ -223,7 +228,6 @@ mod imp {
         /// Waits for a slider to rest before the whole picture is worked out.
         pub tone_timer: RefCell<Option<glib::SourceId>>,
         pub crop_size: gtk::Label,
-        pub pending_crop: gtk::Label,
         /// Set while pushing state into the panel, so the toggles do not echo
         /// back and undo what was just applied.
         pub syncing_panel: Cell<bool>,
@@ -235,6 +239,9 @@ mod imp {
         /// with a limit rather than writing a copy per step, so this does too.
         pub history: RefCell<Vec<image::DynamicImage>>,
         pub redo: RefCell<Vec<image::DynamicImage>>,
+        /// The slider and levels values an undo put back to nothing, for
+        /// redo to bring back.
+        pub tone_redo: Cell<Option<crate::images::edit::adjust::Adjustments>>,
         pub dirty: Cell<bool>,
         pub undo_button: gtk::Button,
         pub redo_button: gtk::Button,
@@ -311,10 +318,12 @@ mod imp {
                 toolbar: adw::ToolbarView::new(),
                 edit_button: gtk::ToggleButton::new(),
                 edit_panel: gtk::Box::new(gtk::Orientation::Vertical, 12),
-                crop_toggle: section_toggle("edit-cut-symbolic", "Crop"),
+                edit_rail: gtk::ScrolledWindow::new(),
+                edit_title: adw::WindowTitle::new("", ""),
+                crop_toggle: rail_toggle("glance-crop-symbolic"),
                 crop_options: gtk::Box::new(gtk::Orientation::Vertical, 8),
                 freehand_toggle: gtk::ToggleButton::with_label("Freehand"),
-                resize_toggle: section_toggle("view-fullscreen-symbolic", "Resize"),
+                resize_toggle: rail_toggle("glance-resize-symbolic"),
                 resize_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 width_spin: dimension_spin(),
                 height_spin: dimension_spin(),
@@ -331,11 +340,11 @@ mod imp {
                 size_value: gtk::SpinButton::with_range(1.0, 99_999.0, 10.0),
                 size_unit: gtk::DropDown::default(),
                 size_note: gtk::Label::new(None),
-                export_toggle: section_toggle("document-send-symbolic", "Export"),
+                export_toggle: rail_toggle("glance-export-symbolic"),
                 export_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 quality_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 quality_scale: gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0),
-                draw_toggle: section_toggle("applications-graphics-symbolic", "Draw"),
+                draw_toggle: rail_toggle("glance-draw-symbolic"),
                 draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_tools: RefCell::new(Vec::new()),
                 draw_select: gtk::ToggleButton::new(),
@@ -344,9 +353,9 @@ mod imp {
                 draw_fill: colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0)),
                 draw_width: gtk::SpinButton::with_range(1.0, 200.0, 1.0),
                 draw_hint: gtk::Label::new(None),
-                text_toggle: section_toggle("insert-text-symbolic", "Text"),
+                text_toggle: rail_toggle("glance-text-symbolic"),
                 text_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
-                redact_toggle: section_toggle("view-conceal-symbolic", "Redact"),
+                redact_toggle: rail_toggle("glance-redact-symbolic"),
                 redact_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 text_entry: gtk::Entry::new(),
                 text_size: gtk::SpinButton::with_range(6.0, 2000.0, 1.0),
@@ -357,7 +366,7 @@ mod imp {
                 text_background: colour_button(gdk::RGBA::new(0.0, 0.0, 0.0, 0.0)),
                 text_font: gtk::FontDialogButton::new(Some(gtk::FontDialog::new())),
                 text_hint: gtk::Label::new(None),
-                adjust_toggle: section_toggle("display-brightness-symbolic", "Adjust"),
+                adjust_toggle: rail_toggle("glance-adjust-symbolic"),
                 adjust_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 brightness_scale: tone_scale(),
                 contrast_scale: tone_scale(),
@@ -394,7 +403,7 @@ mod imp {
                 slideshow_position: gtk::Label::new(None),
                 slideshow_every: gtk::DropDown::new(None::<gio::ListModel>, None::<gtk::Expression>),
                 slideshow_restore: Cell::new((false, false, false)),
-                levels_toggle: section_toggle("glance-levels-symbolic", "Levels"),
+                levels_toggle: rail_toggle("glance-levels-symbolic"),
                 levels_options: gtk::Box::new(gtk::Orientation::Vertical, 4),
                 levels_graph: crate::images::edit::levels::LevelsGraph::new(),
                 levels_channel: gtk::DropDown::new(None::<gio::ListModel>, None::<gtk::Expression>),
@@ -406,14 +415,14 @@ mod imp {
                 tone_worker: RefCell::new(None),
                 tone_timer: RefCell::new(None),
                 crop_size: gtk::Label::new(None),
-                pending_crop: gtk::Label::new(None),
                 syncing_panel: Cell::new(false),
                 working: RefCell::new(None),
                 history: RefCell::new(Vec::new()),
                 redo: RefCell::new(Vec::new()),
+                tone_redo: Cell::new(None),
                 dirty: Cell::new(false),
-                undo_button: gtk::Button::from_icon_name("edit-undo-symbolic"),
-                redo_button: gtk::Button::from_icon_name("edit-redo-symbolic"),
+                undo_button: gtk::Button::from_icon_name("glance-undo-symbolic"),
+                redo_button: gtk::Button::from_icon_name("glance-redo-symbolic"),
                 current: RefCell::new(None),
                 monitor: RefCell::new(None),
                 rescan_timer: RefCell::new(None),
@@ -423,7 +432,7 @@ mod imp {
                 strip: FilmStrip::new(),
                 controls: Default::default(),
                 pending_thumbs: RefCell::new(HashSet::new()),
-                transform_toggle: gtk::ToggleButton::new(),
+                transform_toggle: rail_toggle("glance-rotate-symbolic"),
                 rotation_bar: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 rotation_scale: gtk::Scale::with_range(
                     gtk::Orientation::Horizontal,
@@ -547,6 +556,7 @@ impl Window {
         ));
         body.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         body.append(self.build_edit_panel());
+        body.prepend(&imp.edit_rail);
         let pdf_tools = crate::app::pdf_tools::PdfTools::new(self);
         // The PDF's markup toolbar floats over its page.
         imp.controls.overlay.add_overlay(&pdf_tools.root);
@@ -659,6 +669,8 @@ impl Window {
 
         let header_stack = &imp.header_stack;
         header_stack.add_named(&header, Some("normal"));
+        header_stack.add_named(&self.build_edit_header(), Some("editing"));
+        header_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         header_stack.set_visible_child_name("normal");
 
         let toolbar = &imp.toolbar;
@@ -975,7 +987,17 @@ impl Window {
             self,
             move |button| {
                 let open = button.is_active();
-                window.imp().edit_panel.set_visible(open);
+                let imp = window.imp();
+                imp.edit_panel.set_visible(open);
+                imp.edit_rail.set_visible(open);
+                // The editor has the header to itself: leaving it, undoing and
+                // saving are what is wanted there.
+                imp.header_stack.set_visible_child_name(if open { "editing" } else { "normal" });
+                // The Edit button had the focus and has gone with its header;
+                // GTK would hand it to Cancel, where Space would leave.
+                if open {
+                    gtk::prelude::GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
+                }
                 // One panel beside the picture at a time: the editor's.
                 if open {
                     if let Some(action) = window.lookup_action("inspector").and_downcast::<gio::SimpleAction>() {
@@ -995,13 +1017,20 @@ impl Window {
                     // holding a full-resolution buffer for every image browsed.
                     window.load_working();
                 } else {
-                    // Leaving the panel puts the tools away with it.
-                    window.imp().crop_toggle.set_active(false);
-                    window.imp().adjust_toggle.set_active(false);
-                    window.imp().levels_toggle.set_active(false);
-                    window.imp().resize_toggle.set_active(false);
-                    window.imp().text_toggle.set_active(false);
-                    window.imp().draw_toggle.set_active(false);
+                    // Leaving the editor puts the tools away with it.
+                    for tool in [
+                        &imp.crop_toggle,
+                        &imp.transform_toggle,
+                        &imp.adjust_toggle,
+                        &imp.levels_toggle,
+                        &imp.resize_toggle,
+                        &imp.text_toggle,
+                        &imp.draw_toggle,
+                        &imp.redact_toggle,
+                        &imp.export_toggle,
+                    ] {
+                        tool.set_active(false);
+                    }
                 }
                 window.update_navigation();
             }
@@ -1175,15 +1204,6 @@ impl Window {
             move |_, _| window.reset_levels()
         ));
         self.add_action(&levels_reset);
-
-        let adjust_apply = gio::SimpleAction::new("adjust-apply", None);
-        adjust_apply.set_enabled(false);
-        adjust_apply.connect_activate(glib::clone!(
-            #[weak(rename_to = window)]
-            self,
-            move |_, _| window.bake(None)
-        ));
-        self.add_action(&adjust_apply);
 
         let crop_apply = gio::SimpleAction::new("crop-apply", None);
         crop_apply.set_enabled(false);
@@ -1831,7 +1851,6 @@ impl Window {
                         imp.freehand_toggle.set_active(false);
                         imp.syncing_panel.set(false);
                         imp.crop_options.set_visible(false);
-                        imp.pending_crop.set_visible(false);
                         window.update_crop_actions();
                         // Edits belong to the image they were made on.
                         window.reset_editing();

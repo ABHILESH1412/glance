@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- "square-rounded" from Tabler Icons (MIT, Copyright (c) 2020-2024 Paweł Kuna), with its strokes turned into fills. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+  <path fill="#222222" d="M12,2 Q17.814,2 19.907,4.093 Q22,6.186 22,12 Q22,17.814 19.907,19.907 Q17.814,22 12,22 Q6.186,22 4.093,19.907 Q2,17.814 2,12 Q2,6.186 4.093,4.093 Q6.186,2 12,2 Z M12,4 Q7.014,4 5.507,5.507 Q4,7.014 4,12 Q4,16.986 5.507,18.493 Q7.014,20 12,20 Q16.986,20 18.493,18.493 Q20,16.986 20,12 Q20,7.014 18.493,5.507 Q16.986,4 12,4 Z"/>
+</svg>

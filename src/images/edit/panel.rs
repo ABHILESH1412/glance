@@ -16,17 +16,60 @@ use crate::images::edit::draw;
 use crate::images::edit::export;
 use crate::app::window::Window;
 
-/// A tool section's header: an icon beside its name, so the panel can be
-/// scanned by shape rather than read line by line.
-pub(crate) fn section_toggle(icon: &str, label: &str) -> gtk::ToggleButton {
+/// One of the editor's tools, as an icon on the rail beside the picture.
+/// Its name and what it does are given it with the rest of the rail.
+pub(crate) fn rail_toggle(icon: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
-    button.set_child(Some(
-        &adw::ButtonContent::builder()
-            .icon_name(icon)
-            .label(label)
-            .build(),
-    ));
+    button.set_icon_name(icon);
+    button.add_css_class("flat");
     button
+}
+
+/// The tooltip of a button that is only an icon: what it is, in bold, and
+/// what it does under that.
+pub(crate) fn explain(widget: &(impl IsA<gtk::Accessible> + IsA<gtk::Widget>), name: &str, what: &str) {
+    let (name, what) = (glib::markup_escape_text(name), glib::markup_escape_text(what));
+    widget.set_tooltip_markup(Some(&format!("<b>{name}</b>\n{what}")));
+    widget.update_property(&[gtk::accessible::Property::Label(&name), gtk::accessible::Property::Description(&what)]);
+}
+
+/// A group of a tool's settings: a small heading over a card, the way
+/// GNOME's own settings are laid out. The card is handed back to be filled.
+pub(crate) fn card(options: &gtk::Box, title: Option<&str>) -> gtk::Box {
+    if let Some(title) = title {
+        let label = gtk::Label::new(Some(title));
+        label.add_css_class("heading");
+        label.set_xalign(0.0);
+        // Room above each group but the first, which the tool's name heads.
+        if options.first_child().is_some() {
+            label.set_margin_top(10);
+        }
+        options.append(&label);
+    }
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    card.add_css_class("card");
+    card.add_css_class("edit-card");
+    options.append(&card);
+    card
+}
+
+/// A row of buttons under the cards, sharing the width.
+pub(crate) fn button_row(buttons: &[&gtk::Button]) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    row.set_homogeneous(true);
+    row.set_margin_top(4);
+    for button in buttons {
+        row.append(*button);
+    }
+    row
+}
+
+/// A line explaining something, small and quiet, under what it explains.
+pub(crate) fn note(label: &gtk::Label) {
+    label.add_css_class("dim-label");
+    label.add_css_class("caption");
+    label.set_xalign(0.0);
+    label.set_wrap(true);
 }
 
 /// A colour well that lets the alpha channel be set, so "no background" is a
@@ -243,23 +286,25 @@ impl SizeUnit {
 }
 
 impl Window {
-    /// The edit sidebar: tools at the top, output at the bottom.
+    /// The editor beside the picture: the tools on a rail to its left, and
+    /// the settings of the one in hand to its right. Leaving, undoing and
+    /// saving are in the header, which the editor has to itself.
     pub(crate) fn build_edit_panel(&self) -> &gtk::Box {
         let imp = self.imp();
         let panel = &imp.edit_panel;
-        panel.set_width_request(300);
+        panel.set_width_request(330);
         panel.set_hexpand(false);
-        panel.set_margin_top(12);
-        panel.set_margin_bottom(12);
-        panel.set_margin_start(12);
-        panel.set_margin_end(12);
         panel.set_visible(false);
 
-        // The tools live in a scroller. There are enough of them now that an
-        // expanded section overflows a short window, and without this GTK
-        // squeezes the whole column — sliding every button out from under the
-        // pointer that was about to press one.
-        let tools = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        // The settings live in a scroller. Some tools have more of them than
+        // a short window holds, and without this GTK squeezes the whole
+        // column — sliding every control out from under the pointer that was
+        // about to press one.
+        let tools = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        tools.set_margin_top(18);
+        tools.set_margin_bottom(18);
+        tools.set_margin_start(12);
+        tools.set_margin_end(12);
         let scroller = gtk::ScrolledWindow::builder()
             .child(&tools)
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -268,32 +313,30 @@ impl Window {
             .build();
         panel.append(&scroller);
 
+        // What the tool in hand is, and does, over its settings.
         let heading = gtk::Label::new(Some("Edit"));
-        heading.add_css_class("title-4");
+        heading.add_css_class("title-3");
         heading.set_xalign(0.0);
         tools.append(&heading);
+        let about = gtk::Label::new(None);
+        about.add_css_class("dim-label");
+        about.set_xalign(0.0);
+        about.set_wrap(true);
+        about.set_margin_bottom(10);
+        tools.append(&about);
 
-        let history_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        history_row.set_homogeneous(true);
-        imp.undo_button.set_tooltip_text(Some("Undo (Ctrl+Z)"));
-        imp.undo_button.set_action_name(Some("win.undo"));
-        imp.undo_button.set_sensitive(false);
-        imp.redo_button.set_tooltip_text(Some("Redo (Ctrl+Shift+Z)"));
-        imp.redo_button.set_action_name(Some("win.redo"));
-        imp.redo_button.set_sensitive(false);
-        history_row.append(&imp.undo_button);
-        history_row.append(&imp.redo_button);
-        tools.append(&history_row);
+        // With no tool in hand, what the rail is for.
+        let idle = gtk::Label::new(Some(
+            "Choose a tool on the left. Changes show on the picture as you make them, \
+             and nothing is written to the file until you save.",
+        ));
+        idle.add_css_class("dim-label");
+        idle.set_xalign(0.0);
+        idle.set_wrap(true);
+        tools.append(&idle);
 
         // -- rotate and flip --
         let turning = &imp.transform_toggle;
-        turning.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("object-rotate-right-symbolic")
-                .label("Rotate & Flip")
-                .build(),
-        ));
-        turning.set_tooltip_text(Some("Turn or mirror the picture (Ctrl+T)"));
         turning.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -304,12 +347,13 @@ impl Window {
                 window.imp().rotation_bar.set_visible(button.is_active());
             }
         ));
-        tools.append(turning);
-        tools.append(self.build_rotation_bar());
+        let turn = self.build_rotation_bar();
+        turn.add_css_class("card");
+        turn.add_css_class("edit-card");
+        tools.append(turn);
 
         // -- crop tool --
         let crop = &imp.crop_toggle;
-        crop.set_tooltip_text(Some("Choose the part of the image to keep"));
         crop.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -323,16 +367,11 @@ impl Window {
                 window.set_cropping(button.is_active());
             }
         ));
-        tools.append(crop);
 
         let options = &imp.crop_options;
         // Hidden until the crop tool is picked, so the panel stays quiet.
         options.set_visible(false);
-
-        let aspect_label = gtk::Label::new(Some("Aspect ratio"));
-        aspect_label.add_css_class("dim-label");
-        aspect_label.set_xalign(0.0);
-        options.append(&aspect_label);
+        let shape = card(options, Some("Aspect Ratio"));
 
         // The ratios people actually crop to, plus unconstrained.
         let ratios: [(&str, f64); 8] = [
@@ -374,7 +413,7 @@ impl Window {
             ));
             grid.append(&button);
         }
-        options.append(&grid);
+        shape.append(&grid);
 
         let freehand = &imp.freehand_toggle;
         freehand.set_tooltip_text(Some("Draw the area to keep"));
@@ -388,40 +427,31 @@ impl Window {
                 window.imp().view.canvas().set_freehand(button.is_active());
             }
         ));
-        options.append(freehand);
+        shape.append(freehand);
 
-        imp.crop_size.add_css_class("dim-label");
+        note(&imp.crop_size);
         imp.crop_size.add_css_class("numeric");
-        imp.crop_size.set_xalign(0.0);
         options.append(&imp.crop_size);
 
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        actions.set_homogeneous(true);
         let reset = gtk::Button::with_label("Reset");
         reset.set_action_name(Some("win.crop-reset"));
-        let confirm = gtk::Button::with_label("OK");
+        let confirm = gtk::Button::with_label("Done");
         confirm.add_css_class("suggested-action");
+        confirm.set_tooltip_text(Some("Crop to the selection (Enter)"));
         confirm.set_action_name(Some("win.crop-apply"));
-        actions.append(&reset);
-        actions.append(&confirm);
-        options.append(&actions);
+        options.append(&button_row(&[&reset, &confirm]));
         tools.append(options);
 
-        // -- removing the background: one press, undone like any edit --
+        // -- removing the background: one press on the rail, undone like
+        // any edit --
         let cutout = &imp.cutout_button;
-        cutout.set_child(Some(
-            &adw::ButtonContent::builder()
-                .icon_name("glance-remove-background-symbolic")
-                .label("Remove Background")
-                .build(),
-        ));
-        cutout.set_tooltip_text(Some("Keep the subject and make the rest see-through, on this computer"));
+        cutout.set_icon_name("glance-remove-background-symbolic");
+        cutout.add_css_class("flat");
+        explain(cutout, "Remove Background", "Keep the subject and make the rest see-through, worked out on this computer.");
         cutout.set_action_name(Some("win.remove-background"));
-        tools.append(cutout);
 
         // -- resize --
         let sizing = &imp.resize_toggle;
-        sizing.set_tooltip_text(Some("Change the size, in pixels, percent or on paper, and the resolution"));
         sizing.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -438,10 +468,10 @@ impl Window {
                 }
             }
         ));
-        tools.append(sizing);
 
         let sizes = &imp.resize_options;
         sizes.set_visible(false);
+        let measure = card(sizes, Some("Size"));
 
         // Side by side with the caption above each, so the pair reads as one
         // measurement and the panel keeps its width.
@@ -464,7 +494,7 @@ impl Window {
                 move |_| window.size_typed(label == "Width")
             ));
         }
-        sizes.append(&fields);
+        measure.append(&fields);
 
         // What the two boxes count in.
         let unit_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -484,7 +514,7 @@ impl Window {
             move |_| window.size_unit_changed()
         ));
         unit_row.append(unit);
-        sizes.append(&unit_row);
+        measure.append(&unit_row);
 
         let keep = &imp.keep_aspect;
         // On by default: stretching a photograph out of shape is almost never
@@ -506,11 +536,11 @@ impl Window {
                 }
             }
         ));
-        sizes.append(keep);
+        measure.append(keep);
 
         // Resolution: how many pixels make an inch on paper.
+        let print = card(sizes, Some("Printing"));
         let resolution_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        resolution_row.set_margin_top(6);
         let resolution_label = gtk::Label::new(Some("Resolution"));
         resolution_label.add_css_class("dim-label");
         resolution_label.set_xalign(0.0);
@@ -531,7 +561,7 @@ impl Window {
         let ppi = gtk::Label::new(Some("ppi"));
         ppi.add_css_class("dim-label");
         resolution_row.append(&ppi);
-        sizes.append(&resolution_row);
+        print.append(&resolution_row);
 
         let resample = &imp.resample;
         resample.set_label(Some("Resample image"));
@@ -546,24 +576,19 @@ impl Window {
             self,
             move |_| window.sync_resize_panel()
         ));
-        sizes.append(resample);
+        print.append(resample);
 
-        imp.natural_label.add_css_class("dim-label");
-        imp.natural_label.set_xalign(0.0);
-        imp.natural_label.set_wrap(true);
+        note(&imp.natural_label);
+        imp.natural_label.set_margin_top(4);
         sizes.append(&imp.natural_label);
 
-        let size_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        size_actions.set_homogeneous(true);
         let size_reset = gtk::Button::with_label("Reset");
         size_reset.set_action_name(Some("win.resize-reset"));
-        let size_apply = gtk::Button::with_label("Apply");
+        let size_apply = gtk::Button::with_label("Done");
         size_apply.add_css_class("suggested-action");
         size_apply.set_tooltip_text(Some("Resample the image to this size, so it becomes an undo step"));
         size_apply.set_action_name(Some("win.resize-apply"));
-        size_actions.append(&size_reset);
-        size_actions.append(&size_apply);
-        sizes.append(&size_actions);
+        sizes.append(&button_row(&[&size_reset, &size_apply]));
         tools.append(sizes);
 
         // -- tone, and levels --
@@ -571,7 +596,6 @@ impl Window {
 
         // -- drawing --
         let pens = &imp.draw_toggle;
-        pens.set_tooltip_text(Some("Draw on the picture"));
         pens.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -587,10 +611,10 @@ impl Window {
                 }
             }
         ));
-        tools.append(pens);
 
         let strokes = &imp.draw_options;
         strokes.set_visible(false);
+        let kit = card(strokes, Some("Tool"));
 
         // One tool at a time, so picking one lets the last go.
         let tool_grid = gtk::FlowBox::new();
@@ -603,7 +627,7 @@ impl Window {
         tool_grid.set_column_spacing(4);
         // Select first: for picking up what has already been drawn.
         let select = &imp.draw_select;
-        select.set_child(Some(&draw::ToolIcon::select_face()));
+        select.set_child(Some(&draw::tool_face(draw::SELECT_ICON, "Select")));
         select.set_tooltip_text(Some("Select a drawing, to move, resize or remove it"));
         select.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
@@ -614,14 +638,7 @@ impl Window {
         let mut anchor: Option<gtk::ToggleButton> = Some(select.clone());
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
-            // The icon is the mark the tool makes, drawn by the same code that
-            // draws it on the picture. Adwaita has no line, rectangle, ellipse
-            // or arrow, and the nearest stock icons read as other things.
-            let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            face.set_halign(gtk::Align::Center);
-            face.append(&draw::ToolIcon::new(*tool));
-            face.append(&gtk::Label::new(Some(tool.label())));
-            button.set_child(Some(&face));
+            button.set_child(Some(&draw::tool_face(tool.icon_name(), tool.label())));
             button.set_tooltip_text(Some(tool.description()));
             match &anchor {
                 Some(first) => button.set_group(Some(first)),
@@ -635,7 +652,7 @@ impl Window {
             tool_grid.append(&button);
             imp.draw_tools.borrow_mut().push(button);
         }
-        strokes.append(&tool_grid);
+        kit.append(&tool_grid);
 
         // A kept signature, put down whole and picked up to move into place.
         let sign = crate::app::signatures::button(
@@ -646,8 +663,9 @@ impl Window {
                 move |signature| window.place_signature_on_picture(&signature)
             ),
         );
-        strokes.append(&sign);
+        kit.append(&sign);
 
+        let ink = card(strokes, Some("Ink"));
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let width_caption = gtk::Label::new(Some("Width"));
         width_caption.add_css_class("dim-label");
@@ -684,7 +702,7 @@ impl Window {
         stroke_row.append(&imp.draw_width);
         stroke_row.append(&colour_caption);
         stroke_row.append(&imp.draw_colour);
-        strokes.append(&stroke_row);
+        ink.append(&stroke_row);
 
         // Inside a rectangle or ellipse. See-through, as it starts, is none.
         let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -711,7 +729,7 @@ impl Window {
         fill_row.append(&fill_caption);
         fill_row.append(&imp.draw_fill);
         fill_row.append(&fill_note);
-        strokes.append(&fill_row);
+        ink.append(&fill_row);
 
         let corners = &imp.draw_corners;
         corners.connect_changed(glib::clone!(
@@ -723,30 +741,22 @@ impl Window {
                 window.sync_draw_tool();
             }
         ));
-        strokes.append(&corners.row);
+        ink.append(&corners.row);
 
-        let draw_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        draw_actions.set_homogeneous(true);
-        let undo_stroke = gtk::Button::with_label("Undo stroke");
-        undo_stroke.set_tooltip_text(Some("Take back the last thing laid over the picture (Ctrl+Z)"));
-        undo_stroke.set_action_name(Some("win.undo"));
-        let clear = gtk::Button::with_label("Clear");
-        clear.set_tooltip_text(Some("Remove every stroke"));
-        clear.set_action_name(Some("win.draw-clear"));
-        draw_actions.append(&undo_stroke);
-        draw_actions.append(&clear);
-        strokes.append(&draw_actions);
-
-        imp.draw_hint.add_css_class("dim-label");
-        imp.draw_hint.set_xalign(0.0);
-        imp.draw_hint.set_wrap(true);
+        note(&imp.draw_hint);
+        imp.draw_hint.set_margin_top(4);
         imp.draw_hint.set_text("Pick a tool, then drag on the picture.");
         strokes.append(&imp.draw_hint);
+
+        // Taking back one stroke is Undo, in the header.
+        let clear = gtk::Button::with_label("Clear All");
+        clear.set_tooltip_text(Some("Remove every stroke"));
+        clear.set_action_name(Some("win.draw-clear"));
+        strokes.append(&button_row(&[&clear]));
         tools.append(strokes);
 
         // -- text --
         let text = &imp.text_toggle;
-        text.set_tooltip_text(Some("Lay words over the picture"));
         text.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -763,10 +773,10 @@ impl Window {
                 }
             }
         ));
-        tools.append(text);
 
         let words = &imp.text_options;
         words.set_visible(false);
+        let writing = card(words, Some("Words"));
 
         imp.text_entry.set_placeholder_text(Some("Type something"));
         imp.text_entry.connect_changed(glib::clone!(
@@ -777,8 +787,16 @@ impl Window {
                 window.edit_text(move |item| item.content = content.clone());
             }
         ));
-        words.append(&imp.text_entry);
+        writing.append(&imp.text_entry);
 
+        let add = gtk::Button::with_label("Add");
+        add.add_css_class("suggested-action");
+        add.set_action_name(Some("win.text-add"));
+        let remove = gtk::Button::with_label("Remove");
+        remove.set_action_name(Some("win.text-remove"));
+        writing.append(&button_row(&[&add, &remove]));
+
+        let look = card(words, Some("Style"));
         imp.text_font.set_level(gtk::FontLevel::Family);
         imp.text_font.set_use_font(true);
         imp.text_font.connect_font_desc_notify(glib::clone!(
@@ -794,7 +812,7 @@ impl Window {
                 }
             }
         ));
-        words.append(&imp.text_font);
+        look.append(&imp.text_font);
 
         let style_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let size_label = gtk::Label::new(Some("Size"));
@@ -810,10 +828,14 @@ impl Window {
                 window.edit_text(move |item| item.size = size);
             }
         ));
+        size_label.set_hexpand(true);
+        size_label.set_xalign(0.0);
         style_row.append(&size_label);
         style_row.append(&imp.text_size);
 
-        // B, I and U, drawn as what they do.
+        // B, I and U, drawn as what they do, joined as one control.
+        let emphasis = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        emphasis.add_css_class("linked");
         for (button, css, tip) in [
             (&imp.text_bold, "text-bold", "Bold"),
             (&imp.text_italic, "text-italic", "Italic"),
@@ -826,9 +848,13 @@ impl Window {
                 self,
                 move |_| window.push_text_style()
             ));
-            style_row.append(button);
+            emphasis.append(button);
         }
-        words.append(&style_row);
+        look.append(&style_row);
+        // A row of their own: beside the size they made the panel wider than
+        // the picture can spare.
+        emphasis.set_homogeneous(true);
+        look.append(&emphasis);
 
         let colour_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         for (label, button, tip) in [
@@ -846,30 +872,17 @@ impl Window {
             colour_row.append(&caption);
             colour_row.append(button);
         }
-        words.append(&colour_row);
+        look.append(&colour_row);
         imp.text_colour.set_title("Text Colour");
         imp.text_background.set_title("Background Colour");
 
-        let text_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        text_actions.set_homogeneous(true);
-        let add = gtk::Button::with_label("Add");
-        add.add_css_class("suggested-action");
-        add.set_action_name(Some("win.text-add"));
-        let remove = gtk::Button::with_label("Remove");
-        remove.set_action_name(Some("win.text-remove"));
-        text_actions.append(&add);
-        text_actions.append(&remove);
-        words.append(&text_actions);
-
-        imp.text_hint.add_css_class("dim-label");
-        imp.text_hint.set_xalign(0.0);
-        imp.text_hint.set_wrap(true);
+        note(&imp.text_hint);
+        imp.text_hint.set_margin_top(4);
         words.append(&imp.text_hint);
         tools.append(words);
 
         // -- redaction --
         let redact = &imp.redact_toggle;
-        redact.set_tooltip_text(Some("Black out parts of the picture for good"));
         redact.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -882,43 +895,26 @@ impl Window {
                 window.sync_draw_tool();
             }
         ));
-        tools.append(redact);
         let marking = &imp.redact_options;
         marking.set_visible(false);
         let explain = gtk::Label::new(Some(
             "Drag over what should go. Marked areas stay see-through until you apply them, \
-             so you can check what each one covers.",
+             so you can check what each one covers. Undo takes back the last mark.",
         ));
-        explain.add_css_class("dim-label");
         explain.set_xalign(0.0);
         explain.set_wrap(true);
-        marking.append(&explain);
-        let redact_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        redact_actions.set_homogeneous(true);
-        let unmark = gtk::Button::with_label("Undo");
-        unmark.set_action_name(Some("win.undo"));
-        unmark.set_tooltip_text(Some("Take back the last mark (Ctrl+Z)"));
+        card(marking, None).append(&explain);
         let apply = gtk::Button::with_label("Apply…");
         apply.add_css_class("suggested-action");
         apply.set_action_name(Some("win.apply-redactions"));
         apply.set_tooltip_text(Some("Black out what is marked, in a copy or the original"));
-        redact_actions.append(&unmark);
-        redact_actions.append(&apply);
-        marking.append(&redact_actions);
+        marking.append(&button_row(&[&apply]));
         tools.append(marking);
 
-        imp.pending_crop.add_css_class("dim-label");
-        imp.pending_crop.set_xalign(0.0);
-        imp.pending_crop.set_wrap(true);
-        imp.pending_crop.set_visible(false);
-        tools.append(&imp.pending_crop);
-
         // -- output --
-        // Writing a copy is a section like the tools, so the sidebar shows one
-        // group of controls at a time instead of all of them at once. Only the
-        // two ways out stay pinned below.
+        // Writing a copy is a tool like the others, at the foot of the rail:
+        // the settings shown are only ever the ones for the job in hand.
         let sending = &imp.export_toggle;
-        sending.set_tooltip_text(Some("Format, size and quality for a copy"));
         sending.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -929,14 +925,12 @@ impl Window {
                 window.imp().export_options.set_visible(button.is_active());
             }
         ));
-        tools.append(sending);
         let sending_box = &imp.export_options;
         sending_box.set_visible(false);
         tools.append(sending_box);
 
         // Export writes a copy in another format, at whatever size the resize
-        // tool is showing. Grouped with the other writers, above the way out.
-        let export_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // tool is showing.
         // Names only: the caveats go in the line below, where they can be read
         // without making the sidebar wide enough to hold them.
         let formats = gtk::StringList::new(&[]);
@@ -960,31 +954,10 @@ impl Window {
             }
         ));
         // The format goes at the very top of the section so it cannot move:
-        // choosing a lossy one adds a caveat and a quality dial below it, and a
-        // picker that slides away as you use it is a picker you fight.
-        let format_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        format_row.append(drop);
-        sending_box.append(&format_row);
-
-        let export_button = gtk::Button::with_label("Export…");
-        export_button.set_hexpand(true);
-        export_button.set_tooltip_text(Some(
-            "Write a copy somewhere else, in the format and at the size chosen \
-             here (Ctrl+Shift+S)",
-        ));
-        export_button.set_action_name(Some("win.export"));
-        export_row.append(&export_button);
-        // The note goes above the row, not below it. Everything from here down
-        // is anchored to the bottom of the panel, so a note appearing when the
-        // format changes would otherwise shove the Export button out from under
-        // the pointer that just picked the format.
-        imp.format_note.add_css_class("dim-label");
-        imp.format_note.set_xalign(0.0);
-        imp.format_note.set_wrap(true);
-        // Both notes go above every control in this block. Everything from
-        // here down is anchored to the bottom of the panel, so a note that
-        // grows to a second line would otherwise slide the controls above it
-        // out from under the pointer. Only the notes themselves move.
+        // choosing a lossy one adds a caveat below, and a picker that slides
+        // away as you use it is a picker you fight.
+        let kind = card(sending_box, Some("Format"));
+        kind.append(drop);
 
         // How hard the lossy formats squeeze, when no size is being aimed at.
         let quality_caption = gtk::Label::new(Some("Quality"));
@@ -1002,10 +975,11 @@ impl Window {
         ));
         imp.quality_row.append(&quality_caption);
         imp.quality_row.append(quality);
-        sending_box.append(&imp.quality_row);
+        kind.append(&imp.quality_row);
 
         // Aiming at a file size: the thing people otherwise go to an
         // advertising-funded website for.
+        let weight = card(sending_box, Some("File Size"));
         imp.size_wanted.set_tooltip_text(Some(
             "Squeeze the file down to this, or pad it up to it if it is smaller",
         ));
@@ -1043,36 +1017,28 @@ impl Window {
         let size_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         size_row.append(&imp.size_value);
         size_row.append(&imp.size_unit);
-        imp.size_note.add_css_class("dim-label");
-        imp.size_note.set_xalign(0.0);
-        imp.size_note.set_wrap(true);
+        weight.append(&imp.size_wanted);
+        weight.append(&size_row);
 
-        sending_box.append(&imp.size_wanted);
-        sending_box.append(&size_row);
-        sending_box.append(&export_row);
-        // Both notes after every control, for the same reason.
+        let export_button = gtk::Button::with_label("Export…");
+        export_button.add_css_class("suggested-action");
+        export_button.set_tooltip_text(Some(
+            "Write a copy somewhere else, in the format and at the size chosen \
+             here (Ctrl+Shift+S)",
+        ));
+        export_button.set_action_name(Some("win.export"));
+        sending_box.append(&button_row(&[&export_button]));
+        // The notes go after every control: one that grows to a second line
+        // as the format changes would otherwise slide the controls under it
+        // out from under the pointer. Only the notes themselves move.
+        note(&imp.format_note);
+        note(&imp.size_note);
         sending_box.append(&imp.format_note);
         sending_box.append(&imp.size_note);
         self.describe_format();
         self.describe_target_size();
 
-        // The way out that keeps nothing. Above the save buttons rather than
-        // beside them, so leaving and committing are never one slip apart.
-        let cancel = gtk::Button::with_label("Cancel");
-        cancel.set_tooltip_text(Some("Leave the editor without saving (Esc)"));
-        cancel.set_action_name(Some("win.edit-cancel"));
-        panel.append(&cancel);
-
-        // Two ways out with pixels, not three: write back over the original,
-        // or write a copy with the format, size and place of your choosing.
-        // Export covers everything the old Save As did and more.
-        let save = gtk::Button::with_label("Save");
-        save.add_css_class("suggested-action");
-        save.set_tooltip_text(Some(
-            "Write these changes back over the original file (Ctrl+S)",
-        ));
-        save.set_action_name(Some("win.save"));
-        panel.append(&save);
+        self.build_edit_rail(&heading, &about, &idle);
 
         // Clicking or dragging a piece of text has to reach the panel, the
         // same way typing in the panel reaches the picture.
@@ -1113,6 +1079,116 @@ impl Window {
         ));
 
         panel
+    }
+
+    /// The header while editing: the way out that keeps nothing on the left,
+    /// the file in the middle, and undoing and saving on the right.
+    pub(crate) fn build_edit_header(&self) -> adw::HeaderBar {
+        let imp = self.imp();
+        let cancel = gtk::Button::with_label("Cancel");
+        cancel.set_tooltip_text(Some("Leave the editor without saving (Esc)"));
+        cancel.set_action_name(Some("win.edit-cancel"));
+
+        explain(&imp.undo_button, "Undo", "Take back the last change (Ctrl+Z)");
+        imp.undo_button.set_action_name(Some("win.undo"));
+        imp.undo_button.set_sensitive(false);
+        explain(&imp.redo_button, "Redo", "Put back what was undone (Ctrl+Shift+Z)");
+        imp.redo_button.set_action_name(Some("win.redo"));
+        imp.redo_button.set_sensitive(false);
+
+        // Two ways out with pixels, not three: write back over the original
+        // here, or write a copy from Export at the foot of the rail, with the
+        // format, size and place of your choosing.
+        let save = gtk::Button::with_label("Save");
+        save.add_css_class("suggested-action");
+        save.set_tooltip_text(Some("Write these changes back over the original file (Ctrl+S)"));
+        save.set_action_name(Some("win.save"));
+
+        // The same name as the viewer's header, whatever it is changed to.
+        imp.title.bind_property("title", &imp.edit_title, "title").sync_create().build();
+        imp.edit_title.set_subtitle("Editing");
+
+        let header = adw::HeaderBar::builder()
+            .title_widget(&imp.edit_title)
+            .centering_policy(adw::CenteringPolicy::Strict)
+            .build();
+        header.pack_start(&cancel);
+        header.pack_end(&save);
+        header.pack_end(&imp.redo_button);
+        header.pack_end(&imp.undo_button);
+        header
+    }
+
+    /// The tools on a rail beside the picture, in three groups and Export on
+    /// its own at the foot; and the heading over the settings, kept to the
+    /// tool in hand.
+    fn build_edit_rail(&self, heading: &gtk::Label, about: &gtk::Label, idle: &gtk::Label) {
+        let imp = self.imp();
+        let groups: [&[&gtk::Widget]; 3] = [
+            &[imp.crop_toggle.upcast_ref(), imp.transform_toggle.upcast_ref(), imp.resize_toggle.upcast_ref()],
+            &[imp.adjust_toggle.upcast_ref(), imp.levels_toggle.upcast_ref(), imp.cutout_button.upcast_ref()],
+            &[imp.draw_toggle.upcast_ref(), imp.text_toggle.upcast_ref(), imp.redact_toggle.upcast_ref()],
+        ];
+        let rail = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        rail.add_css_class("edit-rail");
+        for (index, group) in groups.iter().enumerate() {
+            if index > 0 {
+                let gap = gtk::Separator::new(gtk::Orientation::Horizontal);
+                gap.set_margin_top(4);
+                gap.set_margin_bottom(4);
+                gap.set_margin_start(6);
+                gap.set_margin_end(6);
+                rail.append(&gap);
+            }
+            for tool in *group {
+                rail.append(*tool);
+            }
+        }
+        // Writing a copy is the way out rather than a change, so it waits
+        // at the bottom.
+        let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        spacer.set_vexpand(true);
+        rail.append(&spacer);
+        rail.append(&imp.export_toggle);
+        // A short window scrolls the rail rather than refusing to be short.
+        let holder = &imp.edit_rail;
+        holder.set_child(Some(&rail));
+        holder.set_hscrollbar_policy(gtk::PolicyType::Never);
+        holder.set_propagate_natural_width(true);
+        holder.set_visible(false);
+
+        // What each tool is and does: under its name over the settings, and
+        // when the pointer rests on it.
+        let sections: std::rc::Rc<[(gtk::ToggleButton, &str, &str)]> = std::rc::Rc::new([
+            (imp.crop_toggle.clone(), "Crop", "Drag the edges or corners, or pick a shape, then press Done."),
+            (imp.transform_toggle.clone(), "Rotate & Flip", "Turn the picture by quarter turns or to any angle, or mirror it."),
+            (imp.resize_toggle.clone(), "Resize", "Change the size in pixels, percent or on paper, and the resolution."),
+            (imp.adjust_toggle.clone(), "Adjust", "Light, colour and sharpness. The picture changes as you move them."),
+            (imp.levels_toggle.clone(), "Levels", "Set the black point, midtones and white point against the histogram."),
+            (imp.draw_toggle.clone(), "Draw", "Pens and shapes. Select picks a drawing up again to move, resize or recolour it."),
+            (imp.text_toggle.clone(), "Text", "Lay words over the picture, and drag them into place."),
+            (imp.redact_toggle.clone(), "Redact", "Black out parts of the picture for good."),
+            (imp.export_toggle.clone(), "Export", "Write a copy in another format, at a quality or a file size you choose."),
+        ]);
+        for (toggle, name, what) in sections.iter() {
+            explain(toggle, name, what);
+        }
+        let show = {
+            let (sections, heading, about, idle) = (sections.clone(), heading.clone(), about.clone(), idle.clone());
+            move || {
+                let open = sections.iter().find(|(toggle, _, _)| toggle.is_active());
+                heading.set_text(open.map_or("Edit", |(_, name, _)| name));
+                about.set_text(open.map_or("", |(_, _, what)| what));
+                about.set_visible(open.is_some());
+                idle.set_visible(open.is_none());
+            }
+        };
+        show();
+        let show = std::rc::Rc::new(show);
+        for (toggle, _, _) in sections.iter() {
+            let show = show.clone();
+            toggle.connect_toggled(move |_| show());
+        }
     }
 
     /// The unit the size boxes are in.
@@ -1597,9 +1673,6 @@ impl Window {
         let imp = self.imp();
         imp.crop_options.set_visible(active);
         imp.view.canvas().set_cropping(active);
-        if active {
-            imp.pending_crop.set_visible(false);
-        }
         self.update_crop_actions();
     }
 

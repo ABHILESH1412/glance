@@ -462,7 +462,7 @@ it, and a read-only file is left untouched.
 - **Highlight, underline or strike through** selected text with Ctrl+H, Ctrl+U or
   Ctrl+Shift+X, or from the right-click menu. Highlights come in six colours from the
   menu, or any other; marking text the same way again takes the mark off
-- **Pictures**: **Add Picture…** in the menu or the Edit panel, or drop picture files on
+- **Pictures**: **Add Picture…** in the menu or the Mark Up toolbar, or drop picture files on
   the page. Any picture Glance opens will do, transparency and all; it is saved as a stamp
   that carries the picture, so every reader shows it, phones included, and it can be
   moved, resized or removed again later. Photographs are kept at up to 2048 pixels on
@@ -590,9 +590,13 @@ signatures kept, to remove (with undo) or add to; whether updates install themse
 what Live Text and the background remover have downloaded, each removable on its own.
 Each is the same switch the menus use, so the two always agree.
 
-**Editing** — one panel, one section at a time:
+**Editing** — Ctrl+E, or the pencil in the header, turns the window into an editor:
+Cancel, Undo, Redo and Save in its own header, the tools on a slim rail down the left of
+the picture, and only the settings of the one in hand, grouped in cards, on the right.
+Sliders change the picture as they move, with no Apply to press; Crop and Resize finish
+with **Done**.
 
-| Section | What it does |
+| Tool | What it does |
 |---|---|
 | **Rotate & Flip** | Quarter turns, or any angle typed into the box. The rotate buttons at the top of the menu, or `[` and `]`, turn the picture just to look at it, without changing the file |
 | **Crop** | Drag a rectangle, pull any of its eight handles, or pick an aspect preset |
@@ -849,3 +853,6 @@ TIFF appears in stages.
 
 GPL-3.0-or-later — see [LICENSE](LICENSE). You may use, study, change and share this
 program; a changed version you distribute has to stay open under the same terms.
+
+Most of the icons on the editing tools are from [Tabler Icons](https://tabler.io/icons) by
+Paweł Kuna, under the MIT licence — see [data/icons/TABLER-LICENSE](data/icons/TABLER-LICENSE).

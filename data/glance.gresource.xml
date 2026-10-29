@@ -18,15 +18,68 @@
     <file alias="io.github.abhilesh1412.Glance-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/apps/io.github.abhilesh1412.Glance-symbolic.svg</file>
   </gresource>
-  <!-- Icons for the program's own controls, where Adwaita has none. -->
+  <!-- Icons for the program's own controls. Most are Tabler Icons (MIT; see
+       icons/TABLER-LICENSE), drawn as fills so every GTK can colour them. -->
   <gresource prefix="/io/github/abhilesh1412/Glance/icons/scalable/actions">
+    <file alias="glance-adjust-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-adjust-symbolic.svg</file>
+    <file alias="glance-arrow-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-arrow-symbolic.svg</file>
+    <file alias="glance-bubble-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-bubble-symbolic.svg</file>
+    <file alias="glance-choose-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-choose-symbolic.svg</file>
+    <file alias="glance-crop-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-crop-symbolic.svg</file>
+    <file alias="glance-cross-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-cross-symbolic.svg</file>
+    <file alias="glance-double-arrow-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-double-arrow-symbolic.svg</file>
+    <file alias="glance-draw-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-draw-symbolic.svg</file>
+    <file alias="glance-ellipse-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-ellipse-symbolic.svg</file>
+    <file alias="glance-export-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-export-symbolic.svg</file>
+    <file alias="glance-highlighter-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-highlighter-symbolic.svg</file>
     <file alias="glance-levels-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-levels-symbolic.svg</file>
+    <file alias="glance-line-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-line-symbolic.svg</file>
     <file alias="glance-live-text-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-live-text-symbolic.svg</file>
+    <file alias="glance-pen-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-pen-symbolic.svg</file>
+    <file alias="glance-picture-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-picture-symbolic.svg</file>
+    <file alias="glance-polygon-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-polygon-symbolic.svg</file>
+    <file alias="glance-rectangle-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-rectangle-symbolic.svg</file>
+    <file alias="glance-redact-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-redact-symbolic.svg</file>
+    <file alias="glance-redo-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-redo-symbolic.svg</file>
     <file alias="glance-remove-background-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-remove-background-symbolic.svg</file>
+    <file alias="glance-resize-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-resize-symbolic.svg</file>
+    <file alias="glance-rotate-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-rotate-symbolic.svg</file>
+    <file alias="glance-rounded-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-rounded-symbolic.svg</file>
+    <file alias="glance-select-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-select-symbolic.svg</file>
     <file alias="glance-signature-symbolic.svg"
           preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-signature-symbolic.svg</file>
+    <file alias="glance-star-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-star-symbolic.svg</file>
+    <file alias="glance-text-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-text-symbolic.svg</file>
+    <file alias="glance-tick-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-tick-symbolic.svg</file>
+    <file alias="glance-undo-symbolic.svg"
+          preprocess="xml-stripblanks">icons/hicolor/symbolic/actions/glance-undo-symbolic.svg</file>
   </gresource>
 </gresources>

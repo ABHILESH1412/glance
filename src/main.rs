@@ -131,6 +131,13 @@ fn load_css() {
         scale.temperature trough highlight, scale.tint trough highlight { background: transparent; }
         /* The edit panel's tone sliders line up, whatever their numbers. */
         scale.tone value { min-width: 2.6em; }
+        /* The editor: its tools on a rail beside the picture, and each
+           tool's settings in cards on the other side. */
+        .edit-rail { padding: 8px 6px; border-right: 1px solid alpha(currentColor, 0.12); }
+        .edit-rail > button { min-width: 40px; min-height: 40px; padding: 0; border-radius: 10px; }
+        .edit-rail > button:checked { background: alpha(@accent_bg_color, 0.22); color: @accent_color; }
+        .edit-rail > button > image { -gtk-icon-size: 20px; }
+        .edit-card { padding: 12px 10px; }
         /* Live Text says it is reading, floating over the top of the picture. */
         .live-status { padding: 6px 14px; border-radius: 999px; }
         .filmstrip-current { outline: 2px solid @accent_bg_color; outline-offset: 1px; }

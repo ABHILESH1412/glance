@@ -6,8 +6,7 @@
 //!
 //! A toolbar floats over the bottom of the page, with the tool in hand's
 //! options on a card just above it, so the page keeps the whole width of the
-//! window. The tools draw their own icons and the colour wells are the image
-//! editor's, so moving between a picture and a document there is nothing new
+//! window. The tools have the image editor's icons and colour wells, so moving between a picture and a document there is nothing new
 //! to learn. Everything made here is saved into the PDF at once, and Ctrl+Z
 //! takes it back.
 
@@ -20,7 +19,7 @@ use gtk::{gdk, glib, pango};
 
 use crate::app::window::Window;
 use crate::images::edit::draw;
-use crate::images::edit::panel::colour_button;
+use crate::images::edit::panel::{colour_button, explain};
 use crate::pdf;
 
 pub struct PdfTools {
@@ -99,12 +98,10 @@ impl TextControls {
 impl PdfTools {
     pub fn new(window: &Window) -> Self {
         // -- the toolbar's tools: one in hand at a time --
-        let select = tool_toggle(draw::ToolIcon::select_icon().upcast_ref(), "Select a drawing or picture, to move, resize or remove it");
-        let current = draw::ToolIcon::new(draw::Tool::Pen);
-        let draw_toggle = tool_toggle(current.upcast_ref(), "Draw on the page");
-        let text_toggle = tool_toggle(gtk::Image::from_icon_name("font-x-generic-symbolic").upcast_ref(), "Write on the page");
-        let redact_toggle =
-            tool_toggle(gtk::Image::from_icon_name("view-conceal-symbolic").upcast_ref(), "Black out parts of the document for good");
+        let select = tool_toggle(draw::SELECT_ICON, "Select", "Pick up a drawing or picture, to move, resize or remove it");
+        let draw_toggle = tool_toggle(draw::Tool::Pen.icon_name(), "Draw", "Pens and shapes on the page; the arrow beside it picks which");
+        let text_toggle = tool_toggle("glance-text-symbolic", "Text", "Write on the page");
+        let redact_toggle = tool_toggle("glance-redact-symbolic", "Redact", "Black out parts of the document for good");
         for other in [&draw_toggle, &text_toggle, &redact_toggle] {
             other.set_group(Some(&select));
         }
@@ -119,10 +116,7 @@ impl PdfTools {
         let mut tools: Vec<(draw::Tool, gtk::ToggleButton)> = Vec::new();
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
-            let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            face.append(&draw::ToolIcon::new(*tool));
-            face.append(&gtk::Label::new(Some(tool.label())));
-            button.set_child(Some(&face));
+            button.set_child(Some(&draw::tool_face(tool.icon_name(), tool.label())));
             button.set_tooltip_text(Some(tool.description()));
             button.add_css_class("flat");
             if let Some((_, first)) = tools.first() {
@@ -137,10 +131,10 @@ impl PdfTools {
         let tool_popover = gtk::Popover::builder().child(&tool_grid).build();
         let choose = gtk::MenuButton::builder()
             .popover(&tool_popover)
-            .icon_name("pan-up-symbolic")
+            .icon_name("glance-choose-symbolic")
             .direction(gtk::ArrowType::Up)
-            .tooltip_text("Choose a pen or shape")
             .build();
+        explain(&choose, "Pens and Shapes", "Choose what Draw puts on the page");
         choose.add_css_class("flat");
         choose.add_css_class("tool-choice");
         let drawing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -159,11 +153,12 @@ impl PdfTools {
         };
         sign.set_icon_name("glance-signature-symbolic");
         sign.set_always_show_arrow(false);
+        explain(&sign, "Signature", "Put a signature down, or write a new one");
         sign.add_css_class("flat");
         // Written signatures need ink; ones from a picture, only pictures.
         sign.set_sensitive(pdf::can_draw() || pdf::can_place_pictures());
         // A picture from a file, put down whole and picked up to move.
-        let picture = icon_button("insert-image-symbolic", "Add a picture to the page, to move and size", "win.add-picture");
+        let picture = icon_button("glance-picture-symbolic", "Picture", "Add a picture from a file, to move and size on the page", "win.add-picture");
         picture.set_sensitive(pdf::can_place_pictures());
 
         let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 2);
@@ -179,10 +174,10 @@ impl PdfTools {
         toolbar.append(&sign);
         toolbar.append(&picture);
         toolbar.append(&divider());
-        toolbar.append(&icon_button("edit-undo-symbolic", "Undo (Ctrl+Z)", "win.undo-mark"));
-        toolbar.append(&icon_button("edit-redo-symbolic", "Redo (Ctrl+Shift+Z)", "win.redo-mark"));
+        toolbar.append(&icon_button("glance-undo-symbolic", "Undo", "Take back the last mark (Ctrl+Z)", "win.undo-mark"));
+        toolbar.append(&icon_button("glance-redo-symbolic", "Redo", "Put back what was undone (Ctrl+Shift+Z)", "win.redo-mark"));
         toolbar.append(&divider());
-        toolbar.append(&icon_button("window-close-symbolic", "Done (Ctrl+E)", "win.draw-panel"));
+        toolbar.append(&icon_button("glance-cross-symbolic", "Done", "Put the markup tools away (Ctrl+E)", "win.draw-panel"));
 
         // -- drawing's options --
         let strokes = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -404,10 +399,10 @@ impl PdfTools {
         }
         // Picking a pen or shape puts it in hand, on the Draw button's face.
         for (tool, button) in tools.iter() {
-            let (tool, draw_toggle, current, popover) = (*tool, draw_toggle.clone(), current.clone(), tool_popover.clone());
+            let (tool, draw_toggle, popover) = (*tool, draw_toggle.clone(), tool_popover.clone());
             button.connect_toggled(move |button| {
                 if button.is_active() {
-                    current.set_tool(tool);
+                    draw_toggle.set_icon_name(tool.icon_name());
                     draw_toggle.set_active(true);
                     popover.popdown();
                 }
@@ -599,16 +594,18 @@ fn caption_label(text: &str) -> gtk::Label {
 }
 
 /// A tool on the toolbar: held until another is taken up.
-fn tool_toggle(face: &gtk::Widget, tip: &str) -> gtk::ToggleButton {
-    let button = gtk::ToggleButton::builder().child(face).tooltip_text(tip).build();
+fn tool_toggle(icon: &str, name: &str, what: &str) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::builder().icon_name(icon).build();
     button.add_css_class("flat");
+    explain(&button, name, what);
     button
 }
 
 /// A button on the toolbar that does something once.
-fn icon_button(icon: &str, tip: &str, action: &str) -> gtk::Button {
-    let button = gtk::Button::builder().icon_name(icon).tooltip_text(tip).action_name(action).build();
+fn icon_button(icon: &str, name: &str, what: &str, action: &str) -> gtk::Button {
+    let button = gtk::Button::builder().icon_name(icon).action_name(action).build();
     button.add_css_class("flat");
+    explain(&button, name, what);
     button
 }
 

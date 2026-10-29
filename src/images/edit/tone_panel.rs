@@ -6,8 +6,9 @@
 //!
 //! Adjust has the sliders, grouped as light, colour and detail. Levels has
 //! the histogram with its three handles, the same three values typed, and
-//! Auto Levels. Both feed one set of `Adjustments`, which Apply bakes in as a
-//! single step; each section's Reset puts back only its own.
+//! Auto Levels. Both feed one set of `Adjustments`, shown on the picture as
+//! they change and written with it when it is saved; each section's Reset
+//! puts back only its own.
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
@@ -17,6 +18,7 @@ use crate::app::window::Window;
 use crate::images::canvas;
 use crate::images::edit::adjust::{self, Adjustments, Levels};
 use crate::images::edit::levels;
+use crate::images::edit::panel::{button_row, card, explain, note as panel_note};
 use crate::images::edit::tone::{Detail, ToneWorker};
 
 /// How long a slider has to rest before the whole picture is worked out, not
@@ -29,6 +31,9 @@ pub(crate) fn one_sided_scale() -> gtk::Scale {
     scale.set_draw_value(true);
     scale.set_value_pos(gtk::PositionType::Right);
     scale.set_digits(0);
+    // Nothing is at the start, marked like the others' middle, which also
+    // gives it their height so the rows beside each other stay even.
+    scale.add_mark(0.0, gtk::PositionType::Bottom, None);
     scale.add_css_class("tone");
     crate::images::edit::panel::wheel_scrolls_panel(&scale);
     scale
@@ -42,27 +47,11 @@ fn caption(text: &str) -> gtk::Label {
     label
 }
 
-fn heading(text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("heading");
-    label.set_xalign(0.0);
-    label.set_margin_top(8);
-    label
-}
-
-fn reset_and_apply(reset_action: &str, apply_tooltip: &str) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    row.set_homogeneous(true);
-    row.set_margin_top(6);
+fn reset_button(action: &str, tooltip: &str) -> gtk::Button {
     let reset = gtk::Button::with_label("Reset");
-    reset.set_action_name(Some(reset_action));
-    let apply = gtk::Button::with_label("Apply");
-    apply.add_css_class("suggested-action");
-    apply.set_tooltip_text(Some(apply_tooltip));
-    apply.set_action_name(Some("win.adjust-apply"));
-    row.append(&reset);
-    row.append(&apply);
-    row
+    reset.set_action_name(Some(action));
+    reset.set_tooltip_text(Some(tooltip));
+    reset
 }
 
 impl Window {
@@ -88,7 +77,6 @@ impl Window {
 
         // -- adjust --
         let toggle = &imp.adjust_toggle;
-        toggle.set_tooltip_text(Some("Light, colour and sharpness"));
         toggle.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -99,7 +87,6 @@ impl Window {
                 window.imp().adjust_options.set_visible(button.is_active());
             }
         ));
-        tools.append(toggle);
 
         let options = &imp.adjust_options;
         options.set_visible(false);
@@ -113,18 +100,28 @@ impl Window {
             ("Sepia", "Towards the brown of an old print"),
             ("Sharpness", "Crisper edges, or softer below zero"),
         ];
+        let mut group = options.clone();
+        // The names share one width, so the sliders beside them line up.
+        let names = gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal);
         for (name, scale) in self.tone_sliders() {
             match name {
-                "Exposure" => options.append(&heading("Light")),
-                "Saturation" => options.append(&heading("Colour")),
-                "Sharpness" => options.append(&heading("Detail")),
+                "Exposure" => group = card(options, Some("Light")),
+                "Saturation" => group = card(options, Some("Colour")),
+                "Sharpness" => group = card(options, Some("Detail")),
                 _ => {}
             }
-            options.append(&caption(name));
-            if let Some((_, tip)) = tips.iter().find(|(n, _)| *n == name) {
-                scale.set_tooltip_text(Some(tip));
+            let label = gtk::Label::new(Some(name));
+            label.set_xalign(0.0);
+            names.add_widget(&label);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            row.append(&label);
+            scale.set_hexpand(true);
+            row.append(scale);
+            group.append(&row);
+            match tips.iter().find(|(n, _)| *n == name) {
+                Some((_, tip)) => explain(scale, name, tip),
+                None => scale.update_property(&[gtk::accessible::Property::Label(name)]),
             }
-            scale.update_property(&[gtk::accessible::Property::Label(name)]);
             // The two white balance sliders show where they lead.
             match name {
                 "Temperature" => scale.add_css_class("temperature"),
@@ -136,17 +133,12 @@ impl Window {
                 self,
                 move |_| window.tone_changed()
             ));
-            options.append(scale);
         }
-        options.append(&reset_and_apply(
-            "win.adjust-reset",
-            "Fix these values into the image, so they can be undone as a step",
-        ));
+        options.append(&button_row(&[&reset_button("win.adjust-reset", "Put every slider back to the middle")]));
         tools.append(options);
 
         // -- levels --
         let toggle = &imp.levels_toggle;
-        toggle.set_tooltip_text(Some("Set the black point, midtones and white point against the histogram"));
         toggle.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -162,10 +154,10 @@ impl Window {
                 }
             }
         ));
-        tools.append(toggle);
 
         let options = &imp.levels_options;
         options.set_visible(false);
+        let graph = card(options, None);
 
         let channel_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let channel_label = gtk::Label::new(Some("Channel"));
@@ -183,7 +175,7 @@ impl Window {
             move |_| window.sync_levels()
         ));
         channel_row.append(channel);
-        options.append(&channel_row);
+        graph.append(&channel_row);
 
         imp.levels_graph.set_margin_top(4);
         imp.levels_graph.connect_changed(glib::clone!(
@@ -191,7 +183,7 @@ impl Window {
             self,
             move |levels| window.levels_changed(levels)
         ));
-        options.append(&imp.levels_graph);
+        graph.append(&imp.levels_graph);
 
         // The same three values, to type or step exactly.
         let fields = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -230,34 +222,29 @@ impl Window {
         }
         imp.levels_gamma.set_digits(2);
         imp.levels_gamma.set_tooltip_text(Some("Above 1 lightens the midtones, below 1 darkens them"));
-        options.append(&fields);
+        graph.append(&fields);
 
         // Auto Levels works on each colour, which the RGB handles do not show.
         let note = &imp.levels_note;
         note.set_label("Red, green and blue have levels of their own too. Choose one above to see them.");
-        note.set_wrap(true);
-        note.set_xalign(0.0);
-        note.add_css_class("dim-label");
-        note.add_css_class("caption");
+        panel_note(note);
         note.set_visible(false);
-        options.append(note);
+        graph.append(note);
 
         let auto = &imp.levels_auto;
         auto.set_label("Auto Levels");
         auto.set_tooltip_text(Some(
             "Stretch each colour so the darkest and brightest parts reach black and white, which also takes out a colour cast",
         ));
-        auto.set_margin_top(6);
         auto.connect_clicked(glib::clone!(
             #[weak(rename_to = window)]
             self,
             move |_| window.auto_levels()
         ));
-        options.append(auto);
-        options.append(&reset_and_apply(
-            "win.levels-reset",
-            "Fix these levels into the image, so they can be undone as a step",
-        ));
+        options.append(&button_row(&[
+            auto,
+            &reset_button("win.levels-reset", "Put black, midtones and white back as they were"),
+        ]));
         tools.append(options);
     }
 
@@ -286,6 +273,8 @@ impl Window {
         adjust.sepia = imp.sepia_scale.value();
         adjust.sharpness = imp.sharpness_scale.value();
         canvas.set_adjustments(adjust);
+        // A new change: what undo put back to nothing is gone for good.
+        imp.tone_redo.set(None);
         self.refresh_tone();
         self.update_tone_actions();
     }
@@ -293,6 +282,7 @@ impl Window {
     /// A handle was dragged.
     fn levels_changed(&self, levels: Levels) {
         let imp = self.imp();
+        imp.tone_redo.set(None);
         let canvas = imp.view.canvas();
         let mut adjust = canvas.adjustments();
         adjust.levels[self.levels_channel()] = levels;
@@ -327,6 +317,7 @@ impl Window {
         let canvas = imp.view.canvas();
         let mut adjust = canvas.adjustments();
         adjust.levels = histogram.auto_levels();
+        imp.tone_redo.set(None);
         if adjust.levels_are_identity() {
             self.toast("The picture already runs from black to white.");
         }
@@ -378,11 +369,12 @@ impl Window {
     }
 
     fn update_tone_actions(&self) {
+        // Undo can take the sliders back now, or has nothing of theirs left.
+        self.update_edit_state();
         let adjust = self.imp().view.canvas().adjustments();
         for (name, enabled) in [
             ("adjust-reset", !adjust.sliders_are_identity()),
             ("levels-reset", !adjust.levels_are_identity()),
-            ("adjust-apply", !adjust.is_identity()),
         ] {
             if let Some(action) = self.lookup_action(name).and_downcast::<gio::SimpleAction>() {
                 action.set_enabled(enabled);
@@ -392,6 +384,7 @@ impl Window {
 
     /// Put the sliders back to nothing, leaving levels.
     pub(crate) fn reset_sliders(&self) {
+        self.imp().tone_redo.set(None);
         let canvas = self.imp().view.canvas();
         let levels = canvas.adjustments().levels;
         canvas.set_adjustments(Adjustments { levels, ..Default::default() });
@@ -401,6 +394,7 @@ impl Window {
 
     /// Put levels back to nothing, leaving the sliders.
     pub(crate) fn reset_levels(&self) {
+        self.imp().tone_redo.set(None);
         let canvas = self.imp().view.canvas();
         let adjust = Adjustments { levels: Default::default(), ..canvas.adjustments() };
         canvas.set_adjustments(adjust);

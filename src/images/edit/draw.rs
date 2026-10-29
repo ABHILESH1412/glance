@@ -10,8 +10,7 @@
 //! of "what this looks like" will drift apart.
 
 use gtk::prelude::*;
-use gtk::subclass::prelude::*;
-use gtk::{gdk, glib, graphene, gsk};
+use gtk::{gdk, graphene, gsk};
 
 use std::sync::Arc;
 
@@ -136,6 +135,27 @@ impl Tool {
             Tool::Cross => "Cross, for crossing things out",
             Tool::DoubleArrow => "Arrow with a head at each end",
             other => other.label(),
+        }
+    }
+
+    /// The tool's icon, one of the program's own.
+    pub fn icon_name(self) -> &'static str {
+        match self {
+            Tool::Pen => "glance-pen-symbolic",
+            Tool::Highlighter => "glance-highlighter-symbolic",
+            Tool::Line => "glance-line-symbolic",
+            Tool::Arrow => "glance-arrow-symbolic",
+            Tool::DoubleArrow => "glance-double-arrow-symbolic",
+            Tool::Rectangle => "glance-rectangle-symbolic",
+            Tool::RoundedRectangle => "glance-rounded-symbolic",
+            Tool::Ellipse => "glance-ellipse-symbolic",
+            Tool::Polygon(_) => "glance-polygon-symbolic",
+            Tool::Star(_) => "glance-star-symbolic",
+            Tool::Bubble => "glance-bubble-symbolic",
+            Tool::Tick => "glance-tick-symbolic",
+            Tool::Cross => "glance-cross-symbolic",
+            Tool::Redact => "glance-redact-symbolic",
+            Tool::Signature => "glance-signature-symbolic",
         }
     }
 
@@ -873,168 +893,14 @@ fn rounded(x: f64, y: f64, w: f64, h: f64, radius: f64, tail: Option<[(f64, f64)
     ring
 }
 
-/// A button icon showing the very shape the tool draws.
-///
-/// Adwaita has no line, rectangle, ellipse or arrow icons, and a stand-in from
-/// somewhere else in the set reads as the wrong thing. Drawing each tool's own
-/// mark, with the same code that draws it on the picture, cannot be wrong.
-mod icon {
-    use super::*;
-
-    mod imp {
-        use super::*;
-        use std::cell::Cell;
-
-        #[derive(Default)]
-        pub struct ToolIcon {
-            pub tool: Cell<Option<Tool>>,
-            /// The Select tool's pointer, instead of a mark.
-            pub pointer: Cell<bool>,
-        }
-
-        #[glib::object_subclass]
-        impl ObjectSubclass for ToolIcon {
-            const NAME: &'static str = "GlanceToolIcon";
-            type Type = super::ToolIcon;
-            type ParentType = gtk::Widget;
-        }
-
-        impl ObjectImpl for ToolIcon {}
-
-        impl WidgetImpl for ToolIcon {
-            fn snapshot(&self, snapshot: &gtk::Snapshot) {
-                let widget = self.obj();
-                let (w, h) = (widget.width() as f64, widget.height() as f64);
-                if w < 2.0 || h < 2.0 {
-                    return;
-                }
-                // Follow the label's colour, so the icon dims and highlights
-                // with the button like a real symbolic icon.
-                let ink = widget.color();
-                if self.pointer.get() {
-                    snapshot.append_fill(&super::pointer(w, h), gsk::FillRule::Winding, &ink);
-                    return;
-                }
-                let Some(tool) = self.tool.get() else {
-                    return;
-                };
-                let sample = super::sample(tool, w, h);
-                // A solid block: what a redaction leaves.
-                if tool == Tool::Redact {
-                    if let Some((x, y, rw, rh)) = sample.rect() {
-                        snapshot.append_color(&ink, &graphene::Rect::new(x as f32, y as f32 + 2.0, rw as f32, rh as f32 - 4.0));
-                    }
-                    return;
-                }
-                let Some(path) = sample.path() else {
-                    return;
-                };
-                snapshot.append_stroke(&path, &sample.stroke(), &ink);
-            }
-        }
-    }
-
-    glib::wrapper! {
-        pub struct ToolIcon(ObjectSubclass<imp::ToolIcon>)
-            @extends gtk::Widget,
-            @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
-    }
-
-    impl ToolIcon {
-        pub fn new(tool: Tool) -> Self {
-            let icon: Self = glib::Object::new();
-            icon.imp().tool.set(Some(tool));
-            icon.set_size_request(18, 18);
-            icon.set_valign(gtk::Align::Center);
-            icon
-        }
-
-        /// Show another tool's mark, as a button that stands for whichever
-        /// tool is in hand.
-        pub fn set_tool(&self, tool: Tool) {
-            self.imp().tool.set(Some(tool));
-            self.queue_draw();
-        }
-
-        /// The Select tool's pointer alone, for a button with no room for
-        /// its name.
-        pub fn select_icon() -> Self {
-            let icon: Self = glib::Object::new();
-            icon.imp().pointer.set(true);
-            icon.set_size_request(16, 16);
-            icon.set_valign(gtk::Align::Center);
-            icon
-        }
-
-        /// The Select tool's button face: a pointer, and its name.
-        pub fn select_face() -> gtk::Box {
-            let icon: Self = glib::Object::new();
-            icon.imp().pointer.set(true);
-            icon.set_size_request(18, 18);
-            icon.set_valign(gtk::Align::Center);
-            let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            face.set_halign(gtk::Align::Center);
-            face.append(&icon);
-            face.append(&gtk::Label::new(Some("Select")));
-            face
-        }
-    }
-
-    /// An arrow pointer, filling the height it is given.
-    fn pointer(w: f64, h: f64) -> gsk::Path {
-        let size = h.min(w) - 2.0;
-        let (x0, y0) = ((w - size * 0.62) / 2.0, 1.0);
-        let at = |x: f64, y: f64| ((x0 + x * size) as f32, (y0 + y * size) as f32);
-        let builder = gsk::PathBuilder::new();
-        let outline = [(0.0, 0.0), (0.0, 0.86), (0.22, 0.66), (0.37, 1.0), (0.5, 0.94), (0.36, 0.61), (0.62, 0.61)];
-        let (x, y) = at(outline[0].0, outline[0].1);
-        builder.move_to(x, y);
-        for &(px, py) in &outline[1..] {
-            let (x, y) = at(px, py);
-            builder.line_to(x, y);
-        }
-        builder.close();
-        builder.to_path()
-    }
-
-    /// A miniature of what the tool makes, inset so the stroke has room.
-    pub(super) fn sample(tool: Tool, w: f64, h: f64) -> Mark {
-        let pad = 3.0;
-        let (x0, y0, x1, y1) = (pad, pad, w - pad, h - pad);
-        let points = match tool {
-            // A squiggle, because that is what a pen leaves.
-            Tool::Pen => vec![
-                (x0, y1),
-                (x0 + (x1 - x0) * 0.3, y0),
-                (x0 + (x1 - x0) * 0.6, y1),
-                (x1, y0),
-            ],
-            // One thick sweep, the way a marker goes down.
-            Tool::Highlighter => vec![(x0, (y0 + y1) / 2.0), (x1, (y0 + y1) / 2.0)],
-            Tool::Line | Tool::Arrow | Tool::DoubleArrow => vec![(x0, y1), (x1, y0)],
-            // A star or polygon fills the square it is drawn in.
-            Tool::Polygon(_) | Tool::Star(_) => vec![(x0 - 1.0, y0 - 1.0), (x1 + 1.0, y1 + 1.0)],
-            Tool::Rectangle
-            | Tool::RoundedRectangle
-            | Tool::Ellipse
-            | Tool::Bubble
-            | Tool::Tick
-            | Tool::Cross
-            | Tool::Redact
-            | Tool::Signature => {
-                vec![(x0, y0), (x1, y1)]
-            }
-        };
-        Mark {
-            tool,
-            points,
-            colour: gdk::RGBA::BLACK,
-            width: if tool == Tool::Highlighter { (h - pad * 2.0).max(2.0) } else { 1.6 },
-            fill: None,
-            sequence: 0,
-            signature: None,
-        }
-    }
+/// A tool's button face: its icon, and its name beside it.
+pub fn tool_face(icon: &str, name: &str) -> gtk::Box {
+    let face = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    face.set_halign(gtk::Align::Center);
+    face.append(&gtk::Image::from_icon_name(icon));
+    face.append(&gtk::Label::new(Some(name)));
+    face
 }
 
-pub use icon::ToolIcon;
+/// The Select tool's icon, for picking up what has been drawn.
+pub const SELECT_ICON: &str = "glance-select-symbolic";

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Signatures, as the reader sees them: the pad a signature is written on,
-//! bringing one in from a picture, the Signature button in the Draw panels
-//! that puts a kept one down, and the small pictures of them both of those
+//! bringing one in from a picture, the PDF toolbar's Signature button and
+//! the image editor's Signature tool that put a kept one down, and the small pictures of them both of those
 //! and the preferences show.
 
 use std::cell::RefCell;
@@ -515,10 +515,10 @@ fn offer_import(window: &Window, found: Signature, done: Rc<dyn Fn(Signature)>) 
     dialog.present(Some(window));
 }
 
-/// The Signature button of a Draw panel: kept signatures to put down, one
-/// click each, and the way to write a new one or tidy them up.
+/// The Signature button of the PDF markup toolbar: kept signatures to put
+/// down, one click each, and the way to write a new one or tidy them up.
 pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::MenuButton {
-    let content = adw::ButtonContent::builder().icon_name("document-edit-symbolic").label("Signature").build();
+    let content = adw::ButtonContent::builder().icon_name("glance-signature-symbolic").label("Signature").build();
     let button = gtk::MenuButton::builder()
         .child(&content)
         .tooltip_text("Put a signature down, or write a new one")
@@ -532,91 +532,104 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
     let popover = gtk::Popover::builder().child(&list).build();
     button.set_popover(Some(&popover));
     let place: Rc<dyn Fn(Arc<Signature>)> = Rc::new(place);
+    let done: Rc<dyn Fn()> = Rc::new(glib::clone!(
+        #[weak]
+        popover,
+        move || popover.popdown()
+    ));
     // Filled each time it opens, so it always shows what is kept.
     popover.connect_show(glib::clone!(
         #[weak]
         window,
         #[weak]
-        popover,
-        #[weak]
         list,
-        move |_| {
-            while let Some(child) = list.first_child() {
-                list.remove(&child);
-            }
-            let kept = signature::all();
-            if kept.is_empty() {
-                let none = gtk::Label::builder()
-                    .label("No signatures yet. Write one once, then put it down anywhere.")
-                    .wrap(true)
-                    .max_width_chars(24)
-                    .xalign(0.0)
-                    .css_classes(["dim-label"])
-                    .build();
-                none.set_margin_start(6);
-                none.set_margin_end(6);
-                none.set_margin_top(6);
-                none.set_margin_bottom(6);
-                list.append(&none);
-            }
-            for (n, kept) in kept.into_iter().enumerate() {
-                let face = thumbnail(&kept, 200, 64);
-                let choice = gtk::Button::builder().child(&face).tooltip_text("Put this signature down").css_classes(["flat"]).build();
-                choice.update_property(&[gtk::accessible::Property::Label(&format!("Signature {}", n + 1))]);
-                let kept = Arc::new(kept);
-                let place = place.clone();
-                choice.connect_clicked(glib::clone!(
-                    #[weak]
-                    popover,
-                    move |_| {
-                        popover.popdown();
-                        place(kept.clone());
-                    }
-                ));
-                list.append(&choice);
-            }
-            list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-            let new = gtk::Button::builder().label("_New Signature…").use_underline(true).css_classes(["flat"]).build();
-            let place_new = place.clone();
-            new.connect_clicked(glib::clone!(
-                #[weak]
-                window,
-                #[weak]
-                popover,
-                move |_| {
-                    popover.popdown();
-                    let place = place_new.clone();
-                    write_new(&window, move |kept| place(Arc::new(kept)));
-                }
-            ));
-            list.append(&new);
-            let import = gtk::Button::builder().label("_Import from Picture…").use_underline(true).css_classes(["flat"]).build();
-            let place = place.clone();
-            import.connect_clicked(glib::clone!(
-                #[weak]
-                window,
-                #[weak]
-                popover,
-                move |_| {
-                    popover.popdown();
-                    let place = place.clone();
-                    import_picture(&window, move |kept| place(Arc::new(kept)));
-                }
-            ));
-            list.append(&import);
-            let manage = gtk::Button::builder().label("_Manage Signatures…").use_underline(true).css_classes(["flat"]).build();
-            manage.connect_clicked(glib::clone!(
-                #[weak]
-                window,
-                #[weak]
-                popover,
-                move |_| {
-                    popover.popdown();
-                    window.show_preferences_at(Some("signatures"));
-                }
-            ));
-            list.append(&manage);
-        }
+        move |_| fill(&list, &window, place.clone(), done.clone())
     ));
     button
+}
+
+/// The image editor's Signature tool: the kept signatures, one click each to
+/// put down, and the way to write a new one or tidy them up, laid out in
+/// the editor's settings pane rather than a menu.
+pub fn pane(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::Box {
+    let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    let place: Rc<dyn Fn(Arc<Signature>)> = Rc::new(place);
+    // Filled each time the tool is opened, so it always shows what is kept.
+    list.connect_map(glib::clone!(
+        #[weak]
+        window,
+        move |list| fill(list, &window, place.clone(), Rc::new(|| ()))
+    ));
+    list
+}
+
+/// Put the kept signatures in `list`, each a button that hands it to
+/// `place`, then the ways to write, import and manage them. `done` is
+/// called when one is chosen, to put a menu away.
+fn fill(list: &gtk::Box, window: &Window, place: Rc<dyn Fn(Arc<Signature>)>, done: Rc<dyn Fn()>) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+    let kept = signature::all();
+    if kept.is_empty() {
+        let none = gtk::Label::builder()
+            .label("No signatures yet. Write one once, then put it down anywhere.")
+            .wrap(true)
+            .max_width_chars(24)
+            .xalign(0.0)
+            .css_classes(["dim-label"])
+            .build();
+        none.set_margin_start(6);
+        none.set_margin_end(6);
+        none.set_margin_top(6);
+        none.set_margin_bottom(6);
+        list.append(&none);
+    }
+    for (n, kept) in kept.into_iter().enumerate() {
+        let face = thumbnail(&kept, 200, 64);
+        let choice = gtk::Button::builder().child(&face).tooltip_text("Put this signature down").css_classes(["flat"]).build();
+        choice.update_property(&[gtk::accessible::Property::Label(&format!("Signature {}", n + 1))]);
+        let kept = Arc::new(kept);
+        let (place, done) = (place.clone(), done.clone());
+        choice.connect_clicked(move |_| {
+            done();
+            place(kept.clone());
+        });
+        list.append(&choice);
+    }
+    list.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let new = gtk::Button::builder().label("_New Signature…").use_underline(true).css_classes(["flat"]).build();
+    let (place_new, done_new) = (place.clone(), done.clone());
+    new.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| {
+            done_new();
+            let place = place_new.clone();
+            write_new(&window, move |kept| place(Arc::new(kept)));
+        }
+    ));
+    list.append(&new);
+    let import = gtk::Button::builder().label("_Import from Picture…").use_underline(true).css_classes(["flat"]).build();
+    let done_import = done.clone();
+    import.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| {
+            done_import();
+            let place = place.clone();
+            import_picture(&window, move |kept| place(Arc::new(kept)));
+        }
+    ));
+    list.append(&import);
+    let manage = gtk::Button::builder().label("_Manage Signatures…").use_underline(true).css_classes(["flat"]).build();
+    manage.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        move |_| {
+            done();
+            window.show_preferences_at(Some("signatures"));
+        }
+    ));
+    list.append(&manage);
 }

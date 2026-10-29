@@ -128,6 +128,7 @@ impl Window {
         imp.working.replace(None);
         imp.history.borrow_mut().clear();
         imp.redo.borrow_mut().clear();
+        imp.tone_redo.set(None);
         imp.dirty.set(false);
         imp.redactions_baked.set(false);
         self.stop_tone_worker();
@@ -150,8 +151,11 @@ impl Window {
     pub(crate) fn update_edit_state(&self) {
         let imp = self.imp();
         let canvas = imp.view.canvas();
-        let undo = !imp.history.borrow().is_empty() || canvas.has_marks() || canvas.has_text();
-        let redo = !imp.redo.borrow().is_empty();
+        let undo = !imp.history.borrow().is_empty()
+            || canvas.has_marks()
+            || canvas.has_text()
+            || !canvas.adjustments().is_identity();
+        let redo = !imp.redo.borrow().is_empty() || imp.tone_redo.get().is_some();
         imp.undo_button.set_sensitive(undo);
         imp.redo_button.set_sensitive(redo);
         for (name, enabled) in [("undo", undo), ("redo", redo)] {
@@ -160,11 +164,11 @@ impl Window {
             }
         }
         let steps = imp.history.borrow().len();
-        imp.pending_crop.set_visible(imp.dirty.get());
-        imp.pending_crop.set_text(&match steps {
-            0 => "Edited. Save to write it back.".to_string(),
-            1 => "1 edit. Save to write it back.".to_string(),
-            n => format!("{n} edits. Save to write it back."),
+        imp.edit_title.set_subtitle(&match (imp.dirty.get(), steps) {
+            (false, _) => "Editing".to_string(),
+            (true, 0) => "Edited, not saved".to_string(),
+            (true, 1) => "1 edit, not saved".to_string(),
+            (true, n) => format!("{n} edits, not saved"),
         });
         self.update_redaction_banner();
     }
@@ -211,14 +215,26 @@ impl Window {
         }
         drop(history);
         imp.redo.borrow_mut().clear();
+        imp.tone_redo.set(None);
         imp.dirty.set(true);
     }
 
     pub(crate) fn undo(&self) {
         let imp = self.imp();
+        // The sliders and levels are newer than any step baked, so they come
+        // off first, all at once; without this the step before them would
+        // take them away too, unasked.
+        let tone = imp.view.canvas().adjustments();
+        if !tone.is_identity() {
+            imp.tone_redo.set(Some(tone));
+            self.show_tone(Adjustments::default());
+            return;
+        }
         let Some(previous) = imp.history.borrow_mut().pop() else {
             return;
         };
+        // Going back past them leaves nothing for them to be redone onto.
+        imp.tone_redo.set(None);
         if let Some(current) = imp.working.replace(Some(previous)) {
             imp.redo.borrow_mut().push(current);
         }
@@ -228,6 +244,10 @@ impl Window {
 
     pub(crate) fn redo(&self) {
         let imp = self.imp();
+        if let Some(tone) = imp.tone_redo.take() {
+            self.show_tone(tone);
+            return;
+        }
         let Some(next) = imp.redo.borrow_mut().pop() else {
             return;
         };
@@ -235,6 +255,14 @@ impl Window {
             imp.history.borrow_mut().push(current);
         }
         self.show_working();
+        self.update_edit_state();
+    }
+
+    /// Put these slider and levels values on the picture and in the panel.
+    fn show_tone(&self, tone: Adjustments) {
+        self.imp().view.canvas().set_adjustments(tone);
+        self.sync_tone_panel();
+        self.refresh_tone();
         self.update_edit_state();
     }
 
