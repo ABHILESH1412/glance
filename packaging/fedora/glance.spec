@@ -3,7 +3,7 @@
 %global appid io.github.abhilesh1412.Glance
 
 Name:           glance
-Version:        3.0.0
+Version:        3.0.1
 Release:        %autorelease
 Summary:        A fast, native image viewer for Linux
 

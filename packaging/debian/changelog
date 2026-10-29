@@ -1,3 +1,11 @@
+glance-image-viewer (3.0.1-1) unstable; urgency=medium
+
+  * [feat] Releases are built and published by GitHub Actions; this computer only tags and pushes
+  * [fix] The filmstrip ran under the zoom on narrower windows: it now keeps clear of it by the zoom's real width
+  * [fix] Icons were cut off on scaled screens: each is now drawn on the 16 px grid it declares
+
+ -- Abhilesh Singh <sabhilesh260@gmail.com>  Thu, 29 Oct 2026 10:45:54 +0530
+
 glance-image-viewer (3.0.0-1) unstable; urgency=medium
 
   * [feat] One icon set and two-line tooltips everywhere, the PDF page in the title, a split PDF toolbar, and a labelled editor rail
