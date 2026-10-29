@@ -30,7 +30,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed git cargo glib2 \
             gtk4 libadwaita libheif poppler-glib qpdf libsoup3 hicolor-icon-theme
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # makepkg will not run as root, and the checkout belongs to root.
       - name: Build
         run: |
@@ -38,7 +38,7 @@ jobs:
           chown -R builder "$GITHUB_WORKSPACE"
           su builder -c "git config --global --add safe.directory '$GITHUB_WORKSPACE' \
             && cd '$GITHUB_WORKSPACE' && scripts/build-packages.sh out arch"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: arch
           path: out/glance-image-viewer-x86_64.pkg.tar.zst
@@ -51,14 +51,14 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           manifest-path: build-aux/io.github.abhilesh1412.Glance.yaml
           bundle: Glance-x86_64.flatpak
           cache-key: flatpak-builder-${{ github.sha }}
           upload-artifact: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: flatpak
           path: Glance-x86_64.flatpak
@@ -68,12 +68,12 @@ jobs:
     name: AppImage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Built inside ubuntu:24.04 by the same script as on a computer, so it
       # runs on 24.04 and everything newer.
       - name: Build
         run: scripts/build-packages.sh out appimage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: appimage
           path: out/Glance-x86_64.AppImage
@@ -86,12 +86,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # Checking out a tag can leave it bare; the release notes are written in
       # the tag's message, so fetch the tag itself.
       - name: Fetch the tag
         run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: out
           merge-multiple: true

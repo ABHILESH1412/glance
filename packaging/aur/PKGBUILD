@@ -16,6 +16,10 @@ depends=('gtk4' 'libadwaita' 'libheif' 'poppler-glib' 'qpdf' 'libsoup3' 'hicolor
 optdepends=('x265: saving pictures as HEIC')
 makedepends=('cargo' 'make' 'glib2')  # glib2 for glib-compile-resources
 conflicts=('glance')
+# No LTO: makepkg's -flto would compile the bundled OpenJPEG (openjpeg-sys) to
+# GCC's own LTO format, which Rust's linker cannot read, and the link fails on
+# every opj_ function. Cargo's release build already optimises the Rust side.
+options=('!lto')
 # GitHub strips the leading v: the tarball for tag v3.0.1 unpacks to glance-3.0.1/,
 # which is what build() and package() cd into.
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
