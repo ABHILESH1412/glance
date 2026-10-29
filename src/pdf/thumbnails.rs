@@ -102,7 +102,7 @@ impl Thumbnails {
             cell.append(&Page::new());
             let caption = gtk::Box::new(gtk::Orientation::Horizontal, 4);
             caption.set_halign(gtk::Align::Center);
-            let ribbon = gtk::Image::from_icon_name("user-bookmarks-symbolic");
+            let ribbon = gtk::Image::from_icon_name("glance-bookmarks-symbolic");
             ribbon.set_pixel_size(12);
             ribbon.add_css_class("accent");
             ribbon.set_tooltip_text(Some("Bookmarked"));

@@ -97,9 +97,9 @@ impl Window {
             move |_| window.sync_viewer_controls()
         ));
 
-        let arrow = |revealer: &gtk::Revealer, icon: &str, tip: &str, action: &str, side: gtk::Align| {
+        let arrow = |revealer: &gtk::Revealer, icon: &str, (name, what): (&str, &str), action: &str, side: gtk::Align| {
             let button = gtk::Button::from_icon_name(icon);
-            button.set_tooltip_text(Some(tip));
+            crate::app::explain(&button, name, what);
             button.set_action_name(Some(action));
             for class in ["osd", "circular", "viewer-arrow"] {
                 button.add_css_class(class);
@@ -110,16 +110,16 @@ impl Window {
             revealer.set_margin_start(MARGIN);
             revealer.set_margin_end(MARGIN);
         };
-        arrow(&controls.previous, "go-previous-symbolic", "Previous Image (←)", "win.previous-image", gtk::Align::Start);
-        arrow(&controls.next, "go-next-symbolic", "Next Image (→)", "win.next-image", gtk::Align::End);
+        arrow(&controls.previous, "glance-previous-symbolic", ("Previous Image", "The one before it in the folder (←)"), "win.previous-image", gtk::Align::Start);
+        arrow(&controls.next, "glance-next-symbolic", ("Next Image", "The one after it in the folder (→)"), "win.next-image", gtk::Align::End);
 
         let zoom = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         for class in ["osd", "viewer-pill", "zoom-pill"] {
             zoom.add_css_class(class);
         }
-        let step = |icon: &str, tip: &str, action: &str| {
+        let step = |icon: &str, name: &str, what: &str, action: &str| {
             let button = gtk::Button::from_icon_name(icon);
-            button.set_tooltip_text(Some(tip));
+            crate::app::explain(&button, name, what);
             button.set_action_name(Some(action));
             button.add_css_class("flat");
             button.add_css_class("circular");
@@ -140,12 +140,12 @@ impl Window {
             self,
             move |_| window.fade_viewer_controls(LINGER)
         ));
-        level.set_tooltip_text(Some("Zoom"));
+        crate::app::explain(level, "Zoom", "How large the picture is shown; click for Fit to Window or Actual Size");
         level.add_css_class("flat");
         level.add_css_class("numeric");
-        zoom.append(&step("list-remove-symbolic", "Zoom Out (−)", "win.zoom-out"));
+        zoom.append(&step("glance-remove-symbolic", "Zoom Out", "Show the picture smaller (−)", "win.zoom-out"));
         zoom.append(level);
-        zoom.append(&step("list-add-symbolic", "Zoom In (+)", "win.zoom-in"));
+        zoom.append(&step("glance-add-symbolic", "Zoom In", "Show the picture larger (+)", "win.zoom-in"));
         let corner = &controls.zoom;
         corner.set_child(Some(&zoom));
         corner.set_halign(gtk::Align::End);

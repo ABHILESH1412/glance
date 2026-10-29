@@ -545,7 +545,7 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
         window,
         #[weak]
         list,
-        move |_| fill(&list, &window, place.clone(), done.clone())
+        move |_| fill(&list, &window, place.clone(), done.clone(), Rc::new(|| ()))
     ));
     button
 }
@@ -555,35 +555,42 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
 /// the editor's settings pane rather than a menu.
 pub fn pane(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::Box {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    // Putting one down also fills the list again, so a signature just
-    // written or imported is there to use a second time.
-    let refilling: Rc<std::cell::OnceCell<Place>> = Rc::default();
-    let (weak_list, weak_window, weak_cell) = (list.downgrade(), window.downgrade(), Rc::downgrade(&refilling));
-    let _ = refilling.set(Rc::new(move |kept| {
+    // Putting one down fills the list again, so a signature just written or
+    // imported is there to use a second time; so does coming back from
+    // Preferences, where some may have gone.
+    let placing: Rc<std::cell::OnceCell<Place>> = Rc::default();
+    let refill = refill_again(&list, window, &placing);
+    let after = refill.clone();
+    let _ = placing.set(Rc::new(move |kept| {
         place(kept);
-        if let (Some(list), Some(window), Some(cell)) = (weak_list.upgrade(), weak_window.upgrade(), weak_cell.upgrade()) {
-            if let Some(again) = cell.get() {
-                fill(&list, &window, again.clone(), Rc::new(|| ()));
-            }
-        }
+        after();
     }));
     // Filled each time the tool is opened, so it always shows what is kept.
-    list.connect_map(glib::clone!(
-        #[weak]
-        window,
-        move |list| {
-            if let Some(place) = refilling.get() {
-                fill(list, &window, place.clone(), Rc::new(|| ()));
+    // This handler is what keeps `placing` alive, for as long as the list.
+    list.connect_map(move |_| {
+        let _ = &placing;
+        refill();
+    });
+    list
+}
+
+/// A way to fill `list` again later, holding nothing alive.
+fn refill_again(list: &gtk::Box, window: &Window, cell: &Rc<std::cell::OnceCell<Place>>) -> Rc<dyn Fn()> {
+    let (list, window, cell) = (list.downgrade(), window.downgrade(), Rc::downgrade(cell));
+    Rc::new(move || {
+        if let (Some(list), Some(window), Some(cell)) = (list.upgrade(), window.upgrade(), cell.upgrade()) {
+            if let Some(place) = cell.get() {
+                fill(&list, &window, place.clone(), Rc::new(|| ()), refill_again(&list, &window, &cell));
             }
         }
-    ));
-    list
+    })
 }
 
 /// Put the kept signatures in `list`, each a button that hands it to
 /// `place`, then the ways to write, import and manage them. `done` is
-/// called when one is chosen, to put a menu away.
-fn fill(list: &gtk::Box, window: &Window, place: Place, done: Rc<dyn Fn()>) {
+/// called when one is chosen, to put a menu away, and `refresh` when
+/// Preferences closes, to show what is left.
+fn fill(list: &gtk::Box, window: &Window, place: Place, done: Rc<dyn Fn()>, refresh: Rc<dyn Fn()>) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
@@ -645,7 +652,8 @@ fn fill(list: &gtk::Box, window: &Window, place: Place, done: Rc<dyn Fn()>) {
         window,
         move |_| {
             done();
-            window.show_preferences_at(Some("signatures"));
+            let refresh = refresh.clone();
+            window.show_preferences_at(Some("signatures")).connect_closed(move |_| refresh());
         }
     ));
     list.append(&manage);

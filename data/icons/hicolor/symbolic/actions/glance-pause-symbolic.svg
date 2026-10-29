@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- "player-pause" from Tabler Icons (MIT, Copyright (c) 2020-2024 Paweł Kuna), with its strokes turned into fills. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+  <path fill="#222222" d="M5,6 Q5,4 7,4 L9,4 Q11,4 11,6 L11,18 Q11,20 9,20 L7,20 Q5,20 5,18 Z M7,6 L7,18 L9,18 L9,6 Z M13,6 Q13,4 15,4 L17,4 Q19,4 19,6 L19,18 Q19,20 17,20 L15,20 Q13,20 13,18 Z M15,6 L15,18 L17,18 L17,6 Z"/>
+</svg>

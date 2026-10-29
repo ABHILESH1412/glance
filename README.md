@@ -424,8 +424,8 @@ like an open book, fitted to the window. Only the pages near the screen are draw
 held in memory, so a long document costs about what a short one does. Zooming redraws
 the pages sharp once it stops moving. The arrow keys, Page Up and Page Down glide rather
 than jump, and ← → turn the page; holding the middle mouse button takes hold of the page
-to move it, which is handy zoomed in. The header stays quiet — pages, open, the page
-box, search, Mark Up and the menu — and the menu opens on a row of zoom, rotate and fullscreen
+to move it, which is handy zoomed in. The header stays quiet — pages, open, search,
+Mark Up and the menu, with the page you are on under the name — and the menu opens on a row of zoom, rotate and fullscreen
 buttons, which leave it open so you can press them again, and a row of highlight
 colours.
 
@@ -442,7 +442,8 @@ colours.
     is named after the section it is in, and can be renamed or removed from its row's
     menu; a removal can be undone. Bookmarks are kept with Glance's settings, not
     written into the PDF, and they follow a file that is moved or renamed
-- A **page number box** in the header: type a number and press Enter to go there
+- **Page 3 of 12** under the name in the header: click it, or press Ctrl+L, type a number
+  and press Enter to go there
 - **Search** with Ctrl+F. Every match is marked, the current one in orange, and the
   count grows while a long document is still being searched — it never freezes the
   window. Case and accents do not matter, and a phrase broken across two lines is still
@@ -477,9 +478,11 @@ it, and a read-only file is left untouched.
   - **Select**, to pick up any drawing or picture on the page (made earlier, or by
     another program) and move it, resize it by its handles (a picture keeps its
     proportions, unless Shift is held), recolour or thicken it, or delete it
-  - **Draw**, with the image editor's pen, highlighter, line, arrows, rectangles, rounded
-    rectangles, ellipses, polygons, stars, speech bubbles, ticks and crosses, chosen from
-    the arrow beside it, in any colour and thickness, rectangles and ellipses filled or not
+  - **Pen** and **Highlighter**, each a button of its own
+  - **Shapes**: the image editor's line, arrows, rectangles, rounded rectangles, ellipses,
+    polygons, stars, speech bubbles, ticks and crosses, chosen from the arrow beside it,
+    in any thickness, rectangles and ellipses filled or not
+  - The **ink colour**, as a dot on the toolbar, for whichever pen or shape is in hand
   - **Text**, for text boxes in any font, size, colour and background, bold or italic —
     click one to change it, drag it to move it
   - **Redact** (see below)
@@ -592,7 +595,7 @@ Each is the same switch the menus use, so the two always agree.
 
 **Editing** — Ctrl+E, or the pencil in the header, turns the window into an editor:
 Cancel, Undo, Redo and Save in its own header, the tools on a slim rail down the left of
-the picture, and only the settings of the one in hand, grouped in cards, on the right.
+the picture, each with its name under it, and only the settings of the one in hand, grouped in cards, on the right.
 Sliders change the picture as they move, with no Apply to press; Crop and Resize finish
 with **Done**.
 
@@ -855,5 +858,5 @@ TIFF appears in stages.
 GPL-3.0-or-later — see [LICENSE](LICENSE). You may use, study, change and share this
 program; a changed version you distribute has to stay open under the same terms.
 
-Most of the icons on the editing tools are from [Tabler Icons](https://tabler.io/icons) by
+The program's own icons are from [Tabler Icons](https://tabler.io/icons) by
 Paweł Kuna, under the MIT licence — see [data/icons/TABLER-LICENSE](data/icons/TABLER-LICENSE).

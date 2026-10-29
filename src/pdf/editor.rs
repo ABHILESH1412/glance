@@ -40,10 +40,10 @@ impl Editor {
     pub fn new(parent: &impl IsA<gtk::Widget>) -> Self {
         let title = gtk::Label::builder().xalign(0.0).hexpand(true).css_classes(["heading"]).build();
         let delete = gtk::Button::builder()
-            .icon_name("user-trash-symbolic")
-            .tooltip_text("Delete")
+            .icon_name("glance-trash-symbolic")
             .css_classes(["flat", "destructive-action"])
             .build();
+        crate::app::explain(&delete, "Delete", "Take this off the page");
         let done = gtk::Button::builder().label("Done").css_classes(["suggested-action"]).build();
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         top.append(&title);

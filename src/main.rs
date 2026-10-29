@@ -134,9 +134,9 @@ fn load_css() {
         /* The editor: its tools on a rail beside the picture, and each
            tool's settings in cards on the other side. */
         .edit-rail { padding: 8px 6px; border-right: 1px solid alpha(currentColor, 0.12); }
-        .edit-rail > button { min-width: 40px; min-height: 40px; padding: 0; border-radius: 10px; }
+        .edit-rail > button { min-width: 58px; min-height: 0; padding: 5px 0 4px; border-radius: 10px; }
+        .edit-rail > button label { font-size: 0.75em; font-weight: normal; }
         .edit-rail > button:checked { background: alpha(@accent_bg_color, 0.22); color: @accent_color; }
-        .edit-rail > button > image { -gtk-icon-size: 20px; }
         .edit-card { padding: 12px 10px; }
         /* Live Text says it is reading, floating over the top of the picture. */
         .live-status { padding: 6px 14px; border-radius: 999px; }
@@ -227,6 +227,7 @@ const ACCELS: &[Accel] = &[
     // Finding text in a PDF: keys only while one is open, through `PDF_KEYS`;
     // F3 also works from inside the search box.
     Accel { action: "win.find", idle: &[], typing: &[] },
+    Accel { action: "win.go-to-page", idle: &[], typing: &[] },
     Accel { action: "win.find-next", idle: &[], typing: &["F3"] },
     Accel { action: "win.find-previous", idle: &[], typing: &["<Shift>F3"] },
     // Marking up a PDF's text, and taking it back: keys only while one is
@@ -277,6 +278,8 @@ const PDF_KEYS: &[(&str, &[&str])] = &[
     // Ctrl+F finds, as in every reader and browser; F11 still goes fullscreen.
     ("win.fullscreen", &["F11"]),
     ("win.find", &["<Primary>f"]),
+    // Ctrl+L goes to a page, as in Evince.
+    ("win.go-to-page", &["<Primary>l"]),
     ("win.find-next", &["F3", "<Primary>g"]),
     ("win.find-previous", &["<Shift>F3", "<Primary><Shift>g"]),
     // Ctrl+H highlights, as in Preview, rather than flipping a picture that

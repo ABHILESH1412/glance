@@ -138,6 +138,36 @@ impl Tool {
         }
     }
 
+    /// The name in full, in bold over what it makes in a tooltip.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tool::RoundedRectangle => "Rounded Rectangle",
+            Tool::Bubble => "Speech Bubble",
+            other => other.label(),
+        }
+    }
+
+    /// What the tool makes, for under its name in a tooltip.
+    pub fn what(self) -> &'static str {
+        match self {
+            Tool::Pen => "Draw freehand",
+            Tool::Highlighter => "A wide see-through stroke, to pick something out",
+            Tool::Line => "A straight line",
+            Tool::Arrow => "A line with a head, to point at something",
+            Tool::DoubleArrow => "A line with a head at each end",
+            Tool::Rectangle => "A box, outlined or filled",
+            Tool::RoundedRectangle => "A box with rounded corners",
+            Tool::Ellipse => "An oval or a circle",
+            Tool::Polygon(_) => "A shape of equal sides; how many is set below",
+            Tool::Star(_) => "A star; how many points is set below",
+            Tool::Bubble => "A speech bubble's outline",
+            Tool::Tick => "A tick, for checking things off",
+            Tool::Cross => "A cross, for crossing things out",
+            Tool::Redact => "Black out an area for good",
+            Tool::Signature => "A signature you keep",
+        }
+    }
+
     /// The tool's icon, one of the program's own.
     pub fn icon_name(self) -> &'static str {
         match self {

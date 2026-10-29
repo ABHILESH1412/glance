@@ -51,7 +51,7 @@ impl Contents {
         let scroller = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).child(&list).build();
 
         let empty = adw::StatusPage::builder()
-            .icon_name("view-list-bullet-symbolic")
+            .icon_name("glance-list-symbolic")
             .title("No Contents")
             .description("This document has no table of contents.")
             .build();

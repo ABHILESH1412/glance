@@ -118,14 +118,14 @@ impl ImageView {
         for path in paths.iter().take(RECENT) {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let folder = path.parent().map(|folder| tidy_folder(folder, home.as_deref())).unwrap_or_default();
-            let icon = if crate::app::playlist::is_image(path) { "image-x-generic-symbolic" } else { "x-office-document-symbolic" };
+            let icon = if crate::app::playlist::is_image(path) { "glance-photo-symbolic" } else { "glance-document-symbolic" };
             let row = adw::ActionRow::builder()
                 .title(glib::markup_escape_text(&name).as_str())
                 .subtitle(glib::markup_escape_text(&folder).as_str())
                 .activatable(true)
                 .build();
             row.add_prefix(&gtk::Image::from_icon_name(icon));
-            row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+            row.add_suffix(&gtk::Image::from_icon_name("glance-next-symbolic"));
             self.recent_list.append(&row);
         }
         self.recent.set_visible(!paths.is_empty());

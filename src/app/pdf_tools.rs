@@ -19,7 +19,8 @@ use gtk::{gdk, glib, pango};
 
 use crate::app::window::Window;
 use crate::images::edit::draw;
-use crate::images::edit::panel::{colour_button, explain};
+use crate::app::explain;
+use crate::images::edit::panel::colour_button;
 use crate::pdf;
 
 pub struct PdfTools {
@@ -29,6 +30,8 @@ pub struct PdfTools {
     /// The tools along the toolbar, one in hand at a time.
     select: gtk::ToggleButton,
     draw: gtk::ToggleButton,
+    highlight: gtk::ToggleButton,
+    shape: gtk::ToggleButton,
     text: gtk::ToggleButton,
     redact: gtk::ToggleButton,
 }
@@ -99,34 +102,37 @@ impl PdfTools {
     pub fn new(window: &Window) -> Self {
         // -- the toolbar's tools: one in hand at a time --
         let select = tool_toggle(draw::SELECT_ICON, "Select", "Pick up a drawing or picture, to move, resize or remove it");
-        let draw_toggle = tool_toggle(draw::Tool::Pen.icon_name(), "Draw", "Pens and shapes on the page; the arrow beside it picks which");
+        let pen_toggle = tool_toggle(draw::Tool::Pen.icon_name(), "Pen", "Draw freehand on the page");
+        let highlight_toggle =
+            tool_toggle(draw::Tool::Highlighter.icon_name(), "Highlighter", "A wide see-through stroke, to pick out anything on the page");
+        let shape_toggle = tool_toggle(draw::Tool::Rectangle.icon_name(), "Shapes", "Lines, arrows, boxes and more; the arrow beside it picks which");
         let text_toggle = tool_toggle("glance-text-symbolic", "Text", "Write on the page");
         let redact_toggle = tool_toggle("glance-redact-symbolic", "Redact", "Black out parts of the document for good");
-        for other in [&draw_toggle, &text_toggle, &redact_toggle] {
+        for other in [&pen_toggle, &highlight_toggle, &shape_toggle, &text_toggle, &redact_toggle] {
             other.set_group(Some(&select));
         }
 
-        // -- drawing: which pen or shape, in a menu beside the Draw button --
+        // -- shapes: which one, in a menu beside the Shapes button --
         let tool_grid = gtk::FlowBox::new();
         tool_grid.set_selection_mode(gtk::SelectionMode::None);
         tool_grid.set_min_children_per_line(2);
         tool_grid.set_max_children_per_line(2);
         tool_grid.set_row_spacing(4);
         tool_grid.set_column_spacing(4);
-        let mut tools: Vec<(draw::Tool, gtk::ToggleButton)> = Vec::new();
-        for tool in draw::TOOLS {
+        let mut shapes: Vec<(draw::Tool, gtk::ToggleButton)> = Vec::new();
+        for tool in draw::TOOLS.iter().filter(|tool| !matches!(tool, draw::Tool::Pen | draw::Tool::Highlighter)) {
             let button = gtk::ToggleButton::new();
             button.set_child(Some(&draw::tool_face(tool.icon_name(), tool.label())));
-            button.set_tooltip_text(Some(tool.description()));
+            explain(&button, tool.name(), tool.what());
             button.add_css_class("flat");
-            if let Some((_, first)) = tools.first() {
+            if let Some((_, first)) = shapes.first() {
                 button.set_group(Some(first));
             }
             tool_grid.append(&button);
-            tools.push((*tool, button));
+            shapes.push((*tool, button));
         }
-        if let Some((_, pen)) = tools.first() {
-            pen.set_active(true);
+        if let Some((_, rectangle)) = shapes.iter().find(|(tool, _)| *tool == draw::Tool::Rectangle) {
+            rectangle.set_active(true);
         }
         let tool_popover = gtk::Popover::builder().child(&tool_grid).build();
         let choose = gtk::MenuButton::builder()
@@ -134,13 +140,25 @@ impl PdfTools {
             .icon_name("glance-choose-symbolic")
             .direction(gtk::ArrowType::Up)
             .build();
-        explain(&choose, "Pens and Shapes", "Choose what Draw puts on the page");
+        explain(&choose, "Choose a Shape", "Line, arrow, rectangle, ellipse, star, speech bubble and more");
         choose.add_css_class("flat");
         choose.add_css_class("tool-choice");
-        let drawing = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        drawing.append(&draw_toggle);
-        drawing.append(&choose);
+        let shaping = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        shaping.append(&shape_toggle);
+        shaping.append(&choose);
+        let drawing = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        drawing.append(&pen_toggle);
+        drawing.append(&highlight_toggle);
+        drawing.append(&shaping);
         drawing.set_sensitive(pdf::can_draw());
+        // The ink, as a dot on the toolbar, in reach whichever pen is held.
+        let ink = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0));
+        ink.set_title("Ink Colour");
+        ink.set_dot(16);
+        ink.add_css_class("flat");
+        ink.add_css_class("circular");
+        explain(&ink, "Ink Colour", "The colour of pens, highlighter and shapes, and of a drawing picked up");
+        ink.set_sensitive(pdf::can_draw());
 
         // A kept signature, put down whole and picked up to move.
         let sign = {
@@ -169,10 +187,10 @@ impl PdfTools {
         toolbar.append(&select);
         toolbar.append(&drawing);
         toolbar.append(&text_toggle);
-        toolbar.append(&redact_toggle);
-        toolbar.append(&divider());
         toolbar.append(&sign);
         toolbar.append(&picture);
+        toolbar.append(&redact_toggle);
+        toolbar.append(&ink);
         toolbar.append(&divider());
         toolbar.append(&icon_button("glance-undo-symbolic", "Undo", "Take back the last mark (Ctrl+Z)", "win.undo-mark"));
         toolbar.append(&icon_button("glance-redo-symbolic", "Redo", "Put back what was undone (Ctrl+Shift+Z)", "win.redo-mark"));
@@ -186,18 +204,13 @@ impl PdfTools {
         width.set_value(3.0);
         width.set_width_chars(4);
         width.set_tooltip_text(Some("Line thickness, in points"));
-        let ink = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 1.0));
-        ink.set_tooltip_text(Some("Colour of the ink"));
-        ink.set_title("Ink Colour");
         // Inside a rectangle or ellipse. See-through, as it starts, is none.
         let fill = colour_button(gdk::RGBA::new(0.9, 0.15, 0.15, 0.0));
         fill.set_tooltip_text(Some("Inside colour for rectangles and ellipses — set its opacity to zero for none"));
         fill.set_title("Fill Colour");
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        for (caption, widget) in [("Width", width.upcast_ref::<gtk::Widget>()), ("Colour", ink.upcast_ref())] {
-            stroke_row.append(&caption_label(caption));
-            stroke_row.append(widget);
-        }
+        stroke_row.append(&caption_label("Width"));
+        stroke_row.append(&width);
         let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         fill_row.append(&caption_label("Fill"));
         fill_row.append(&fill);
@@ -348,10 +361,11 @@ impl PdfTools {
         root.set_visible(false);
 
         // -- wiring --
-        let tools = Rc::new(tools);
+        let shapes = Rc::new(shapes);
         let push_tool = {
             let window = window.downgrade();
-            let (draw_toggle, text_toggle, tools) = (draw_toggle.clone(), text_toggle.clone(), tools.clone());
+            let (pen_toggle, highlight_toggle, shape_toggle) = (pen_toggle.clone(), highlight_toggle.clone(), shape_toggle.clone());
+            let (text_toggle, shapes) = (text_toggle.clone(), shapes.clone());
             let (redact_toggle, by_text) = (redact_toggle.clone(), by_text.clone());
             let (width, ink, fill, controls) = (width.clone(), ink.clone(), fill.clone(), controls.clone());
             let corners = corners.clone();
@@ -359,8 +373,12 @@ impl PdfTools {
                 let Some(window) = window.upgrade() else { return };
                 let view = &window.imp().pdf_view;
                 view.set_ink(pdf::Ink { colour: ink.rgba(), width: width.value(), fill: fill.rgba() });
-                let tool = if draw_toggle.is_active() {
-                    tools
+                let tool = if pen_toggle.is_active() {
+                    pdf::Tool::Draw(draw::Tool::Pen)
+                } else if highlight_toggle.is_active() {
+                    pdf::Tool::Draw(draw::Tool::Highlighter)
+                } else if shape_toggle.is_active() {
+                    shapes
                         .iter()
                         .find(|(_, b)| b.is_active())
                         .map_or(pdf::Tool::Select, |(t, _)| pdf::Tool::Draw(corners.tool(*t)))
@@ -385,7 +403,14 @@ impl PdfTools {
         };
         // The card shows what the tool in hand can be told; Select picks a
         // drawing up to change its ink, so it has the drawing's options.
-        let toggles = [(select.clone(), "draw"), (draw_toggle.clone(), "draw"), (text_toggle.clone(), "text"), (redact_toggle.clone(), "redact")];
+        let toggles = [
+            (select.clone(), "draw"),
+            (pen_toggle.clone(), "draw"),
+            (highlight_toggle.clone(), "draw"),
+            (shape_toggle.clone(), "draw"),
+            (text_toggle.clone(), "text"),
+            (redact_toggle.clone(), "redact"),
+        ];
         for (toggle, page) in &toggles {
             let all: Vec<gtk::ToggleButton> = toggles.iter().map(|(t, _)| t.clone()).collect();
             let (options, card, push_tool, page) = (options.clone(), card.clone(), push_tool.clone(), *page);
@@ -397,14 +422,15 @@ impl PdfTools {
                 push_tool();
             });
         }
-        // Picking a pen or shape puts it in hand, on the Draw button's face.
-        for (tool, button) in tools.iter() {
-            let (tool, draw_toggle, popover) = (*tool, draw_toggle.clone(), tool_popover.clone());
+        // Picking a shape puts it in hand, on the Shapes button's face.
+        for (tool, button) in shapes.iter() {
+            let (tool, shape_toggle, popover, push_tool) = (*tool, shape_toggle.clone(), tool_popover.clone(), push_tool.clone());
             button.connect_toggled(move |button| {
                 if button.is_active() {
-                    draw_toggle.set_icon_name(tool.icon_name());
-                    draw_toggle.set_active(true);
+                    shape_toggle.set_icon_name(tool.icon_name());
+                    shape_toggle.set_active(true);
                     popover.popdown();
+                    push_tool();
                 }
             });
         }
@@ -427,7 +453,7 @@ impl PdfTools {
                 });
             })
         };
-        for button in tools.iter().map(|(_, b)| b).chain([&select]) {
+        for button in shapes.iter().map(|(_, b)| b).chain([&select, &pen_toggle, &highlight_toggle]) {
             let (push_tool, pick_hint) = (push_tool.clone(), pick_hint.clone());
             button.connect_toggled(move |_| {
                 push_tool();
@@ -547,7 +573,7 @@ impl PdfTools {
         let shown = controls.clone();
         window.imp().pdf_view.connect_chosen(move |chosen| shown.show(chosen));
 
-        PdfTools { root, select, draw: draw_toggle, text: text_toggle, redact: redact_toggle }
+        PdfTools { root, select, draw: pen_toggle, highlight: highlight_toggle, shape: shape_toggle, text: text_toggle, redact: redact_toggle }
     }
 
     /// The Select tool in hand, for moving and sizing what was just put on
@@ -560,7 +586,7 @@ impl PdfTools {
     /// selects text again.
     pub fn set_open(&self, open: bool) {
         self.root.set_visible(open);
-        let tools = [&self.select, &self.draw, &self.text, &self.redact];
+        let tools = [&self.select, &self.draw, &self.highlight, &self.shape, &self.text, &self.redact];
         if !open {
             for tool in tools {
                 tool.set_active(false);

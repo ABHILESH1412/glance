@@ -49,16 +49,16 @@ impl FramesPane {
         controls.set_margin_bottom(6);
         controls.set_margin_start(6);
         controls.set_margin_end(6);
-        let back = gtk::Button::from_icon_name("media-skip-backward-symbolic");
-        back.set_tooltip_text(Some("Previous Frame (,)"));
+        let back = gtk::Button::from_icon_name("glance-skip-back-symbolic");
+        crate::app::explain(&back, "Previous Frame", "Step back one frame (,)");
         back.set_action_name(Some("win.frame-previous"));
         back.add_css_class("flat");
-        let play = gtk::Button::from_icon_name("media-playback-pause-symbolic");
-        play.set_tooltip_text(Some("Pause (K)"));
+        let play = gtk::Button::from_icon_name("glance-pause-symbolic");
+        crate::app::explain(&play, "Pause", "Stop the animation on this frame (K)");
         play.set_action_name(Some("win.frame-play"));
         play.add_css_class("flat");
-        let forward = gtk::Button::from_icon_name("media-skip-forward-symbolic");
-        forward.set_tooltip_text(Some("Next Frame (.)"));
+        let forward = gtk::Button::from_icon_name("glance-skip-forward-symbolic");
+        crate::app::explain(&forward, "Next Frame", "Step on one frame (.)");
         forward.set_action_name(Some("win.frame-next"));
         forward.add_css_class("flat");
         let position = gtk::Label::new(None);
@@ -197,8 +197,12 @@ impl FramesPane {
     pub fn set_current(&self, index: usize, playing: bool) {
         let count = self.rows.borrow().len();
         self.position.set_text(&if count > 0 { format!("{} / {count}", index + 1) } else { String::new() });
-        self.play.set_icon_name(if playing { "media-playback-pause-symbolic" } else { "media-playback-start-symbolic" });
-        self.play.set_tooltip_text(Some(if playing { "Pause (K)" } else { "Play (K)" }));
+        self.play.set_icon_name(if playing { "glance-pause-symbolic" } else { "glance-play-symbolic" });
+        if playing {
+            crate::app::explain(&self.play, "Pause", "Stop the animation on this frame (K)");
+        } else {
+            crate::app::explain(&self.play, "Play", "Run the animation from this frame (K)");
+        }
         let Some(row) = self.rows.borrow().get(index).cloned() else { return };
         self.syncing.set(true);
         self.list.select_row(Some(&row));

@@ -100,20 +100,20 @@ fn view_buttons_slot() -> gio::Menu {
 /// open.
 pub fn view_buttons() -> gtk::Box {
     let buttons = [
-        ("Zoom Out", "win.zoom-out", "zoom-out-symbolic"),
-        ("Fit to Window", "win.zoom-fit", "zoom-fit-best-symbolic"),
-        ("Zoom In", "win.zoom-in", "zoom-in-symbolic"),
-        ("Rotate Left", "win.rotate-left", "object-rotate-left-symbolic"),
-        ("Rotate Right", "win.rotate-right", "object-rotate-right-symbolic"),
-        ("Fullscreen", "win.fullscreen", "view-fullscreen-symbolic"),
+        ("Zoom Out", "Show it smaller (−)", "win.zoom-out", "glance-zoom-out-symbolic"),
+        ("Fit to Window", "As large as fits the window (0)", "win.zoom-fit", "glance-zoom-fit-symbolic"),
+        ("Zoom In", "Show it larger (+)", "win.zoom-in", "glance-zoom-in-symbolic"),
+        ("Rotate Left", "A quarter turn anticlockwise ([)", "win.rotate-left", "glance-rotate-left-symbolic"),
+        ("Rotate Right", "A quarter turn clockwise (])", "win.rotate-right", "glance-rotate-symbolic"),
+        ("Fullscreen", "Fill the screen with it (F11)", "win.fullscreen", "glance-fullscreen-symbolic"),
     ];
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     row.set_homogeneous(true);
     row.add_css_class("view-buttons");
-    for (label, action, icon_name) in buttons {
-        let button = gtk::Button::builder().icon_name(icon_name).tooltip_text(label).action_name(action).build();
+    for (name, what, action, icon_name) in buttons {
+        let button = gtk::Button::builder().icon_name(icon_name).action_name(action).build();
         button.add_css_class("flat");
-        button.update_property(&[gtk::accessible::Property::Label(label)]);
+        crate::app::explain(&button, name, what);
         row.append(&button);
     }
     row
@@ -169,7 +169,7 @@ pub fn pdf_menu() -> gio::Menu {
         }
         colours.append_item(&colour);
     }
-    colours.append_item(&icon("Other Colour…", "win.pick-highlight-colour", "list-add-symbolic"));
+    colours.append_item(&icon("Other Colour…", "win.pick-highlight-colour", "glance-add-symbolic"));
     menu.append_item(&as_row(&colours, Some("Highlight Colour")));
 
     // Marking the document up, then finding the way round it.

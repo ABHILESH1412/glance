@@ -34,3 +34,14 @@ pub mod signatures;
 pub mod updates;
 pub mod viewing;
 pub mod window;
+
+use gtk::glib;
+use gtk::prelude::*;
+
+/// The tooltip of a button that is only an icon: what it is, in bold, and
+/// what it does under that.
+pub fn explain(widget: &(impl IsA<gtk::Accessible> + IsA<gtk::Widget>), name: &str, what: &str) {
+    let (name, what) = (glib::markup_escape_text(name), glib::markup_escape_text(what));
+    widget.set_tooltip_markup(Some(&format!("<b>{name}</b>\n{what}")));
+    widget.update_property(&[gtk::accessible::Property::Label(&name), gtk::accessible::Property::Description(&what)]);
+}

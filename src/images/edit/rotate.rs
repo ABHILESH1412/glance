@@ -37,13 +37,13 @@ impl Window {
         // Hidden until its section is opened, like every other tool's options.
         bar.set_visible(false);
 
-        let left = gtk::Button::from_icon_name("object-rotate-left-symbolic");
-        left.set_tooltip_text(Some("Rotate Left 90°"));
+        let left = gtk::Button::from_icon_name("glance-rotate-left-symbolic");
+        crate::app::explain(&left, "Rotate Left", "A quarter turn anticlockwise ([)");
         left.set_action_name(Some("win.rotate-left"));
         left.add_css_class("flat");
 
-        let right = gtk::Button::from_icon_name("object-rotate-right-symbolic");
-        right.set_tooltip_text(Some("Rotate Right 90°"));
+        let right = gtk::Button::from_icon_name("glance-rotate-symbolic");
+        crate::app::explain(&right, "Rotate Right", "A quarter turn clockwise (])");
         right.set_action_name(Some("win.rotate-right"));
         right.add_css_class("flat");
 
@@ -111,19 +111,19 @@ impl Window {
         ));
 
         let flip_h = &imp.flip_h_button;
-        flip_h.set_icon_name("object-flip-horizontal-symbolic");
-        flip_h.set_tooltip_text(Some("Flip Horizontally"));
+        flip_h.set_icon_name("glance-flip-horizontal-symbolic");
+        crate::app::explain(flip_h, "Flip Horizontally", "Mirror it left to right");
         flip_h.set_action_name(Some("win.flip-horizontal"));
         flip_h.add_css_class("flat");
 
         let flip_v = &imp.flip_v_button;
-        flip_v.set_icon_name("object-flip-vertical-symbolic");
-        flip_v.set_tooltip_text(Some("Flip Vertically"));
+        flip_v.set_icon_name("glance-flip-vertical-symbolic");
+        crate::app::explain(flip_v, "Flip Vertically", "Turn it upside down, as in a mirror");
         flip_v.set_action_name(Some("win.flip-vertical"));
         flip_v.add_css_class("flat");
 
-        let reset = gtk::Button::from_icon_name("edit-undo-symbolic");
-        reset.set_tooltip_text(Some("Reset Rotation"));
+        let reset = gtk::Button::from_icon_name("glance-undo-symbolic");
+        crate::app::explain(&reset, "Reset Rotation", "Back to the way it was turned when opened (Ctrl+Shift+R)");
         reset.set_action_name(Some("win.rotate-reset"));
         reset.add_css_class("flat");
 

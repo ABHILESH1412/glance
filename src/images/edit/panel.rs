@@ -14,6 +14,7 @@ use crate::images::edit::adjust;
 use crate::images::edit::compress;
 use crate::images::edit::draw;
 use crate::images::edit::export;
+use crate::app::explain;
 use crate::app::window::Window;
 
 /// One of the editor's tools, as an icon on the rail beside the picture.
@@ -25,12 +26,20 @@ pub(crate) fn rail_toggle(icon: &str) -> gtk::ToggleButton {
     button
 }
 
-/// The tooltip of a button that is only an icon: what it is, in bold, and
-/// what it does under that.
-pub(crate) fn explain(widget: &(impl IsA<gtk::Accessible> + IsA<gtk::Widget>), name: &str, what: &str) {
-    let (name, what) = (glib::markup_escape_text(name), glib::markup_escape_text(what));
-    widget.set_tooltip_markup(Some(&format!("<b>{name}</b>\n{what}")));
-    widget.update_property(&[gtk::accessible::Property::Label(&name), gtk::accessible::Property::Description(&what)]);
+/// Put a short name under a rail button's icon, so the tools can be told
+/// apart without hovering over each. The name is handed back, to be hidden
+/// when the window is too short for it.
+fn label_rail_button(button: &impl IsA<gtk::Button>, short: &str) -> Option<gtk::Label> {
+    let button = button.as_ref();
+    let icon = button.icon_name()?;
+    let face = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    let image = gtk::Image::from_icon_name(&icon);
+    image.set_pixel_size(20);
+    face.append(&image);
+    let label = gtk::Label::new(Some(short));
+    face.append(&label);
+    button.set_child(Some(&face));
+    Some(label)
 }
 
 /// A group of a tool's settings: a small heading over a card, the way
@@ -617,29 +626,35 @@ impl Window {
         let kit = card(strokes, Some("Tool"));
 
         // One tool at a time, so picking one lets the last go.
-        let tool_grid = gtk::FlowBox::new();
-        tool_grid.set_selection_mode(gtk::SelectionMode::None);
-        // Two across: three named buttons side by side made the whole sidebar
-        // wider than the picture needed it to be.
-        tool_grid.set_min_children_per_line(2);
-        tool_grid.set_max_children_per_line(2);
-        tool_grid.set_row_spacing(4);
-        tool_grid.set_column_spacing(4);
+        // Icons only, seven across in two rows, each named when hovered. A
+        // plain grid: a FlowBox pads each child, which asked for more width
+        // than the panel has and pushed the window wider.
+        let tool_grid = gtk::Grid::new();
+        tool_grid.set_row_spacing(2);
+        tool_grid.set_column_spacing(2);
+        tool_grid.set_column_homogeneous(true);
+        let mut slot = 0;
+        let mut place = |button: &gtk::ToggleButton| {
+            tool_grid.attach(button, slot % 7, slot / 7, 1, 1);
+            slot += 1;
+        };
         // Select first: for picking up what has already been drawn.
         let select = &imp.draw_select;
-        select.set_child(Some(&draw::tool_face(draw::SELECT_ICON, "Select")));
-        select.set_tooltip_text(Some("Select a drawing, to move, resize or remove it"));
+        select.set_icon_name(draw::SELECT_ICON);
+        select.add_css_class("flat");
+        explain(select, "Select", "Pick a drawing up again, to move, resize, recolour or remove it");
         select.connect_toggled(glib::clone!(
             #[weak(rename_to = window)]
             self,
             move |_| window.sync_draw_tool()
         ));
-        tool_grid.append(select);
+        place(select);
         let mut anchor: Option<gtk::ToggleButton> = Some(select.clone());
         for tool in draw::TOOLS {
             let button = gtk::ToggleButton::new();
-            button.set_child(Some(&draw::tool_face(tool.icon_name(), tool.label())));
-            button.set_tooltip_text(Some(tool.description()));
+            button.set_icon_name(tool.icon_name());
+            button.add_css_class("flat");
+            explain(&button, tool.name(), tool.what());
             match &anchor {
                 Some(first) => button.set_group(Some(first)),
                 None => anchor = Some(button.clone()),
@@ -649,15 +664,27 @@ impl Window {
                 self,
                 move |_| window.sync_draw_tool()
             ));
-            tool_grid.append(&button);
+            place(&button);
             imp.draw_tools.borrow_mut().push(button);
         }
         kit.append(&tool_grid);
 
         let ink = card(strokes, Some("Ink"));
-        let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let width_caption = gtk::Label::new(Some("Width"));
-        width_caption.add_css_class("dim-label");
+        // Each setting on a row of its own, its name on the left and the
+        // control on the right, so nothing is squeezed.
+        let setting_row = |name: &gtk::Widget, control: &gtk::Widget| {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            name.set_hexpand(true);
+            name.set_valign(gtk::Align::Center);
+            row.append(name);
+            row.append(control);
+            row
+        };
+        let setting_name = |text: &str| {
+            let label = gtk::Label::new(Some(text));
+            label.set_xalign(0.0);
+            label
+        };
         imp.draw_width.set_value(6.0);
         imp.draw_width.set_width_chars(4);
         imp.draw_width.set_tooltip_text(Some("Line thickness, in the image's own pixels"));
@@ -672,8 +699,6 @@ impl Window {
                 }
             }
         ));
-        let colour_caption = gtk::Label::new(Some("Colour"));
-        colour_caption.add_css_class("dim-label");
         imp.draw_colour.set_tooltip_text(Some("Colour of the ink"));
         imp.draw_colour.set_title("Ink Colour");
         imp.draw_colour.connect_rgba_notify(glib::clone!(
@@ -687,16 +712,10 @@ impl Window {
                 }
             }
         ));
-        stroke_row.append(&width_caption);
-        stroke_row.append(&imp.draw_width);
-        stroke_row.append(&colour_caption);
-        stroke_row.append(&imp.draw_colour);
-        ink.append(&stroke_row);
+        ink.append(&setting_row(setting_name("Width").upcast_ref(), imp.draw_width.upcast_ref()));
+        ink.append(&setting_row(setting_name("Colour").upcast_ref(), imp.draw_colour.upcast_ref()));
 
         // Inside a rectangle or ellipse. See-through, as it starts, is none.
-        let fill_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let fill_caption = gtk::Label::new(Some("Fill"));
-        fill_caption.add_css_class("dim-label");
         imp.draw_fill.set_tooltip_text(Some(
             "Inside colour for rectangles and ellipses — set its opacity to zero for none",
         ));
@@ -712,13 +731,13 @@ impl Window {
                 }
             }
         ));
-        let fill_note = gtk::Label::new(Some("Shapes with an inside"));
+        let fill_name = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        fill_name.append(&setting_name("Fill"));
+        let fill_note = setting_name("Shapes with an inside");
         fill_note.add_css_class("dim-label");
         fill_note.add_css_class("caption");
-        fill_row.append(&fill_caption);
-        fill_row.append(&imp.draw_fill);
-        fill_row.append(&fill_note);
-        ink.append(&fill_row);
+        fill_name.append(&fill_note);
+        ink.append(&setting_row(fill_name.upcast_ref(), imp.draw_fill.upcast_ref()));
 
         let corners = &imp.draw_corners;
         corners.connect_changed(glib::clone!(
@@ -1154,15 +1173,15 @@ impl Window {
                 imp.redact_toggle.upcast_ref(),
             ],
         ];
-        let rail = gtk::Box::new(gtk::Orientation::Vertical, 4);
+        let rail = gtk::Box::new(gtk::Orientation::Vertical, 1);
         rail.add_css_class("edit-rail");
         for (index, group) in groups.iter().enumerate() {
             if index > 0 {
                 let gap = gtk::Separator::new(gtk::Orientation::Horizontal);
-                gap.set_margin_top(4);
-                gap.set_margin_bottom(4);
-                gap.set_margin_start(6);
-                gap.set_margin_end(6);
+                gap.set_margin_top(3);
+                gap.set_margin_bottom(3);
+                gap.set_margin_start(8);
+                gap.set_margin_end(8);
                 rail.append(&gap);
             }
             for tool in *group {
@@ -1186,19 +1205,41 @@ impl Window {
         // when the pointer rests on it.
         let sections: std::rc::Rc<[(gtk::ToggleButton, &str, &str)]> = std::rc::Rc::new([
             (imp.crop_toggle.clone(), "Crop", "Drag the edges or corners, or pick a shape, then press Done."),
-            (imp.transform_toggle.clone(), "Rotate & Flip", "Turn the picture by quarter turns or to any angle, or mirror it."),
-            (imp.resize_toggle.clone(), "Resize", "Change the size in pixels, percent or on paper, and the resolution."),
+            (imp.transform_toggle.clone(), "Rotate & Flip", "Turn the picture by quarter turns or to any angle, or mirror it (Ctrl+T)."),
+            (imp.resize_toggle.clone(), "Resize", "Change the size in pixels, percent or on paper, and the resolution (Ctrl+R)."),
             (imp.adjust_toggle.clone(), "Adjust", "Light, colour and sharpness. The picture changes as you move them."),
             (imp.levels_toggle.clone(), "Levels", "Set the black point, midtones and white point against the histogram."),
             (imp.draw_toggle.clone(), "Draw", "Pens and shapes. Select picks a drawing up again to move, resize or recolour it."),
             (imp.text_toggle.clone(), "Text", "Lay words over the picture, and drag them into place."),
             (imp.sign_toggle.clone(), "Signature", "Put down a signature you keep, or write or import a new one."),
             (imp.redact_toggle.clone(), "Redact", "Black out parts of the picture for good."),
-            (imp.export_toggle.clone(), "Export", "Write a copy in another format, at a quality or a file size you choose."),
+            (imp.export_toggle.clone(), "Export", "Write a copy in another format, at a quality or a file size you choose (Ctrl+Shift+S)."),
         ]);
+        let mut labels = Vec::new();
         for (toggle, name, what) in sections.iter() {
             explain(toggle, name, what);
+            // "Rotate & Flip" is too wide for the rail; the tooltip has it whole.
+            labels.extend(label_rail_button(toggle, if toggle == &imp.transform_toggle { "Rotate" } else { name }));
         }
+        labels.extend(label_rail_button(&imp.cutout_button, "Cut Out"));
+        // A short window keeps every tool in sight rather than every name:
+        // when the rail would have to scroll, the names go, and they come
+        // back once there is room for them again.
+        let labels: std::rc::Rc<[gtk::Label]> = labels.into();
+        let named_height = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        imp.edit_rail.vadjustment().connect_changed(move |adjustment| {
+            let named = labels.first().is_some_and(|label| label.is_visible());
+            let (needed, room) = (adjustment.upper(), adjustment.page_size());
+            if room <= 0.0 {
+                return;
+            }
+            if named && needed > room + 1.0 {
+                named_height.set(needed);
+                labels.iter().for_each(|label| label.set_visible(false));
+            } else if !named && room >= named_height.get() {
+                labels.iter().for_each(|label| label.set_visible(true));
+            }
+        });
         let show = {
             let (sections, heading, about, idle) = (sections.clone(), heading.clone(), about.clone(), idle.clone());
             move || {
@@ -1371,6 +1412,7 @@ impl Window {
         canvas.set_draw_width(imp.draw_width.value());
         canvas.set_draw_fill(imp.draw_fill.rgba());
         canvas.set_draw_tool(chosen);
+        canvas.set_signatures_only(!imp.draw_toggle.is_active());
         canvas.set_mark_select(selecting);
         self.sync_corners();
         self.sync_draw_hint();

@@ -49,7 +49,7 @@ pub const PAGES: &[Page] = &[
     Page {
         name: "general",
         title: "General",
-        icon: "preferences-system-symbolic",
+        icon: "glance-settings-symbolic",
         pdf: None,
         groups: &[
             Group {
@@ -96,7 +96,7 @@ pub const PAGES: &[Page] = &[
     Page {
         name: "images",
         title: "Pictures",
-        icon: "image-x-generic-symbolic",
+        icon: "glance-photo-symbolic",
         pdf: Some(false),
         groups: &[
             Group {
@@ -149,7 +149,7 @@ pub const PAGES: &[Page] = &[
     Page {
         name: "pdfs",
         title: "PDFs",
-        icon: "x-office-document-symbolic",
+        icon: "glance-document-symbolic",
         pdf: Some(true),
         groups: &[
             Group {
@@ -162,6 +162,7 @@ pub const PAGES: &[Page] = &[
                     key("Next or previous page", "Right Left"),
                     key("First page", "Home"),
                     key("Last page", "End"),
+                    key("Go to a page by its number", "<Primary>l"),
                     key("Sidebar: pages, contents and bookmarks", "F9"),
                     key("Bookmark this page", "<Primary>d"),
                 ],

@@ -267,7 +267,7 @@ impl Window {
             }
         }
         imp.sidebar_button.set_visible(animated);
-        imp.sidebar_button.set_tooltip_text(Some("Frames (F9)"));
+        crate::app::explain(&imp.sidebar_button, "Frames", "Every frame of the animation, to step through (F9)");
         if animated {
             imp.split.set_sidebar(Some(&imp.frames.root));
         }
@@ -333,20 +333,20 @@ impl Window {
         bar.add_css_class("toolbar");
         bar.add_css_class("slideshow-controls");
 
-        let button = |icon: &str, tip: &str| {
+        let button = |icon: &str, name: &str, what: &str| {
             let button = gtk::Button::from_icon_name(icon);
-            button.set_tooltip_text(Some(tip));
+            crate::app::explain(&button, name, what);
             button.add_css_class("circular");
             button
         };
-        let previous = button("go-previous-symbolic", "Previous (←)");
+        let previous = button("glance-previous-symbolic", "Previous", "The picture before this one (←)");
         previous.set_action_name(Some("win.previous-image"));
         let play = &imp.slideshow_play;
-        play.set_icon_name("media-playback-pause-symbolic");
-        play.set_tooltip_text(Some("Pause (Space)"));
+        play.set_icon_name("glance-pause-symbolic");
+        crate::app::explain(play, "Pause", "Hold this picture up until you carry on (Space)");
         play.add_css_class("circular");
         play.set_action_name(Some("win.slideshow-pause"));
-        let next = button("go-next-symbolic", "Next (→)");
+        let next = button("glance-next-symbolic", "Next", "The picture after this one (→)");
         next.set_action_name(Some("win.next-image"));
         let position = &imp.slideshow_position;
         position.add_css_class("numeric");
@@ -373,7 +373,7 @@ impl Window {
             }
         ));
 
-        let close = button("view-restore-symbolic", "End Slideshow (Esc)");
+        let close = button("glance-unfullscreen-symbolic", "End Slideshow", "Back to the window (Esc)");
         close.set_action_name(Some("win.slideshow"));
 
         bar.append(&previous);
@@ -502,8 +502,12 @@ impl Window {
     fn sync_slideshow_play(&self) {
         let imp = self.imp();
         let paused = imp.slideshow_paused.get();
-        imp.slideshow_play.set_icon_name(if paused { "media-playback-start-symbolic" } else { "media-playback-pause-symbolic" });
-        imp.slideshow_play.set_tooltip_text(Some(if paused { "Carry On (Space)" } else { "Pause (Space)" }));
+        imp.slideshow_play.set_icon_name(if paused { "glance-play-symbolic" } else { "glance-pause-symbolic" });
+        if paused {
+            crate::app::explain(&imp.slideshow_play, "Carry On", "Go on to the next pictures in turn (Space)");
+        } else {
+            crate::app::explain(&imp.slideshow_play, "Pause", "Hold this picture up until you carry on (Space)");
+        }
     }
 
     fn update_slideshow_position(&self) {

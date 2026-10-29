@@ -85,9 +85,9 @@ impl Sidebar {
 
         let stack = adw::ViewStack::new();
         stack.set_vexpand(true);
-        stack.add_titled_with_icon(thumbnails.widget(), Some("pages"), "Pages", "view-paged-symbolic");
-        stack.add_titled_with_icon(contents.widget(), Some("contents"), "Contents", "view-list-bullet-symbolic");
-        stack.add_titled_with_icon(bookmarks.widget(), Some("bookmarks"), "Bookmarks", "user-bookmarks-symbolic");
+        stack.add_titled_with_icon(thumbnails.widget(), Some("pages"), "Pages", "glance-pages-symbolic");
+        stack.add_titled_with_icon(contents.widget(), Some("contents"), "Contents", "glance-list-symbolic");
+        stack.add_titled_with_icon(bookmarks.widget(), Some("bookmarks"), "Bookmarks", "glance-bookmarks-symbolic");
 
         let switcher = adw::ViewSwitcher::builder().stack(&stack).policy(adw::ViewSwitcherPolicy::Narrow).build();
         switcher.add_css_class("sidebar-switcher");

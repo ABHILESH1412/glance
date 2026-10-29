@@ -167,6 +167,9 @@ mod imp {
         pub drawing: RefCell<Option<Mark>>,
         /// True while the Select tool is out: a press picks a mark up.
         pub mark_select: Cell<bool>,
+        /// Only signatures are picked up: the Signature tool is out, not
+        /// Draw's Select.
+        pub signatures_only: Cell<bool>,
         /// The mark picked up, by its sequence, which undo leaves alone.
         pub picked: Cell<Option<u64>>,
         /// A picked mark being dragged: by which grip, how it was when the
@@ -1311,6 +1314,11 @@ impl ImageCanvas {
 
     /// The Select tool: a press picks up a mark already down, to move,
     /// resize, recolour or remove.
+    /// Have the Select tool pick up only signatures, or anything drawn.
+    pub fn set_signatures_only(&self, only: bool) {
+        self.imp().signatures_only.set(only);
+    }
+
     pub fn set_mark_select(&self, active: bool) {
         let imp = self.imp();
         imp.mark_select.set(active);
@@ -1435,12 +1443,13 @@ impl ImageCanvas {
     fn mark_at(&self, point: (f64, f64)) -> Option<u64> {
         let at = self.to_display(point);
         let slack = self.reach(4.0);
+        let only = self.imp().signatures_only.get();
         let marks = self.imp().marks.borrow();
-        if let Some(mark) = marks.iter().rev().find(|m| m.is_at(at, slack, false)) {
+        let wanted = || marks.iter().filter(|m| !only || m.tool == Tool::Signature);
+        if let Some(mark) = wanted().rev().find(|m| m.is_at(at, slack, false)) {
             return Some(mark.sequence);
         }
-        marks
-            .iter()
+        wanted()
             .filter(|m| m.is_at(at, slack, true))
             .min_by(|a, b| {
                 let area = |m: &Mark| m.rect().map_or(f64::MAX, |(_, _, w, h)| w * h);

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- "chevron-down" from Tabler Icons (MIT, Copyright (c) 2020-2024 Paweł Kuna), with its strokes turned into fills. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
+  <path fill="#222222" d="M6.707,8.293 L12,13.586 L17.293,8.293 Q17.586,8 18,8 Q18.414,8 18.707,8.293 Q19,8.586 19,9 Q19,9.414 18.707,9.707 L12.707,15.707 Q12.414,16 12,16 Q11.586,16 11.293,15.707 L5.293,9.707 Q5,9.414 5,9 Q5,8.586 5.293,8.293 Q5.586,8 6,8 Q6.414,8 6.707,8.293 Z"/>
+</svg>

@@ -37,7 +37,7 @@ impl LockedPage {
         column.append(&entry);
         column.append(&unlock);
         let root = adw::StatusPage::builder()
-            .icon_name("system-lock-screen-symbolic")
+            .icon_name("glance-lock-symbolic")
             .title("This Document Is Locked")
             .child(&column)
             .build();

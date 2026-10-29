@@ -18,7 +18,8 @@ use crate::app::window::Window;
 use crate::images::canvas;
 use crate::images::edit::adjust::{self, Adjustments, Levels};
 use crate::images::edit::levels;
-use crate::images::edit::panel::{button_row, card, explain, note as panel_note};
+use crate::app::explain;
+use crate::images::edit::panel::{button_row, card, note as panel_note};
 use crate::images::edit::tone::{Detail, ToneWorker};
 
 /// How long a slider has to rest before the whole picture is worked out, not
@@ -37,14 +38,6 @@ pub(crate) fn one_sided_scale() -> gtk::Scale {
     scale.add_css_class("tone");
     crate::images::edit::panel::wheel_scrolls_panel(&scale);
     scale
-}
-
-fn caption(text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
-    label.add_css_class("dim-label");
-    label.set_xalign(0.0);
-    label.set_margin_top(4);
-    label
 }
 
 fn reset_button(action: &str, tooltip: &str) -> gtk::Button {
@@ -161,7 +154,6 @@ impl Window {
 
         let channel_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let channel_label = gtk::Label::new(Some("Channel"));
-        channel_label.add_css_class("dim-label");
         channel_label.set_hexpand(true);
         channel_label.set_xalign(0.0);
         channel_row.append(&channel_label);
@@ -185,43 +177,34 @@ impl Window {
         ));
         graph.append(&imp.levels_graph);
 
-        // The same three values, to type or step exactly.
-        let fields = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        fields.set_homogeneous(true);
+        // The same three values, to type or step exactly, each beside its
+        // name like the sliders of Adjust.
+        let fields = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        fields.set_margin_top(4);
         for (label, spin) in [
             ("Black", &imp.levels_black),
             ("Midtones", &imp.levels_gamma),
             ("White", &imp.levels_white),
         ] {
-            let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            let name = caption(label);
-            name.set_margin_top(0);
-            column.append(&name);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let name = gtk::Label::new(Some(label));
+            name.set_xalign(0.0);
+            name.set_hexpand(true);
+            row.append(&name);
             spin.set_numeric(true);
             spin.set_width_chars(4);
-            spin.set_hexpand(true);
-            spin.set_alignment(0.5);
             crate::images::edit::panel::wheel_scrolls_panel(spin);
-            // Three across leave no room for the steppers; the handles above
-            // and the arrow keys step them instead.
-            let mut child = spin.first_child();
-            while let Some(part) = child {
-                child = part.next_sibling();
-                if part.is::<gtk::Button>() {
-                    part.set_visible(false);
-                }
-            }
             spin.update_property(&[gtk::accessible::Property::Label(label)]);
             spin.connect_value_changed(glib::clone!(
                 #[weak(rename_to = window)]
                 self,
                 move |_| window.levels_typed()
             ));
-            column.append(spin);
-            fields.append(&column);
+            row.append(spin);
+            fields.append(&row);
         }
         imp.levels_gamma.set_digits(2);
-        imp.levels_gamma.set_tooltip_text(Some("Above 1 lightens the midtones, below 1 darkens them"));
+        explain(&imp.levels_gamma, "Midtones", "Above 1 lightens the middle greys, below 1 darkens them");
         graph.append(&fields);
 
         // Auto Levels works on each colour, which the RGB handles do not show.

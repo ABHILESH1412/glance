@@ -44,7 +44,7 @@ pub fn present(parent: &impl IsA<gtk::Widget>, path: PathBuf, password: Option<S
         let content: gtk::Widget = match info {
             Ok(info) => sections(&info).upcast(),
             Err(error) => adw::StatusPage::builder()
-                .icon_name("dialog-warning-symbolic")
+                .icon_name("glance-warning-symbolic")
                 .title("Could Not Read the Document")
                 .description(glib::markup_escape_text(&error).as_str())
                 .build()

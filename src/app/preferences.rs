@@ -70,7 +70,7 @@ impl Window {
     }
 
     /// Preferences, open at the page of that name if one is given.
-    pub(crate) fn show_preferences_at(&self, wanted: Option<&str>) {
+    pub(crate) fn show_preferences_at(&self, wanted: Option<&str>) -> adw::PreferencesDialog {
         let dialog = adw::PreferencesDialog::new();
         dialog.set_title("Preferences");
         dialog.set_search_enabled(true);
@@ -79,13 +79,13 @@ impl Window {
         let signatures = adw::PreferencesPage::builder()
             .name("signatures")
             .title("Signatures")
-            .icon_name("document-edit-symbolic")
+            .icon_name("glance-signature-symbolic")
             .build();
         let group = adw::PreferencesGroup::builder()
             .title("Signatures")
             .description(
-                "Written once, or brought in from a picture, then put on pictures and PDFs with the Signature \
-                 button in the Draw panel. They are kept on this computer only.",
+                "Written once, or brought in from a picture, then put on pictures with the editor's Signature \
+                 tool and on PDFs from the markup toolbar. They are kept on this computer only.",
             )
             .build();
         signatures.add(&group);
@@ -108,7 +108,7 @@ impl Window {
             .build();
         let place = adw::PreferencesGroup::builder().title("On This Computer").build();
         let page =
-            adw::PreferencesPage::builder().name("live-text").title("Downloads").icon_name("folder-download-symbolic").build();
+            adw::PreferencesPage::builder().name("live-text").title("Downloads").icon_name("glance-download-symbolic").build();
         page.add(&live_text);
         page.add(&cutout);
         page.add(&place);
@@ -126,11 +126,12 @@ impl Window {
             dialog.set_visible_page_name(name);
         }
         dialog.present(Some(self));
+        dialog
     }
 
     /// Appearance, and the slideshow.
     fn general_page(&self) -> adw::PreferencesPage {
-        let page = adw::PreferencesPage::builder().name("general").title("General").icon_name("preferences-system-symbolic").build();
+        let page = adw::PreferencesPage::builder().name("general").title("General").icon_name("glance-settings-symbolic").build();
 
         let looks = adw::PreferencesGroup::builder().title("Appearance").build();
         const THEMES: [(&str, &str); 3] = [("system", "Follow System"), ("light", "Light"), ("dark", "Dark")];
@@ -183,7 +184,7 @@ impl Window {
 
     /// How documents are shown, marked, and combined.
     fn pdf_page(&self, dialog: &adw::PreferencesDialog) -> adw::PreferencesPage {
-        let page = adw::PreferencesPage::builder().name("pdfs").title("PDFs").icon_name("x-office-document-symbolic").build();
+        let page = adw::PreferencesPage::builder().name("pdfs").title("PDFs").icon_name("glance-document-symbolic").build();
         let prefs = self.imp().reader_prefs.get();
 
         let reading = adw::PreferencesGroup::builder().title("Reading").build();
@@ -238,7 +239,7 @@ impl Window {
             });
         }
         highlight.add_suffix(&swatch);
-        highlight.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+        highlight.add_suffix(&gtk::Image::from_icon_name("glance-next-symbolic"));
         highlight.connect_activated(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -308,11 +309,11 @@ impl Window {
             face.set_margin_bottom(6);
             row.add_prefix(&face);
             let remove = gtk::Button::builder()
-                .icon_name("user-trash-symbolic")
-                .tooltip_text("Remove This Signature")
+                .icon_name("glance-trash-symbolic")
                 .valign(gtk::Align::Center)
                 .css_classes(["flat"])
                 .build();
+            crate::app::explain(&remove, "Remove", "Forget this signature; Undo brings it back");
             let weak = Rc::downgrade(page);
             remove.connect_clicked(glib::clone!(
                 #[weak(rename_to = window)]
@@ -420,7 +421,7 @@ impl Window {
                     None => format!("Not downloaded ({} to download)", glib::format_size(part.size)),
                 })
                 .build();
-            let icon = gtk::Image::from_icon_name(if kept.is_some() { "object-select-symbolic" } else { "folder-download-symbolic" });
+            let icon = gtk::Image::from_icon_name(if kept.is_some() { "glance-tick-symbolic" } else { "glance-download-symbolic" });
             icon.set_tooltip_text(Some(if kept.is_some() { "Downloaded" } else { "Not downloaded" }));
             row.add_suffix(&icon);
             row
@@ -503,8 +504,8 @@ impl Window {
             .subtitle_selectable(true)
             .build();
         if any {
-            let open = gtk::Button::from_icon_name("folder-open-symbolic");
-            open.set_tooltip_text(Some("Open the Folder"));
+            let open = gtk::Button::from_icon_name("glance-open-symbolic");
+            crate::app::explain(&open, "Open the Folder", "Show where these files are kept");
             open.add_css_class("flat");
             open.set_valign(gtk::Align::Center);
             open.connect_clicked(glib::clone!(

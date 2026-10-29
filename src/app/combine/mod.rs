@@ -166,18 +166,19 @@ impl Combine {
         let header = adw::HeaderBar::builder().title_widget(&title).build();
         let cancel = gtk::Button::with_mnemonic("_Cancel");
         let add = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("list-add-symbolic").label("_Add Files…").use_underline(true).build())
+            .child(&adw::ButtonContent::builder().icon_name("glance-add-symbolic").label("_Add Files…").use_underline(true).build())
             .tooltip_text("Add PDFs or pictures (Ctrl+O)")
             .build();
         let blank = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("document-new-symbolic").label("_Blank Page").use_underline(true).build())
+            .child(&adw::ButtonContent::builder().icon_name("glance-new-page-symbolic").label("_Blank Page").use_underline(true).build())
             .tooltip_text("Put an empty page after the one picked, the same size as it (Ctrl+B)")
             .build();
         let save = gtk::Button::builder().label("_Save as PDF…").use_underline(true).css_classes(["suggested-action"]).build();
         save.set_tooltip_text(Some("Write the pages as one new PDF (Ctrl+S)"));
-        let undo_button = gtk::Button::builder().icon_name("edit-undo-symbolic").tooltip_text("Undo (Ctrl+Z)").build();
-        let redo_button =
-            gtk::Button::builder().icon_name("edit-redo-symbolic").tooltip_text("Redo (Ctrl+Shift+Z)").build();
+        let undo_button = gtk::Button::from_icon_name("glance-undo-symbolic");
+        crate::app::explain(&undo_button, "Undo", "Take back the last change (Ctrl+Z)");
+        let redo_button = gtk::Button::from_icon_name("glance-redo-symbolic");
+        crate::app::explain(&redo_button, "Redo", "Put back what was undone (Ctrl+Shift+Z)");
         header.pack_start(&cancel);
         header.pack_start(&add);
         header.pack_start(&blank);
@@ -204,9 +205,9 @@ impl Combine {
         bar.set_margin_top(4);
         bar.set_margin_bottom(4);
         bar.append(&legend_scroller);
-        bar.append(&gtk::Image::from_icon_name("zoom-out-symbolic"));
+        bar.append(&gtk::Image::from_icon_name("glance-zoom-out-symbolic"));
         bar.append(&zoom);
-        bar.append(&gtk::Image::from_icon_name("zoom-in-symbolic"));
+        bar.append(&gtk::Image::from_icon_name("glance-zoom-in-symbolic"));
 
         let flow = gtk::FlowBox::builder()
             // Selection is kept here rather than by the grid: its own
@@ -240,7 +241,7 @@ impl Combine {
             .css_classes(["pill", "suggested-action"])
             .build();
         let empty = adw::StatusPage::builder()
-            .icon_name("view-grid-symbolic")
+            .icon_name("glance-grid-symbolic")
             .title("Nothing to Combine Yet")
             .description("Add PDFs and pictures, or drop them here. Then put the pages in order and save them as one PDF.")
             .child(&add_first)
@@ -248,11 +249,13 @@ impl Combine {
 
         // One page across the window.
         let back = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("go-previous-symbolic").label("_Back").use_underline(true).build())
+            .child(&adw::ButtonContent::builder().icon_name("glance-previous-symbolic").label("_Back").use_underline(true).build())
             .tooltip_text("Back to all the pages (Esc)")
             .build();
-        let previous = gtk::Button::builder().icon_name("go-up-symbolic").tooltip_text("Previous page (←)").build();
-        let next = gtk::Button::builder().icon_name("go-down-symbolic").tooltip_text("Next page (→)").build();
+        let previous = gtk::Button::from_icon_name("glance-up-symbolic");
+        crate::app::explain(&previous, "Previous Page", "Look at the page before this one (←)");
+        let next = gtk::Button::from_icon_name("glance-down-symbolic");
+        crate::app::explain(&next, "Next Page", "Look at the page after this one (→)");
         for button in [&back, &previous, &next] {
             button.add_css_class("flat");
         }
@@ -918,15 +921,16 @@ impl Inner {
 
     fn new_tile(self: &Rc<Self>, id: u64) -> Tile {
         let picture = PageTile::new();
-        let tool = |icon: &str, tip: &str| {
-            let button = gtk::Button::builder().icon_name(icon).tooltip_text(tip).build();
+        let tool = |icon: &str, name: &str, what: &str| {
+            let button = gtk::Button::from_icon_name(icon);
+            crate::app::explain(&button, name, what);
             button.add_css_class("circular");
             button.add_css_class("osd");
             button
         };
-        let left = tool("object-rotate-left-symbolic", "Turn left ([)");
-        let right = tool("object-rotate-right-symbolic", "Turn right (])");
-        let delete = tool("user-trash-symbolic", "Take out (Delete)");
+        let left = tool("glance-rotate-left-symbolic", "Turn Left", "A quarter turn anticlockwise ([)");
+        let right = tool("glance-rotate-symbolic", "Turn Right", "A quarter turn clockwise (])");
+        let delete = tool("glance-trash-symbolic", "Take Out", "Leave this page out of the new PDF (Delete)");
         let tools = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         tools.set_halign(gtk::Align::End);
         tools.set_valign(gtk::Align::Start);

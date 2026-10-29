@@ -203,7 +203,7 @@ fn ask_owner_password(path: &Path, unlocked: impl Fn(String) + 'static) -> gtk::
     column.append(&group);
     column.append(&unlock);
     let page = adw::StatusPage::builder()
-        .icon_name("system-lock-screen-symbolic")
+        .icon_name("glance-lock-symbolic")
         .title("Set by Its Author")
         .description("The permissions on this document were set by whoever made it. Enter its permissions password to change them.")
         .child(&column)

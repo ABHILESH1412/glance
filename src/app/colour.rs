@@ -92,6 +92,8 @@ mod imp {
         pub with_alpha: Cell<bool>,
         pub title: RefCell<String>,
         pub swatch: gtk::DrawingArea,
+        /// Drawn as a dot rather than a patch.
+        pub round: Cell<bool>,
     }
 
     impl Default for ColourButton {
@@ -101,6 +103,7 @@ mod imp {
                 with_alpha: Cell::new(true),
                 title: RefCell::new("Choose a Colour".to_string()),
                 swatch: gtk::DrawingArea::new(),
+                round: Cell::new(false),
             }
         }
     }
@@ -142,8 +145,10 @@ mod imp {
             let weak = button.downgrade();
             self.swatch.set_draw_func(move |_, cr, w, h| {
                 let Some(button) = weak.upgrade() else { return };
-                let rgba = button.imp().rgba.get();
-                paint_swatch(cr, f64::from(w), f64::from(h), &rgba);
+                let imp = button.imp();
+                let (w, h) = (f64::from(w), f64::from(h));
+                let radius = if imp.round.get() { w.min(h) / 2.0 } else { 4.0 };
+                paint_swatch(cr, w, h, radius, &imp.rgba.get());
             });
             button.set_child(Some(&self.swatch));
             button.connect_clicked(|button| {
@@ -164,8 +169,7 @@ mod imp {
 
 /// A rounded patch of the colour, over a chequerboard so see-through shows as
 /// see-through.
-fn paint_swatch(cr: &gtk::cairo::Context, w: f64, h: f64, rgba: &gdk::RGBA) {
-    let radius = 4.0;
+fn paint_swatch(cr: &gtk::cairo::Context, w: f64, h: f64, radius: f64, rgba: &gdk::RGBA) {
     let rounded = |cr: &gtk::cairo::Context| {
         cr.new_sub_path();
         cr.arc(w - radius, radius, radius, -std::f64::consts::FRAC_PI_2, 0.0);
@@ -219,6 +223,18 @@ impl ColourButton {
         if self.imp().rgba.get() != *rgba {
             self.set_property("rgba", rgba);
         }
+    }
+
+    /// Show the colour as a dot this wide, for a toolbar.
+    pub fn set_dot(&self, size: i32) {
+        let imp = self.imp();
+        imp.round.set(true);
+        imp.swatch.set_content_width(size);
+        imp.swatch.set_content_height(size);
+        // Kept to that size inside a larger round button.
+        imp.swatch.set_halign(gtk::Align::Center);
+        imp.swatch.set_valign(gtk::Align::Center);
+        imp.swatch.queue_draw();
     }
 
     /// The chooser's title, when this button opens it.

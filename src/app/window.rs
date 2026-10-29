@@ -59,7 +59,10 @@ mod imp {
         pub split: adw::OverlaySplitView,
         pub sidebar_button: gtk::ToggleButton,
         /// The page number box in the header, and "of 20" beside it.
+        /// Going to a page by number: opened from the title, which shows the
+        /// page you are on.
         pub page_box: gtk::Box,
+        pub page_popover: gtk::Popover,
         pub page_entry: gtk::Entry,
         pub page_total: gtk::Label,
         /// Where the reader is, for putting the page box back after a typo.
@@ -294,6 +297,7 @@ mod imp {
                 split: adw::OverlaySplitView::new(),
                 sidebar_button: gtk::ToggleButton::new(),
                 page_box: gtk::Box::new(gtk::Orientation::Horizontal, 6),
+                page_popover: gtk::Popover::new(),
                 page_entry: gtk::Entry::new(),
                 page_total: gtk::Label::new(None),
                 pdf_status: Cell::new(None),
@@ -301,8 +305,8 @@ mod imp {
                 search_bar: gtk::SearchBar::new(),
                 search_entry: gtk::SearchEntry::new(),
                 search_count: gtk::Label::new(None),
-                search_previous: gtk::Button::from_icon_name("go-up-symbolic"),
-                search_next: gtk::Button::from_icon_name("go-down-symbolic"),
+                search_previous: gtk::Button::from_icon_name("glance-up-symbolic"),
+                search_next: gtk::Button::from_icon_name("glance-down-symbolic"),
                 search_button: gtk::ToggleButton::new(),
                 pdf_tools: std::cell::OnceCell::new(),
                 reader_prefs: Cell::new(prefs::Reader::load()),
@@ -576,8 +580,8 @@ impl Window {
         stage.add_overlay(self.build_drop_hint());
         imp.toasts.set_child(Some(&stage));
 
-        let open_button = gtk::Button::from_icon_name("document-open-symbolic");
-        open_button.set_tooltip_text(Some("Open (Ctrl+O)"));
+        let open_button = gtk::Button::from_icon_name("glance-open-symbolic");
+        crate::app::explain(&open_button, "Open", "Open a picture or a PDF (Ctrl+O)");
         open_button.set_action_name(Some("win.open"));
 
         // Built in `menus`; copied into the two models the menu button
@@ -590,17 +594,17 @@ impl Window {
         let menu = &imp.image_menu;
 
         let menu_button = &imp.menu_button;
-        menu_button.set_icon_name("open-menu-symbolic");
-        menu_button.set_tooltip_text(Some("Main Menu"));
+        menu_button.set_icon_name("glance-menu-symbolic");
+        crate::app::explain(menu_button, "Main Menu", "Zoom, turning, printing and everything else");
         menu_button.set_menu_model(Some(menu));
         self.fill_menu();
         menu_button.set_primary(true);
 
-        // For PDFs only: the sidebar of pages, contents and bookmarks, and the
-        // page you are on, which can be typed over to go somewhere else.
+        // For PDFs only: the sidebar of pages, contents and bookmarks. The
+        // page you are on is under the name, which is clicked to go elsewhere.
         let sidebar_button = &imp.sidebar_button;
-        sidebar_button.set_icon_name("sidebar-show-symbolic");
-        sidebar_button.set_tooltip_text(Some("Sidebar (F9)"));
+        sidebar_button.set_icon_name("glance-sidebar-symbolic");
+        crate::app::explain(sidebar_button, "Sidebar", "The pages, contents and bookmarks (F9)");
         sidebar_button.set_action_name(Some("win.show-pages"));
         sidebar_button.set_visible(false);
 
@@ -609,7 +613,7 @@ impl Window {
         page_entry.set_max_width_chars(5);
         gtk::prelude::EntryExt::set_alignment(page_entry, 1.0);
         page_entry.set_input_purpose(gtk::InputPurpose::Digits);
-        page_entry.set_tooltip_text(Some("Go to page"));
+        page_entry.update_property(&[gtk::accessible::Property::Label("Page number")]);
         page_entry.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
             self,
@@ -628,44 +632,65 @@ impl Window {
         self.build_search_bar();
 
         let page_box = &imp.page_box;
+        let go = gtk::Label::new(Some("Go to page"));
+        page_box.append(&go);
         page_box.append(page_entry);
         page_box.append(&imp.page_total);
-        page_box.set_visible(false);
+        let popover = &imp.page_popover;
+        popover.set_child(Some(page_box));
+        popover.set_position(gtk::PositionType::Bottom);
+        // Closed without Enter: the real page number goes back.
+        popover.connect_closed(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_| window.show_page_number()
+        ));
+        // The name is held in a plain box, which a popover can belong to
+        // and which lets it go again when the window closes.
+        let title_holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        title_holder.append(&imp.title);
+        popover.set_parent(&title_holder);
+        let click = gtk::GestureClick::new();
+        click.connect_released(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _, _, _| window.ask_page()
+        ));
+        title_holder.add_controller(click);
 
         // The header keeps to what is reached for every time: reading the
         // text in a picture, editing it, its details and the menu. Turning,
         // fullscreen and copying are the row of icons at the top of the menu,
         // and deleting is in the menu too; all keep their keys.
         let edit_button = &imp.edit_button;
-        edit_button.set_icon_name("document-edit-symbolic");
-        edit_button.set_tooltip_text(Some("Edit (Ctrl+E)"));
+        edit_button.set_icon_name("glance-pen-symbolic");
+        crate::app::explain(edit_button, "Edit", "Crop, adjust, draw on or export this picture (Ctrl+E)");
         edit_button.set_sensitive(false);
         edit_button.set_visible(false);
 
         // The name stays in the middle of the window, whatever is either side.
         let header = adw::HeaderBar::builder()
-            .title_widget(&imp.title)
+            .title_widget(&title_holder)
             .centering_policy(adw::CenteringPolicy::Strict)
             .build();
         header.pack_start(&imp.sidebar_button);
         header.pack_start(&open_button);
-        header.pack_start(&imp.page_box);
         header.pack_end(menu_button);
         // Hidden until there is an update to tell about.
         header.pack_end(&crate::app::updates::header_button(self));
         let info_button = &imp.info_button;
-        info_button.set_icon_name("document-properties-symbolic");
-        info_button.set_tooltip_text(Some("Image Info (Ctrl+I)"));
+        info_button.set_icon_name("glance-info-symbolic");
+        crate::app::explain(info_button, "Image Info", "Its size, camera, place and other details (Ctrl+I)");
         info_button.set_action_name(Some("win.inspector"));
         header.pack_end(info_button);
         let markup_button = &imp.markup_button;
-        markup_button.set_icon_name("document-edit-symbolic");
-        markup_button.set_tooltip_text(Some("Mark Up (Ctrl+E)"));
+        markup_button.set_icon_name("glance-pen-symbolic");
+        crate::app::explain(markup_button, "Mark Up", "Draw, write, sign or black out on the pages (Ctrl+E)");
         markup_button.set_action_name(Some("win.draw-panel"));
         markup_button.set_visible(false);
         let live_button = &imp.live_button;
         live_button.set_icon_name("glance-live-text-symbolic");
-        live_button.set_tooltip_text(Some("Select Text in Image (Ctrl+Shift+T)"));
+        crate::app::explain(live_button, "Select Text in Image", "Find the words in the picture, to select and copy (Ctrl+Shift+T)");
         live_button.set_action_name(Some("win.live-text"));
         header.pack_end(edit_button);
         header.pack_end(live_button);
@@ -1449,6 +1474,13 @@ impl Window {
         // last because it is the only one that asks before it goes.
         // Finding text. `find` opens the bar and puts the cursor in it; the
         // other two step between matches from anywhere in the window.
+        let go = gio::SimpleAction::new("go-to-page", None);
+        go.connect_activate(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |_, _| window.ask_page()
+        ));
+        self.add_action(&go);
         let find = gio::SimpleAction::new("find", None);
         find.connect_activate(glib::clone!(
             #[weak(rename_to = window)]
@@ -2228,10 +2260,18 @@ impl Window {
             // The sidebar is the document's pages again, not an animation's
             // frames.
             imp.split.set_sidebar(Some(imp.pdf_view.sidebar()));
-            imp.sidebar_button.set_tooltip_text(Some("Sidebar (F9)"));
+            crate::app::explain(&imp.sidebar_button, "Sidebar", "The pages, contents and bookmarks (F9)");
         }
         imp.sidebar_button.set_visible(pdf);
-        imp.page_box.set_visible(pdf);
+        // A PDF's name is clicked to go to a page; a picture's is only a name.
+        if pdf {
+            crate::app::explain(&imp.title, "Go to Page", "Type the number of the page to show (Ctrl+L)");
+            imp.title.set_cursor_from_name(Some("pointer"));
+        } else {
+            imp.title.set_tooltip_markup(None);
+            imp.title.set_cursor_from_name(None);
+            imp.page_popover.popdown();
+        }
         imp.search_button.set_visible(pdf);
         imp.markup_button.set_visible(pdf);
         if !pdf {
@@ -2274,8 +2314,7 @@ impl Window {
         }
         imp.pdf_status.set(Some(status));
         self.sync_bookmark();
-        let noun = if status.pages == 1 { "page" } else { "pages" };
-        imp.title.set_subtitle(&format!("PDF · {} {noun} · {:.0}%", status.pages, status.percent));
+        imp.title.set_subtitle(&format!("Page {} of {} · {:.0}%", status.page, status.pages, status.percent));
         // Not while someone is typing a number into it.
         if !imp.page_entry.state_flags().contains(gtk::StateFlags::FOCUS_WITHIN) {
             self.show_page_number();
@@ -2975,8 +3014,8 @@ impl Window {
         entry.set_placeholder_text(Some("Find in document"));
         imp.search_count.add_css_class("dim-label");
         imp.search_count.add_css_class("numeric");
-        imp.search_previous.set_tooltip_text(Some("Previous Match (Shift+Enter)"));
-        imp.search_next.set_tooltip_text(Some("Next Match (Enter)"));
+        crate::app::explain(&imp.search_previous, "Previous Match", "Back to where the words were found before (Shift+Enter)");
+        crate::app::explain(&imp.search_next, "Next Match", "On to where they are found next (Enter)");
         imp.search_previous.set_action_name(Some("win.find-previous"));
         imp.search_next.set_action_name(Some("win.find-next"));
         let steps = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -2993,8 +3032,8 @@ impl Window {
         bar.set_show_close_button(true);
 
         let button = &imp.search_button;
-        button.set_icon_name("system-search-symbolic");
-        button.set_tooltip_text(Some("Find (Ctrl+F)"));
+        button.set_icon_name("glance-search-symbolic");
+        crate::app::explain(button, "Find", "Search the text of the document (Ctrl+F)");
         button.set_visible(false);
         button.bind_property("active", bar, "search-mode-enabled").bidirectional().sync_create().build();
 
@@ -3090,13 +3129,26 @@ impl Window {
         }
     }
 
-    /// Go to the page typed into the header, then hand the keys back to the
+    /// Open the box for a page number under the title, ready to type over.
+    pub(crate) fn ask_page(&self) {
+        let imp = self.imp();
+        if !imp.showing_pdf.get() || imp.pdf_status.get().is_none() {
+            return;
+        }
+        self.show_page_number();
+        imp.page_popover.popup();
+        imp.page_entry.grab_focus();
+        imp.page_entry.select_region(0, -1);
+    }
+
+    /// Go to the page typed under the title, then hand the keys back to the
     /// document so Page Down and friends work again straight away.
     fn go_to_typed_page(&self) {
         let imp = self.imp();
         if let (Some(status), Ok(page)) = (imp.pdf_status.get(), imp.page_entry.text().trim().parse::<usize>()) {
             imp.pdf_view.go_to_page(page.clamp(1, status.pages) - 1);
         }
+        imp.page_popover.popdown();
         gtk::prelude::GtkWindowExt::set_focus(self, None::<&gtk::Widget>);
         self.show_page_number();
     }

@@ -46,7 +46,7 @@ impl BookmarkList {
             .build();
 
         let add = gtk::Button::builder()
-            .child(&adw::ButtonContent::builder().icon_name("bookmark-new-symbolic").label("Bookmark This Page").build())
+            .child(&adw::ButtonContent::builder().icon_name("glance-bookmark-new-symbolic").label("Bookmark This Page").build())
             .tooltip_text("Bookmark This Page (Ctrl+D)")
             .build();
         add.add_css_class("flat");
@@ -67,7 +67,7 @@ impl BookmarkList {
             .css_classes(["pill", "suggested-action"])
             .build();
         let empty = adw::StatusPage::builder()
-            .icon_name("user-bookmarks-symbolic")
+            .icon_name("glance-bookmarks-symbolic")
             .title("No Bookmarks")
             .description("Mark pages to come back to.\nCtrl+D marks the page you are on.")
             .child(&empty_add)
@@ -202,16 +202,16 @@ impl Inner {
         menu.append(Some("_Rename…"), Some("bookmark.rename"));
         menu.append(Some("_Remove"), Some("bookmark.remove"));
         let more = gtk::MenuButton::builder()
-            .icon_name("view-more-symbolic")
+            .icon_name("glance-more-symbolic")
             .menu_model(&menu)
             .valign(gtk::Align::Center)
-            .tooltip_text("More")
             .build();
+        crate::app::explain(&more, "More", "Rename or remove this bookmark");
         more.add_css_class("flat");
         more.add_css_class("circular");
 
         let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        content.append(&gtk::Image::from_icon_name("user-bookmarks-symbolic"));
+        content.append(&gtk::Image::from_icon_name("glance-bookmarks-symbolic"));
         content.append(&text);
         content.append(&more);
         let row = gtk::ListBoxRow::builder().child(&content).build();
