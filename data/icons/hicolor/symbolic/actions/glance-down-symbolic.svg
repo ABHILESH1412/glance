@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- "chevron-down" from Tabler Icons (MIT, Copyright (c) 2020-2024 Paweł Kuna), with its strokes turned into fills. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-  <path fill="#222222" d="M6.707,8.293 L12,13.586 L17.293,8.293 Q17.586,8 18,8 Q18.414,8 18.707,8.293 Q19,8.586 19,9 Q19,9.414 18.707,9.707 L12.707,15.707 Q12.414,16 12,16 Q11.586,16 11.293,15.707 L5.293,9.707 Q5,9.414 5,9 Q5,8.586 5.293,8.293 Q5.586,8 6,8 Q6.414,8 6.707,8.293 Z"/>
+<!-- "chevron-down" from Tabler Icons (MIT, Copyright (c) 2020-2024 Paweł Kuna), with its strokes turned into fills and drawn on a 16 px grid. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" d="M4.471,5.529 L8,9.057 L11.529,5.529 Q11.724,5.333 12,5.333 Q12.276,5.333 12.471,5.529 Q12.667,5.724 12.667,6 Q12.667,6.276 12.471,6.471 L8.471,10.471 Q8.276,10.667 8,10.667 Q7.724,10.667 7.529,10.471 L3.529,6.471 Q3.333,6.276 3.333,6 Q3.333,5.724 3.529,5.529 Q3.724,5.333 4,5.333 Q4.276,5.333 4.471,5.529 Z"/>
 </svg>
