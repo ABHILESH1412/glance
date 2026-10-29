@@ -73,7 +73,7 @@ annotations, so every PDF reader shows them.
 - [x] Select, move and resize a shape after drawing it — the Select tool picks a drawing up to move by its body, resize by its handles (Shift keeps the proportions), recolour, thicken or delete; on a PDF that includes drawings made earlier or by another program. Text can be dragged but not resized
 - [ ] Loupe annotation (a magnified circle placed on the image)
 - [ ] Sticky notes — *partial:* on PDFs, not yet on images
-- [x] Signatures — written once on a signature pad, or imported from a scan or photo of one with the paper taken out, kept, and put on any picture or PDF page from the Signature button in the Draw panel; picked up to move and size like any drawing
+- [x] Signatures — written once on a signature pad, or imported from a scan or photo of one with the paper taken out, kept, and put on any picture from the editor's Signature tool, or on any PDF page from the markup toolbar; picked up to move and size like any drawing
 - [x] Redact / black out a region — marked first, then applied to a copy or the original
 
 ## 4. Colour

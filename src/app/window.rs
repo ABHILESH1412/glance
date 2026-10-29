@@ -134,6 +134,9 @@ mod imp {
         pub quality_row: gtk::Box,
         pub quality_scale: gtk::Scale,
         pub draw_toggle: gtk::ToggleButton,
+        /// Putting a kept signature down, and moving it into place.
+        pub sign_toggle: gtk::ToggleButton,
+        pub sign_options: gtk::Box,
         pub draw_options: gtk::Box,
         pub draw_tools: RefCell<Vec<gtk::ToggleButton>>,
         /// The Select tool, for picking up what has been drawn.
@@ -345,6 +348,8 @@ mod imp {
                 quality_row: gtk::Box::new(gtk::Orientation::Horizontal, 6),
                 quality_scale: gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 100.0, 1.0),
                 draw_toggle: rail_toggle("glance-draw-symbolic"),
+                sign_toggle: rail_toggle("glance-signature-symbolic"),
+                sign_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_options: gtk::Box::new(gtk::Orientation::Vertical, 6),
                 draw_tools: RefCell::new(Vec::new()),
                 draw_select: gtk::ToggleButton::new(),
@@ -1026,6 +1031,7 @@ impl Window {
                         &imp.resize_toggle,
                         &imp.text_toggle,
                         &imp.draw_toggle,
+                        &imp.sign_toggle,
                         &imp.redact_toggle,
                         &imp.export_toggle,
                     ] {

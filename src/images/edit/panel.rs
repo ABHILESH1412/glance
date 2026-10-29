@@ -654,17 +654,6 @@ impl Window {
         }
         kit.append(&tool_grid);
 
-        // A kept signature, put down whole and picked up to move into place.
-        let sign = crate::app::signatures::button(
-            self,
-            glib::clone!(
-                #[weak(rename_to = window)]
-                self,
-                move |signature| window.place_signature_on_picture(&signature)
-            ),
-        );
-        kit.append(&sign);
-
         let ink = card(strokes, Some("Ink"));
         let stroke_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let width_caption = gtk::Label::new(Some("Width"));
@@ -754,6 +743,37 @@ impl Window {
         clear.set_action_name(Some("win.draw-clear"));
         strokes.append(&button_row(&[&clear]));
         tools.append(strokes);
+
+        // -- signature: a kept one put down whole, then moved into place --
+        let sign = &imp.sign_toggle;
+        sign.connect_toggled(glib::clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |button| {
+                if button.is_active() {
+                    window.close_other_sections(button);
+                }
+                window.imp().sign_options.set_visible(button.is_active());
+                window.sync_draw_tool();
+            }
+        ));
+        let signing = &imp.sign_options;
+        signing.set_visible(false);
+        let kept = card(signing, Some("Signatures"));
+        kept.append(&crate::app::signatures::pane(
+            self,
+            glib::clone!(
+                #[weak(rename_to = window)]
+                self,
+                move |signature| window.place_signature_on_picture(&signature)
+            ),
+        ));
+        let sign_hint = gtk::Label::new(Some(
+            "Click one to put it on the picture, then drag it into place or drag a corner to size it. Delete removes it.",
+        ));
+        note(&sign_hint);
+        signing.append(&sign_hint);
+        tools.append(signing);
 
         // -- text --
         let text = &imp.text_toggle;
@@ -1127,7 +1147,12 @@ impl Window {
         let groups: [&[&gtk::Widget]; 3] = [
             &[imp.crop_toggle.upcast_ref(), imp.transform_toggle.upcast_ref(), imp.resize_toggle.upcast_ref()],
             &[imp.adjust_toggle.upcast_ref(), imp.levels_toggle.upcast_ref(), imp.cutout_button.upcast_ref()],
-            &[imp.draw_toggle.upcast_ref(), imp.text_toggle.upcast_ref(), imp.redact_toggle.upcast_ref()],
+            &[
+                imp.draw_toggle.upcast_ref(),
+                imp.text_toggle.upcast_ref(),
+                imp.sign_toggle.upcast_ref(),
+                imp.redact_toggle.upcast_ref(),
+            ],
         ];
         let rail = gtk::Box::new(gtk::Orientation::Vertical, 4);
         rail.add_css_class("edit-rail");
@@ -1167,6 +1192,7 @@ impl Window {
             (imp.levels_toggle.clone(), "Levels", "Set the black point, midtones and white point against the histogram."),
             (imp.draw_toggle.clone(), "Draw", "Pens and shapes. Select picks a drawing up again to move, resize or recolour it."),
             (imp.text_toggle.clone(), "Text", "Lay words over the picture, and drag them into place."),
+            (imp.sign_toggle.clone(), "Signature", "Put down a signature you keep, or write or import a new one."),
             (imp.redact_toggle.clone(), "Redact", "Black out parts of the picture for good."),
             (imp.export_toggle.clone(), "Export", "Write a copy in another format, at a quality or a file size you choose."),
         ]);
@@ -1312,6 +1338,7 @@ impl Window {
             &imp.adjust_toggle,
             &imp.levels_toggle,
             &imp.draw_toggle,
+            &imp.sign_toggle,
             &imp.text_toggle,
             &imp.redact_toggle,
             &imp.export_toggle,
@@ -1337,7 +1364,8 @@ impl Window {
         } else {
             None
         };
-        let selecting = imp.draw_toggle.is_active() && imp.draw_select.is_active();
+        // A signature put down is picked up at once, to be moved into place.
+        let selecting = (imp.draw_toggle.is_active() && imp.draw_select.is_active()) || imp.sign_toggle.is_active();
         let canvas = imp.view.canvas();
         canvas.set_draw_colour(imp.draw_colour.rgba());
         canvas.set_draw_width(imp.draw_width.value());
@@ -1348,15 +1376,14 @@ impl Window {
         self.sync_draw_hint();
     }
 
-    /// Put a signature on the picture, picked up with the Select tool so it
-    /// can be dragged into place and sized at once.
+    /// Put a signature on the picture, picked up at once so it can be
+    /// dragged into place and sized.
     fn place_signature_on_picture(&self, signature: &std::sync::Arc<crate::images::edit::signature::Signature>) {
-        let imp = self.imp();
-        imp.draw_select.set_active(true);
-        if imp.view.canvas().place_signature(signature) {
-            self.sync_draw_hint();
-        }
+        // Already in hand, from its own pane; this only makes sure.
+        self.imp().sign_toggle.set_active(true);
+        self.imp().view.canvas().place_signature(signature);
     }
+
 
     /// The sides or points box, for the polygon or star in hand or picked up.
     fn sync_corners(&self) {

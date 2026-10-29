@@ -20,6 +20,8 @@ use crate::images::edit::signature::{self, Ink, Signature};
 /// The pad's size, and how thick its pen is, in its pixels.
 const PAD: (i32, i32) = (520, 200);
 const PEN: f64 = 3.0;
+/// What is done with a signature chosen from a list of them.
+type Place = Rc<dyn Fn(Arc<Signature>)>;
 /// What has been written so far, a stroke to each lift of the pen.
 type Strokes = Vec<Vec<(f64, f64)>>;
 /// The inks offered: dark enough to pass for a pen's on any paper.
@@ -207,7 +209,7 @@ pub fn write_new(parent: &impl IsA<gtk::Widget>, done: impl Fn(Signature) + 'sta
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     inks.append(&spacer);
-    let undo = gtk::Button::builder().icon_name("edit-undo-symbolic").tooltip_text("Take back the last stroke (Ctrl+Z)").sensitive(false).build();
+    let undo = gtk::Button::builder().icon_name("glance-undo-symbolic").tooltip_text("Take back the last stroke (Ctrl+Z)").sensitive(false).build();
     let clear = gtk::Button::builder().label("C_lear").use_underline(true).sensitive(false).build();
     inks.append(&undo);
     inks.append(&clear);
@@ -531,7 +533,7 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
     list.set_margin_end(6);
     let popover = gtk::Popover::builder().child(&list).build();
     button.set_popover(Some(&popover));
-    let place: Rc<dyn Fn(Arc<Signature>)> = Rc::new(place);
+    let place: Place = Rc::new(place);
     let done: Rc<dyn Fn()> = Rc::new(glib::clone!(
         #[weak]
         popover,
@@ -553,12 +555,27 @@ pub fn button(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk:
 /// the editor's settings pane rather than a menu.
 pub fn pane(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::Box {
     let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    let place: Rc<dyn Fn(Arc<Signature>)> = Rc::new(place);
+    // Putting one down also fills the list again, so a signature just
+    // written or imported is there to use a second time.
+    let refilling: Rc<std::cell::OnceCell<Place>> = Rc::default();
+    let (weak_list, weak_window, weak_cell) = (list.downgrade(), window.downgrade(), Rc::downgrade(&refilling));
+    let _ = refilling.set(Rc::new(move |kept| {
+        place(kept);
+        if let (Some(list), Some(window), Some(cell)) = (weak_list.upgrade(), weak_window.upgrade(), weak_cell.upgrade()) {
+            if let Some(again) = cell.get() {
+                fill(&list, &window, again.clone(), Rc::new(|| ()));
+            }
+        }
+    }));
     // Filled each time the tool is opened, so it always shows what is kept.
     list.connect_map(glib::clone!(
         #[weak]
         window,
-        move |list| fill(list, &window, place.clone(), Rc::new(|| ()))
+        move |list| {
+            if let Some(place) = refilling.get() {
+                fill(list, &window, place.clone(), Rc::new(|| ()));
+            }
+        }
     ));
     list
 }
@@ -566,7 +583,7 @@ pub fn pane(window: &Window, place: impl Fn(Arc<Signature>) + 'static) -> gtk::B
 /// Put the kept signatures in `list`, each a button that hands it to
 /// `place`, then the ways to write, import and manage them. `done` is
 /// called when one is chosen, to put a menu away.
-fn fill(list: &gtk::Box, window: &Window, place: Rc<dyn Fn(Arc<Signature>)>, done: Rc<dyn Fn()>) {
+fn fill(list: &gtk::Box, window: &Window, place: Place, done: Rc<dyn Fn()>) {
     while let Some(child) = list.first_child() {
         list.remove(&child);
     }
