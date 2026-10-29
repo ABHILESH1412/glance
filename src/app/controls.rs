@@ -24,9 +24,8 @@ const LINGER: Duration = Duration::from_millis(2200);
 const LEFT: Duration = Duration::from_millis(500);
 /// Over the picture, but clear of its edges.
 const MARGIN: i32 = 12;
-/// Keeps the filmstrip clear of the zoom in the corner, either side so it
-/// stays in the middle.
-const STRIP_MARGIN: i32 = 132;
+/// The least room kept between the filmstrip and the zoom beside it.
+const STRIP_GAP: i32 = 12;
 
 pub struct ViewerControls {
     /// What floats over the picture or page is put on this.
@@ -86,9 +85,6 @@ impl Window {
         strip.set_child(Some(&imp.strip));
         strip.set_halign(gtk::Align::Center);
         strip.set_valign(gtk::Align::End);
-        strip.set_margin_bottom(MARGIN);
-        strip.set_margin_start(STRIP_MARGIN);
-        strip.set_margin_end(STRIP_MARGIN);
         // The strip puts itself away for a single picture, or while editing;
         // the arrows go with it.
         imp.strip.connect_visible_notify(glib::clone!(
@@ -152,6 +148,36 @@ impl Window {
         corner.set_valign(gtk::Align::End);
         corner.set_margin_end(MARGIN);
         corner.set_margin_bottom(MARGIN);
+
+        // The filmstrip in the middle, kept clear of the zoom in the corner
+        // by however wide the zoom really is: its width depends on the font
+        // and the number in it, so no fixed margin is ever right everywhere.
+        // Clear of it either side, so the strip stays in the middle; on a
+        // narrow window the strip scrolls rather than run under it.
+        overlay.connect_get_child_position(glib::clone!(
+            #[weak]
+            strip,
+            #[weak]
+            corner,
+            #[upgrade_or]
+            None,
+            move |overlay, widget| {
+                if widget != strip.upcast_ref::<gtk::Widget>() {
+                    return None;
+                }
+                let (width, height) = (overlay.width(), overlay.height());
+                let zoom = if corner.is_visible() { corner.measure(gtk::Orientation::Horizontal, -1).1 } else { 0 };
+                // The zoom's own margin from the edge is in its measure.
+                let side = if zoom > 0 { zoom + STRIP_GAP } else { MARGIN };
+                let (least, natural, _, _) = strip.measure(gtk::Orientation::Horizontal, -1);
+                let wide = natural.min(width - 2 * side).max(least);
+                let tall = strip.measure(gtk::Orientation::Vertical, wide).1;
+                // Centred if it fits; otherwise as far left as it must go to
+                // stay clear of the zoom.
+                let x = ((width - wide) / 2).min(width - side - wide).max(MARGIN.min(width - wide));
+                Some(gtk::gdk::Rectangle::new(x, height - tall - MARGIN, wide, tall))
+            }
+        ));
 
         for revealer in [strip, &controls.previous, &controls.next, corner] {
             overlay.add_overlay(revealer);
